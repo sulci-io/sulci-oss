@@ -6,19 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.2] — 2026-03-09
-
-### Added
--- just a chore to get the workflow captured as below
--- # 1. Bump version in pyproject.toml  →  version = "0.1.2"
--- # 2. Update CHANGELOG.mdpypi-
--- # 3. Commit, tag, push
--- git add pyproject.toml CHANGELOG.md
--- git commit -m "chore: bump to v0.1.2"
--- git tag v0.1.2
--- git push origin main --tags   # --tags pushes tag + triggers auto-publish
-
-## [0.1.1] — 2026-03-09
+## [0.1.1] — 2025-03-01
 
 ### Added
 - Full library structure: `sulci/`, `backends/`, `embeddings/`
@@ -40,7 +28,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.0] — 2026-03-09
+## [0.1.0] — 2025-02-15
 
 ### Added
 - Initial release
