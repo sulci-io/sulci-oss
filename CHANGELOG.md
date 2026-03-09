@@ -6,16 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.1.3] — 2026-03-09
-
-### Added
--- No change .... Bump version in pyproject.toml  →  version = "0.1.3"
-
 ## [0.1.2] — 2026-03-09
 
 ### Added
 -- just a chore to get the workflow captured as below
---  # 1. Bump version in pyproject.toml  →  version = "0.1.2"
+-- # 1. Bump version in pyproject.toml  →  version = "0.1.2"
 -- # 2. Update CHANGELOG.mdpypi-
 -- # 3. Commit, tag, push
 -- git add pyproject.toml CHANGELOG.md
