@@ -1,0 +1,33 @@
+name: Benchmark
+
+on:
+  workflow_dispatch:        # run manually from Actions tab
+  schedule:
+    - cron: "0 3 * * 1"    # every Monday at 3am UTC
+  push:
+    paths:
+      - "benchmark/**"     # also run when benchmark code changes
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run benchmark (built-in engine, no deps)
+        run: |
+          python benchmark/run.py --no-sweep
+          echo "── Results ──"
+          cat benchmark/results/summary.json
+
+      - name: Upload results as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: benchmark/results/
+          retention-days: 90
