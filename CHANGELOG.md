@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.1.2] — 2025-03-01
+
+### Added
+- bump version to 0.1.2
+
 ## [0.1.1] — 2025-03-01
 
 ### Added
