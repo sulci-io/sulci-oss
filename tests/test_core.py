@@ -45,13 +45,13 @@ class TestBasicOperations:
         assert "sqlite" in repr(cache)
 
     def test_miss_on_empty_cache(self, cache):
-        result, sim = cache.get("What is Python?")
+        result, sim, _ = cache.get("What is Python?")
         assert result is None
         assert sim == 0.0
 
     def test_set_then_exact_get(self, cache):
         cache.set("What is Python?", "Python is a programming language.")
-        result, sim = cache.get("What is Python?")
+        result, sim, _ = cache.get("What is Python?")
         assert result == "Python is a programming language."
         assert sim >= 0.99
 
@@ -61,20 +61,20 @@ class TestBasicOperations:
                       db_path=str(tmp_path / "hit_db"))
         cache.set("What is Python programming language?",
                   "Python is a programming language.")
-        result, sim = cache.get("What is the Python programming language?")
+        result, sim, _ = cache.get("What is the Python programming language?")
         assert result is not None, f"Expected cache hit, got sim={sim:.3f}"
         assert sim >= 0.85
 
     def test_semantic_miss_different_topic(self, cache):
         """Completely unrelated query should miss."""
         cache.set("What is Python?", "Python is a programming language.")
-        result, sim = cache.get("What is the weather in Paris today?")
+        result, sim, _ = cache.get("What is the weather in Paris today?")
         assert result is None
 
     def test_clear_empties_cache(self, cache):
         cache.set("What is Python?", "Python is a programming language.")
         cache.clear()
-        result, _ = cache.get("What is Python?")
+        result, _, __ = cache.get("What is Python?")
         assert result is None
 
     def test_multiple_entries(self, tmp_path):
@@ -85,8 +85,8 @@ class TestBasicOperations:
                   "Python is a language.")
         cache.set("What is Docker container platform?",
                   "Docker is a container platform.")
-        r1, s1 = cache.get("What is the Python programming language?")
-        r2, s2 = cache.get("What is the Docker container platform?")
+        r1, s1, _ = cache.get("What is the Python programming language?")
+        r2, s2, __ = cache.get("What is the Docker container platform?")
         assert r1 is not None, f"Expected Python hit, sim={s1:.3f}"
         assert r2 is not None, f"Expected Docker hit, sim={s2:.3f}"
 
@@ -96,7 +96,7 @@ class TestBasicOperations:
                       ttl_seconds=1, db_path=str(tmp_path / "ttl_db"))
         cache.set("What is Python?", "Python is a language.")
         time.sleep(1.1)
-        result, _ = cache.get("What is Python?")
+        result, _, __ = cache.get("What is Python?")
         assert result is None, "Entry should have expired"
 
 
@@ -129,7 +129,7 @@ class TestCachedCall:
 
     def test_result_has_all_fields(self, cache):
         r = cache.cached_call("test query", lambda q: "test response")
-        for field in ["response", "source", "similarity", "latency_ms", "cache_hit"]:
+        for field in ["response", "source", "similarity", "latency_ms", "cache_hit", "context_depth"]:
             assert field in r, f"Missing field: {field}"
 
     def test_latency_is_positive(self, cache):
@@ -151,7 +151,7 @@ class TestCachedCall:
 
     def test_response_stored_after_miss(self, cache):
         cache.cached_call("What is Python?", lambda q: "Python is great.")
-        result, sim = cache.get("What is Python?")
+        result, sim, _ = cache.get("What is Python?")
         assert result == "Python is great."
 
 
@@ -209,20 +209,20 @@ class TestThreshold:
         cache = Cache(backend="sqlite", threshold=0.99,
                       db_path=str(tmp_path / "strict"))
         cache.set("What is Python?", "Python is a language.")
-        result, _ = cache.get("Explain Python to me")
+        result, _, __ = cache.get("Explain Python to me")
         assert result is None
 
     def test_lenient_threshold_accepts_loose_match(self, tmp_path):
         cache = Cache(backend="sqlite", threshold=0.40,
                       db_path=str(tmp_path / "lenient"))
         cache.set("What is Python?", "Python is a language.")
-        result, _ = cache.get("Tell me about software programming")
+        result, _, __ = cache.get("Tell me about software programming")
         assert result is not None
 
     def test_exact_query_always_hits(self, cache):
         """Exact same string must always exceed any reasonable threshold."""
         cache.set("What is Python?", "Python is a language.")
-        result, sim = cache.get("What is Python?")
+        result, sim, _ = cache.get("What is Python?")
         assert result is not None
         assert sim >= 0.99
 
@@ -235,12 +235,12 @@ class TestPersonalization:
         cache = Cache(backend="sqlite", threshold=0.85,
                       personalized=True, db_path=str(tmp_path / "personal"))
         cache.set("What is Python?", "Python is a language.", user_id="alice")
-        result, _ = cache.get("What is Python?", user_id="alice")
+        result, _, __ = cache.get("What is Python?", user_id="alice")
         assert result is not None
 
     def test_user_scoped_miss_for_other_user(self, tmp_path):
         cache = Cache(backend="sqlite", threshold=0.85,
                       personalized=True, db_path=str(tmp_path / "personal2"))
         cache.set("What is Python?", "Python is a language.", user_id="alice")
-        result, _ = cache.get("What is Python?", user_id="bob")
+        result, _, __ = cache.get("What is Python?", user_id="bob")
         assert result is None, "Bob should not see Alice's cached entry"
