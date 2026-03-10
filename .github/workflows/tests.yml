@@ -25,8 +25,11 @@ jobs:
       - name: Install
         run: pip install ".[sqlite]" pytest pytest-cov
 
-      - name: Test
+      - name: Test core
         run: pytest tests/test_core.py -v --tb=short --cov=sulci --cov-report=term-missing
+
+      - name: Test context
+        run: pytest tests/test_context.py -v --tb=short
 
       - name: Backend tests (skip missing deps)
         run: pytest tests/test_backends.py -v --tb=short
