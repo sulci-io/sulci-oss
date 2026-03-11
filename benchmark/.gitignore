@@ -1,0 +1,5 @@
+iresults/*.json
+results/*.csv
+results/*.txt
+# Keep the placeholder
+!results/.gitkeep

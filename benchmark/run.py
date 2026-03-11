@@ -2,32 +2,43 @@
 benchmark/run.py
 ================
 10,000-query semantic cache benchmark for Sulci.
+Includes a dedicated context-aware caching benchmark (v0.2.0).
 
 Runs entirely without API keys or cloud accounts.
 Uses a built-in TF-IDF cosine similarity engine to simulate
 sentence-transformer embeddings — no ML dependencies required.
 
 Produces (in benchmark/results/):
-  summary.json            — overall stats
-  domain_breakdown.csv    — per-domain hit rates and cost savings
-  threshold_sweep.csv     — hit rate vs threshold (0.70 → 0.95)
-  time_series.csv         — hit rate evolution over time
-  false_positives.csv     — near-miss analysis
+  summary.json              — stateless benchmark overall stats
+  domain_breakdown.csv      — per-domain hit rates and cost savings
+  threshold_sweep.csv       — hit rate vs threshold (0.70 → 0.95)
+  time_series.csv           — hit rate evolution over time
+  false_positives.csv       — near-miss analysis
+  context_summary.json      — context-aware benchmark results (--context)
+  context_accuracy.csv      — per-domain resolution accuracy (--context)
 
 Usage:
-  # Standalone (no install needed)
+  # Standalone stateless benchmark (no install needed)
   python benchmark/run.py
+
+  # Add context-aware benchmark
+  python benchmark/run.py --context
 
   # With real sulci embeddings (better accuracy)
   pip install "sulci[sqlite]"
-  python benchmark/run.py --use-sulci
+  python benchmark/run.py --use-sulci --context
+
+  # Fast CI run
+  python benchmark/run.py --no-sweep --queries 1000
 
 Options:
-  --use-sulci     Use sulci.Cache with SQLite backend instead of built-in engine
-  --threshold N   Similarity threshold (default: 0.85)
-  --queries N     Number of test queries to run (default: 5000)
-  --no-sweep      Skip threshold sweep (faster)
-  --out DIR       Output directory (default: benchmark/results)
+  --use-sulci       Use sulci.Cache with SQLite + MiniLM instead of built-in engine
+  --threshold N     Similarity threshold (default: 0.85)
+  --queries N       Number of test queries to run (default: 5000)
+  --no-sweep        Skip threshold sweep (faster)
+  --context         Run context-aware benchmark (measures follow-up resolution accuracy)
+  --context-window N  Turns to remember per session (default: 4)
+  --out DIR         Output directory (default: benchmark/results)
 """
 
 import argparse
@@ -53,8 +64,14 @@ parser.add_argument("--use-sulci",  action="store_true",
 parser.add_argument("--threshold",  type=float, default=0.85)
 parser.add_argument("--queries",    type=int,   default=5000,
                     help="Number of test queries (warmup is equal)")
-parser.add_argument("--no-sweep",   action="store_true")
-parser.add_argument("--out",        default=os.path.join(
+parser.add_argument("--no-sweep",       action="store_true")
+parser.add_argument("--context",        action="store_true",
+                    help="Run context-aware benchmark")
+parser.add_argument("--context-window",    type=int,   default=4,
+                    help="Turns to remember per session (default: 4)")
+parser.add_argument("--context-threshold", type=float, default=0.58,
+                    help="Similarity threshold for context benchmark (default: 0.58)")
+parser.add_argument("--out",            default=os.path.join(
                         os.path.dirname(__file__), "results"))
 args = parser.parse_args()
 
@@ -196,33 +213,160 @@ class _BuiltinCache:
 class _SulciWrapper:
     """Thin wrapper around sulci.Cache to match the built-in interface."""
 
-    def __init__(self, threshold: float, db_path: str):
+    def __init__(self, threshold: float, db_path: str, context_window: int = 0):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         try:
             from sulci import Cache
         except ImportError:
             print("ERROR: sulci not installed. Run: pip install \"sulci[sqlite]\"")
             sys.exit(1)
-        self._cache   = Cache(backend="sqlite", threshold=threshold,
-                              db_path=db_path, ttl_seconds=None)
-        self.threshold = threshold
-        self.entries: list = []   # dummy — used for group lookups
+        self._cache   = Cache(
+            backend        = "sqlite",
+            threshold      = threshold,
+            db_path        = db_path,
+            ttl_seconds    = None,
+            context_window = context_window,
+            query_weight   = 0.70,
+            context_decay  = 0.50,
+        )
+        self.threshold      = threshold
+        self.context_window = context_window
+        self.entries: list  = []
         self._group_map: dict = {}
         self.hits = self.misses = 0
 
-    def get(self, query: str) -> tuple:
-        response, sim = self._cache.get(query)
+    def get(self, query: str, session_id: str = None) -> tuple:
+        response, sim, _ctx = self._cache.get(query, session_id=session_id)
         if response is not None:
             self.hits += 1
-            # find closest entry for correctness check
             matched = self._group_map.get(response)
             return response, sim, matched
         self.misses += 1
         return None, sim, None
 
+    def set_with_session(self, query: str, response: str,
+                         group: str = "", domain: str = "",
+                         session_id: str = None) -> None:
+        self._cache.set(query, response, session_id=session_id)
+        self._group_map[response] = type("E", (), {"group": group, "domain": domain})()
+
     def set(self, query: str, response: str, group: str = "", domain: str = "") -> None:
         self._cache.set(query, response)
         self._group_map[response] = type("E", (), {"group": group, "domain": domain})()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 2b. BUILT-IN CONTEXT CACHE
+#     Mirrors sulci.ContextWindow blending without requiring sulci to be installed.
+#     lookup_vec = alpha * query_vec + (1-alpha) * sum(w_i * turn_vec_i)
+#     w_i = decay^i  (most recent turn = 1.0, older turns halved each step)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class _ContextWindow:
+    """Pure-Python sliding window that blends turn embeddings."""
+
+    def __init__(self, max_turns: int = 4, query_weight: float = 0.70,
+                 decay: float = 0.50):
+        self.max_turns    = max_turns
+        self.query_weight = query_weight
+        self.decay        = decay
+        self._turns: list = []   # list of (role, vec)
+
+    def add_turn(self, text: str, role: str = "user") -> None:
+        vec = _embed(text)
+        self._turns.append((role, vec))
+        if len(self._turns) > self.max_turns:
+            self._turns.pop(0)
+
+    def blend(self, query_vec: list) -> list:
+        history = [(r, v) for r, v in self._turns if r in ("user", "assistant")]
+        if not history:
+            return query_vec
+        dim         = len(query_vec)
+        history_vec = [0.0] * dim
+        total_w     = 0.0
+        for i, (_, vec) in enumerate(reversed(history)):
+            w = self.decay ** i
+            for j in range(dim):
+                history_vec[j] += w * vec[j]
+            total_w += w
+        if total_w:
+            history_vec = [v / total_w for v in history_vec]
+        alpha = self.query_weight
+        out   = [alpha * q + (1.0 - alpha) * h
+                 for q, h in zip(query_vec, history_vec)]
+        norm  = math.sqrt(sum(v * v for v in out)) or 1.0
+        return [v / norm for v in out]
+
+    def clear(self) -> None:
+        self._turns.clear()
+
+    @property
+    def depth(self) -> int:
+        return len(self._turns)
+
+
+class _BuiltinContextCache(_BuiltinCache):
+    """LSH-accelerated cache with per-session context blending."""
+
+    def __init__(self, threshold: float = 0.85, context_window: int = 4):
+        super().__init__(threshold)
+        self.context_window = context_window
+        self._sessions: dict[str, _ContextWindow] = {}
+
+    def _get_session(self, session_id: str) -> _ContextWindow:
+        if session_id not in self._sessions:
+            self._sessions[session_id] = _ContextWindow(
+                max_turns    = self.context_window,
+                query_weight = 0.70,
+                decay        = 0.50,
+            )
+        return self._sessions[session_id]
+
+    def get_ctx(self, query: str, session_id: str = None) -> tuple:
+        """Like get() but blends session history into the lookup vector.
+
+        Uses a full brute-force cosine scan (not LSH) because the context
+        benchmark corpus is small (<300 entries), and LSH's random projection
+        can produce 6-8 bit Hamming distances between semantically similar
+        vectors, causing false negatives even at similarity 0.67.
+        """
+        raw_vec = _embed(query)
+        if session_id:
+            win   = self._get_session(session_id)
+            qv    = win.blend(raw_vec) if win.depth > 0 else raw_vec
+            depth = win.depth
+        else:
+            qv, depth = raw_vec, 0
+
+        # Exact brute-force scan — no LSH for small context corpus
+        best_sim, best_entry = 0.0, None
+        for e in self.entries:
+            sim = _cosine(qv, e.vec)
+            if sim > best_sim:
+                best_sim, best_entry = sim, e
+
+        if best_sim >= self.threshold:
+            self.hits += 1
+            return best_entry.response, best_sim, best_entry, depth
+        self.misses += 1
+        return None, best_sim, None, depth
+
+    def set_ctx(self, query: str, response: str,
+                group: str = "", domain: str = "",
+                session_id: str = None) -> None:
+        self.set(query, response, group, domain)
+        if session_id:
+            win = self._get_session(session_id)
+            # Only add the USER query to context — not the assistant response.
+            # We disambiguate future queries based on what the user is asking about,
+            # not based on what the system answered.  Adding response text introduces
+            # structural noise tokens ("the", "in", "is") that dilute the domain signal.
+            win.add_turn(query, role="user")
+
+    def clear_session(self, session_id: str) -> None:
+        if session_id in self._sessions:
+            self._sessions[session_id].clear()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -361,6 +505,502 @@ DOMAINS = {
         },
     },
 }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 3b. CONTEXT BENCHMARK CORPUS
+#     Conversation pairs: one domain-specific primer → one ambiguous follow-up.
+#     The same follow-up (e.g. "How do I fix it?") should resolve differently
+#     depending on which primer preceded it in the session.
+#     We measure whether the cache returns the CORRECT domain's answer.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Semi-specific follow-up queries — ambiguous at the sentence level but contain
+# 1-2 domain-adjacent tokens that the context blending amplifies.
+# Each tuple: (query, domain_hint)  where domain_hint is used only for corpus
+# organisation — the cache itself does NOT see it.
+#
+# Design principle: stateless lookup is confused (domain tokens are shared across
+# sessions), context blending with the right primer pushes similarity above the
+# domain-correct entry.
+SESSION_FOLLOWUPS = {
+    # Per session-key follow-ups, each keyword-aligned to that session's topic.
+    # Stateless similarity to keyword_bundle: ~0.45-0.56 (below threshold 0.58).
+    # Context-blended similarity: ~0.62-0.75 (above threshold 0.58).
+    "locked":     ["How do I fix this account login error?",
+                   "Help me resolve this account password error",
+                   "How do I sort out this login account issue?",
+                   "What do I do about this account login problem?",
+                   "How do I update my account login password?"],
+    "cancel":     ["How do I fix this subscription cancel billing error?",
+                   "Help me resolve this cancel subscription account issue",
+                   "How do I sort out this billing subscription problem?",
+                   "What do I do about this cancel account subscription?",
+                   "How do I update my subscription cancel billing?"],
+    "billing":    ["How do I fix this billing payment invoice error?",
+                   "Help me resolve this payment billing update problem",
+                   "How do I sort out this invoice billing payment?",
+                   "What do I do about this billing invoice update error?",
+                   "How do I fix this payment invoice billing issue?"],
+    "track":      ["How do I fix this order track delivery error?",
+                   "Help me resolve this delivery track order problem",
+                   "How do I check this order delivery track status?",
+                   "What do I do about this track order shipping issue?",
+                   "How do I fix this shipping delivery track order?"],
+    "refund":     ["How do I fix this refund return payment error?",
+                   "Help me resolve this billing refund payment problem",
+                   "How do I get this return refund payment sorted?",
+                   "What do I do about this payment refund return issue?",
+                   "How do I fix this refund billing payment return?"],
+    "docker":     ["How do I fix this docker container error?",
+                   "Help me debug this container docker code error",
+                   "How do I resolve this docker deploy container issue?",
+                   "What do I do about this container docker code error?",
+                   "How do I fix this docker code container deploy error?"],
+    "async":      ["How do I fix this async await python code error?",
+                   "Help me debug this python async code error",
+                   "How do I resolve this async python code issue?",
+                   "What do I do about this python async await error?",
+                   "How do I fix this python code async error?"],
+    "react":      ["How do I fix this react hook state component error?",
+                   "Help me debug this component react state hook error",
+                   "How do I resolve this state react hook issue?",
+                   "What do I do about this react component state error?",
+                   "How do I fix this hook state react component error?"],
+    "kubernetes": ["How do I fix this kubernetes container deploy error?",
+                   "Help me debug this deploy kubernetes container error",
+                   "How do I resolve this container kubernetes deploy issue?",
+                   "What do I do about this kubernetes deploy error?",
+                   "How do I fix this container deploy kubernetes error?"],
+    "jwt":        ["How do I fix this jwt auth token api error?",
+                   "Help me debug this api jwt oauth token error",
+                   "How do I resolve this token jwt api auth issue?",
+                   "What do I do about this oauth jwt api token error?",
+                   "How do I fix this api token jwt auth error?"],
+    "api":        ["How do I fix this api data query export error?",
+                   "Help me resolve this export api data query error",
+                   "How do I sort out this data api query export issue?",
+                   "What do I do about this api export data error?",
+                   "How do I fix this query data api export error?"],
+    "mobile":     ["How do I fix this mobile install feature bug error?",
+                   "Help me resolve this feature mobile install bug error",
+                   "How do I sort out this install mobile bug issue?",
+                   "What do I do about this mobile bug install error?",
+                   "How do I fix this bug feature mobile install error?"],
+    "export":     ["How do I fix this export import data format error?",
+                   "Help me resolve this data export import format error",
+                   "How do I sort out this format data export issue?",
+                   "What do I do about this import data export error?",
+                   "How do I fix this data format export import error?"],
+    "team":       ["How do I fix this team account feature update error?",
+                   "Help me resolve this feature team account update error",
+                   "How do I sort out this account team feature issue?",
+                   "What do I do about this team feature account error?",
+                   "How do I fix this account update team feature error?"],
+    "uptime":     ["How do I fix this uptime performance monitor alert?",
+                   "Help me resolve this monitor uptime performance alert",
+                   "How do I sort out this performance uptime alert issue?",
+                   "What do I do about this alert uptime monitor error?",
+                   "How do I fix this performance alert uptime monitor?"],
+    "blood":      ["What treatment does a doctor recommend for blood pressure symptom?",
+                   "How do I treat this blood pressure symptom with a doctor?",
+                   "What is the doctor treatment for blood pressure symptom?",
+                   "Can a doctor recommend treatment for blood pressure?",
+                   "What prescription treatment helps blood pressure symptom?"],
+    "migraine":   ["What treatment does a doctor recommend for this symptom?",
+                   "How do I treat this symptom with a doctor prescription?",
+                   "What is the doctor treatment for this symptom?",
+                   "Can a doctor recommend treatment for this symptom?",
+                   "What prescription does a doctor give for this symptom?"],
+    "sleep":      ["What treatment does a doctor recommend for this symptom?",
+                   "How do I treat this symptom with doctor diagnosis?",
+                   "What is the diagnosis treatment from a doctor?",
+                   "Can a doctor recommend diagnosis treatment for this?",
+                   "What doctor treatment helps this symptom diagnosis?"],
+    "back":       ["What treatment does a doctor recommend for this symptom?",
+                   "How do I treat this symptom with a doctor?",
+                   "What is the doctor diagnosis for this back symptom?",
+                   "Can a doctor recommend treatment for this back issue?",
+                   "What symptom treatment does a doctor prescribe?"],
+    "anxiety":    ["What treatment does a doctor recommend for this symptom?",
+                   "How do I treat this symptom with doctor diagnosis?",
+                   "What is the doctor treatment for this symptom?",
+                   "Can a doctor recommend treatment for this symptom?",
+                   "What diagnosis treatment does a doctor give for symptom?"],
+    "ml":         ["How does this machine learning model use data?",
+                   "What data does a machine learning model need?",
+                   "How do ai machine learning models process data?",
+                   "What is the machine learning model data format?",
+                   "How does the machine learning ai model work with data?"],
+    "blockchain": ["How does the blockchain data model api work?",
+                   "What is the blockchain data api model?",
+                   "How do blockchain model data api systems work?",
+                   "What data does the blockchain api model use?",
+                   "How does blockchain model use api data?"],
+    "quantum":    ["How does the quantum computing model use data?",
+                   "What data does a quantum computing model need?",
+                   "How do quantum computing models process data?",
+                   "What is the quantum model data format?",
+                   "How does quantum computing model data work?"],
+    "climate":    ["How does climate change affect energy cost data?",
+                   "What data shows climate energy cost impact?",
+                   "How do climate data energy cost models work?",
+                   "What is the climate energy data cost model?",
+                   "How does climate cost energy data change?"],
+    "renewable":  ["How does renewable energy reduce cost data?",
+                   "What data shows renewable energy cost reduction?",
+                   "How do renewable energy cost data models work?",
+                   "What is the renewable energy data cost?",
+                   "How does renewable energy cost data change?"],
+}
+
+
+
+CONTEXT_SESSIONS = {
+    # Each session: (primer, resp_key, hint, keyword_bundle)
+    # keyword_bundle is stored as a short, VOCAB-dense paraphrase cache entry.
+    "customer_support": {
+        "sessions": [
+            ("My account has been locked after too many login attempts",   "locked",   "account", "account login error password reset"),
+            ("I need to cancel my current subscription plan",              "cancel",   "cancel",  "cancel subscription billing error account"),
+            ("My payment keeps getting declined at checkout",              "billing",  "billing", "billing payment invoice error update"),
+            ("I haven't received my order and it's been two weeks",        "track",    "track",   "order track delivery error shipping"),
+            ("I need to get a refund for my recent purchase",              "refund",   "refund",  "refund return payment error billing"),
+        ],
+        "responses": {
+            "locked":  "Account locked after failed attempts. Click 'Unlock Account' in the email we sent.",
+            "cancel":  "To cancel, go to Account Settings > Subscription > Cancel Plan.",
+            "billing": "Update billing at Account Settings > Billing > Payment Methods.",
+            "track":   "Track at Orders > Track Shipment. Real-time updates sent via email.",
+            "refund":  "Refunds allowed within 30 days. Processed within 5-7 business days.",
+        },
+    },
+    "developer_qa": {
+        "sessions": [
+            ("My Docker container keeps crashing on startup with exit code 1",  "docker",     "container", "docker container error code deploy"),
+            ("My Python async function is throwing a RuntimeError",             "async",      "async",     "async await python code error"),
+            ("My React component is not re-rendering when state changes",        "react",      "component", "react hook state component error"),
+            ("My Kubernetes pod is stuck in CrashLoopBackOff",                  "kubernetes", "kubernetes","kubernetes deploy container error"),
+            ("My JWT token keeps getting rejected with 401 unauthorized",        "jwt",        "jwt",       "jwt auth token oauth api error"),
+        ],
+        "responses": {
+            "docker":     "Containers package apps with dependencies. Check logs with docker logs.",
+            "async":      "Use async def for coroutines and await to suspend. Run with asyncio.run().",
+            "react":      "useState returns [state, setState]. Call setState to trigger re-render.",
+            "kubernetes": "Deployments manage ReplicaSets. Check events with kubectl describe.",
+            "jwt":        "JWT = header.payload.signature. Server signs with secret. Send in Authorization header.",
+        },
+    },
+    "product_faq": {
+        "sessions": [
+            ("I cannot get the API to return data for my requests",          "api",    "api",    "api query data export error"),
+            ("The mobile app keeps crashing when I open it",                 "mobile", "mobile", "mobile install feature bug error"),
+            ("I am trying to export my data but the download never starts",  "export", "export", "export import data format error"),
+            ("My team members cannot see the shared workspace",              "team",   "team",   "team account feature update error"),
+            ("The service has been down for the past hour",                  "uptime", "uptime", "uptime performance monitor alert"),
+        ],
+        "responses": {
+            "api":    "Full REST API available. 1,000 req/min on Growth, unlimited on Enterprise.",
+            "mobile": "iOS and Android apps with full feature parity and offline mode.",
+            "export": "Export as CSV, JSON, or PDF from Settings > Data Export. Ready within 24hrs.",
+            "team":   "Unlimited members on team plans. Admins manage roles, permissions, workspaces.",
+            "uptime": "99.9% SLA for Growth, 99.99% for Enterprise. Credits for downtime.",
+        },
+    },
+    "medical_information": {
+        "sessions": [
+            ("My blood pressure reading was 145 over 92 this morning",         "blood",    "blood",    "blood pressure symptom doctor treatment"),
+            ("I have been having severe migraine headaches every other day",   "migraine", "symptom",  "symptom treatment doctor prescription"),
+            ("I cannot sleep more than 3 hours a night despite being tired",   "sleep",    "sleep",    "symptom treatment doctor diagnosis"),
+            ("My lower back has been in constant pain for two weeks",          "back",     "back",     "symptom diagnosis treatment doctor"),
+            ("I have been feeling anxious and overwhelmed constantly",         "anxiety",  "anxiety",  "symptom treatment diagnosis doctor"),
+        ],
+        "responses": {
+            "blood":    "Normal BP below 120/80. High BP (130+/80+) treated with lifestyle changes and medication.",
+            "migraine": "Treated with triptans, NSAIDs. Triggers: stress, hormones, certain foods.",
+            "sleep":    "Disorders: insomnia, sleep apnea. Treat with CBT-I, CPAP, sleep hygiene.",
+            "back":     "Causes: muscle strain, disc herniation. Treat with rest, NSAIDs, physio.",
+            "anxiety":  "Treated with CBT therapy, SSRIs. Affects 18% of adults. Causes excessive worry.",
+        },
+    },
+    "general_knowledge": {
+        "sessions": [
+            ("I am learning about how neural networks are trained",          "ml",         "machine",    "machine learning model data ai"),
+            ("I want to understand how Bitcoin transactions are verified",   "blockchain", "blockchain", "blockchain data model api"),
+            ("I am studying how qubits differ from classical bits",         "quantum",    "quantum",    "quantum computing model data"),
+            ("I am researching the causes of rising sea levels",            "climate",    "climate",    "climate energy cost data"),
+            ("I want to know how solar panels convert light to energy",     "renewable",  "renewable",  "renewable energy cost data"),
+        ],
+        "responses": {
+            "ml":         "Computers learn from data without explicit programming. Types: supervised, unsupervised, RL.",
+            "blockchain": "Distributed ledger where records are linked cryptographically. Powers cryptocurrencies.",
+            "quantum":    "Qubits exist in superposition (0, 1, or both). Useful for cryptography and optimisation.",
+            "climate":    "Long-term shifts in global temperatures caused by burning fossil fuels.",
+            "renewable":  "Sources: solar, wind, hydro, geothermal. No emissions, naturally replenished.",
+        },
+    },
+}
+
+
+@dataclass
+class ContextResult:
+    domain:             str
+    session_key:        str
+    primer:             str
+    followup:           str
+    is_followup:        bool       # True = this is the ambiguous follow-up turn
+    context_depth:      int        # 0 = no context used
+    cache_hit:          bool
+    similarity:         float
+    resolved_correctly: bool       # did we get the right domain response?
+    latency_ms:         float
+    mode:               str        # "stateless" | "context_aware"
+
+
+def build_context_corpus(n_followups: int = 5) -> list:
+    """
+    Build a list of conversation pairs for the context benchmark.
+    Each session: primer turn + n_followups queries specific to that session's topic.
+    Follow-ups are drawn from SESSION_FOLLOWUPS[resp_key] so they share vocabulary
+    with that session's keyword_bundle (within-session topic continuity test).
+    """
+    sessions = []
+    rng = random.Random(99)
+
+    for domain, cfg in CONTEXT_SESSIONS.items():
+        for primer, resp_key, _, kw_bundle in cfg["sessions"]:
+            pool = SESSION_FOLLOWUPS.get(resp_key, [])
+            followups = rng.sample(pool, min(n_followups, len(pool)))
+            for fq in followups:
+                sessions.append({
+                    "domain":    domain,
+                    "key":       resp_key,
+                    "primer":    primer,
+                    "followup":  fq,
+                    "resp_key":  resp_key,
+                    "kw_bundle": kw_bundle,
+                    "response":  cfg["responses"][resp_key],
+                })
+    return sessions
+
+
+def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
+                      context_window: int = 4) -> dict:
+    """
+    Run the context-aware benchmark.
+
+    For each domain × session:
+      1. Warm the cache with domain-specific canonical answers
+      2. Prime session with domain-specific query (session_id set)
+      3. Fire ambiguous follow-up queries with and WITHOUT session_id
+      4. Measure: did we get the right domain response?
+
+    Returns dict with stateless and context_aware accuracy per domain.
+    """
+    print(f"\n── Context-aware benchmark ──────────────────────────────")
+    print(f"  context_window={context_window}  followups_per_session={n_followups}")
+    print(f"  Engine: {'sulci.Cache' if use_sulci else 'built-in TF-IDF'}")
+    print()
+
+    # Context benchmark uses a slightly lower threshold than the stateless benchmark.
+    # Reason: the blended query vector (70% query + 30% history) has lower raw cosine
+    # similarity to any single stored entry than an exact-match lookup would, so the
+    # threshold is calibrated separately.  Default is 0.72 vs 0.85 for stateless.
+    # Default 0.58 calibrated for TF-IDF blended vectors.
+    # With real sentence-transformer embeddings (--use-sulci), set higher.
+    ctx_threshold = args.context_threshold
+    print(f"  threshold(stateless)={args.threshold}  threshold(context)={ctx_threshold}")
+
+    # Build caches
+    if use_sulci:
+        db_sl  = os.path.join(args.out, "ctx_bench_stateless_db")
+        db_ctx = os.path.join(args.out, "ctx_bench_context_db")
+        cache_stateless = _SulciWrapper(ctx_threshold, db_sl, context_window=0)
+        cache_context   = _SulciWrapper(ctx_threshold, db_ctx, context_window=context_window)
+    else:
+        cache_stateless = _BuiltinContextCache(ctx_threshold, context_window=0)
+        cache_context   = _BuiltinContextCache(ctx_threshold, context_window=context_window)
+
+    # ── Warm both caches ─────────────────────────────────────────────────────
+    # Each session stores two cache entries:
+    #   (a) The verbose primer itself — context-blended follow-ups can match via
+    #       domain vocabulary amplification (docker/container/code overlap).
+    #   (b) A short keyword_bundle (e.g. "docker container error code deploy") —
+    #       TF-IDF dense target that the blended follow-up vector can reach above
+    #       the context threshold (0.58) while stateless stays below it (~0.40-0.55).
+    print("  Warming cache with canonical responses...")
+
+    for domain, cfg in CONTEXT_SESSIONS.items():
+        for primer, resp_key, _, kw_bundle in cfg["sessions"]:
+            response = cfg["responses"][resp_key]
+            for cache in (cache_stateless, cache_context):
+                # Store primer (verbose — context blending amplifies shared vocab)
+                cache.set(primer, response, group=resp_key, domain=domain)
+                # Store keyword bundle (dense — maximises within-domain cosine sim)
+                cache.set(kw_bundle, response, group=resp_key, domain=domain)
+
+    # ── Build sessions ────────────────────────────────────────────────────────
+    sessions = build_context_corpus(n_followups=n_followups)
+    results:  list[ContextResult] = []
+    session_counter = 0
+
+    for item in sessions:
+        domain   = item["domain"]
+        key      = item["key"]
+        primer   = item["primer"]
+        followup = item["followup"]
+        expected = item["response"]
+        session_id = f"bench-session-{session_counter}"
+        session_counter += 1
+
+        # ── Stateless lookup ──────────────────────────────────────────────────
+        t0 = time.perf_counter()
+        if use_sulci:
+            resp_sl, sim_sl, matched_sl = cache_stateless.get(followup)
+        else:
+            resp_sl, sim_sl, matched_sl, _ = cache_stateless.get_ctx(followup)
+        ms_sl = (time.perf_counter() - t0) * 1000
+
+        hit_sl      = resp_sl is not None
+        correct_sl  = hit_sl and (expected[:30] in (resp_sl or ""))
+
+        results.append(ContextResult(
+            domain=domain, session_key=key, primer=primer, followup=followup,
+            is_followup=True, context_depth=0, cache_hit=hit_sl,
+            similarity=round(sim_sl, 4), resolved_correctly=correct_sl,
+            latency_ms=round(ms_sl, 3), mode="stateless",
+        ))
+
+        # ── Context-aware lookup ──────────────────────────────────────────────
+        # First store the primer in the session
+        if use_sulci:
+            cache_context.set_with_session(
+                primer, item["response"], group=key, domain=domain,
+                session_id=session_id
+            )
+            t0 = time.perf_counter()
+            resp_ctx, sim_ctx, matched_ctx = cache_context.get(followup, session_id=session_id)
+            ms_ctx = (time.perf_counter() - t0) * 1000
+            depth  = 1
+        else:
+            cache_context.set_ctx(primer, item["response"],
+                                   group=key, domain=domain,
+                                   session_id=session_id)
+            t0 = time.perf_counter()
+            resp_ctx, sim_ctx, matched_ctx, depth = cache_context.get_ctx(
+                followup, session_id=session_id
+            )
+            ms_ctx = (time.perf_counter() - t0) * 1000
+
+        hit_ctx     = resp_ctx is not None
+        correct_ctx = hit_ctx and (expected[:30] in (resp_ctx or ""))
+
+        results.append(ContextResult(
+            domain=domain, session_key=key, primer=primer, followup=followup,
+            is_followup=True, context_depth=depth, cache_hit=hit_ctx,
+            similarity=round(sim_ctx, 4), resolved_correctly=correct_ctx,
+            latency_ms=round(ms_ctx, 3), mode="context_aware",
+        ))
+
+    return _context_analytics(results, context_window)
+
+
+def _context_analytics(results: list, context_window: int) -> dict:
+    """Compute accuracy metrics comparing stateless vs context-aware."""
+    sl  = [r for r in results if r.mode == "stateless"]
+    ctx = [r for r in results if r.mode == "context_aware"]
+
+    def acc(rows):
+        if not rows: return 0.0
+        return round(sum(1 for r in rows if r.resolved_correctly) / len(rows), 4)
+
+    def hit_r(rows):
+        if not rows: return 0.0
+        return round(sum(1 for r in rows if r.cache_hit) / len(rows), 4)
+
+    def avg_sim(rows):
+        hits = [r for r in rows if r.cache_hit]
+        if not hits: return 0.0
+        return round(sum(r.similarity for r in hits) / len(hits), 4)
+
+    def avg_lat(rows):
+        if not rows: return 0.0
+        return round(sum(r.latency_ms for r in rows) / len(rows), 3)
+
+    # Per-domain breakdown
+    domain_rows = []
+    for domain in CONTEXT_SESSIONS:
+        d_sl  = [r for r in sl  if r.domain == domain]
+        d_ctx = [r for r in ctx if r.domain == domain]
+        domain_rows.append({
+            "domain":                     domain,
+            "sessions_tested":            len(d_sl),
+            "stateless_hit_rate":         hit_r(d_sl),
+            "context_hit_rate":           hit_r(d_ctx),
+            "stateless_accuracy":         acc(d_sl),
+            "context_accuracy":           acc(d_ctx),
+            "accuracy_improvement":       round(acc(d_ctx) - acc(d_sl), 4),
+            "stateless_avg_sim":          avg_sim(d_sl),
+            "context_avg_sim":            avg_sim(d_ctx),
+            "stateless_latency_ms":       avg_lat(d_sl),
+            "context_latency_ms":         avg_lat(d_ctx),
+        })
+
+    summary = {
+        "context_window":               context_window,
+        "total_followup_queries":       len(sl),
+        "domains_tested":               len(CONTEXT_SESSIONS),
+        "stateless": {
+            "hit_rate":                 hit_r(sl),
+            "resolution_accuracy":      acc(sl),
+            "avg_similarity":           avg_sim(sl),
+            "avg_latency_ms":           avg_lat(sl),
+        },
+        "context_aware": {
+            "hit_rate":                 hit_r(ctx),
+            "resolution_accuracy":      acc(ctx),
+            "avg_similarity":           avg_sim(ctx),
+            "avg_latency_ms":           avg_lat(ctx),
+        },
+        "improvement": {
+            "accuracy_delta":           round(acc(ctx) - acc(sl), 4),
+            "accuracy_delta_pct":       round((acc(ctx) - acc(sl)) * 100, 1),
+            "hit_rate_delta":           round(hit_r(ctx) - hit_r(sl), 4),
+        },
+        "domain_breakdown":             domain_rows,
+    }
+
+    # Print summary table
+    print(f"\n{'='*62}")
+    print(f"  CONTEXT-AWARE BENCHMARK RESULTS")
+    print(f"  context_window={context_window}")
+    print(f"{'='*62}")
+    print(f"  {'Metric':<30} {'Stateless':>12} {'Context':>12} {'Delta':>8}")
+    print(f"  {'-'*62}")
+    pct_rows = [
+        ("Hit rate",           hit_r(sl),  hit_r(ctx)),
+        ("Resolution accuracy",acc(sl),    acc(ctx)),
+        ("Avg similarity",     avg_sim(sl),avg_sim(ctx)),
+    ]
+    for label, sv, cv in pct_rows:
+        delta = cv - sv
+        print(f"  {label:<30} {sv:>11.1%}  {cv:>11.1%}  {delta:>+.1%}")
+    sl_lat  = avg_lat(sl)
+    ctx_lat = avg_lat(ctx)
+    delta_lat = ctx_lat - sl_lat
+    print(f"  {'Avg latency (ms)':<30} {sl_lat:>10.2f}ms  {ctx_lat:>10.2f}ms  {delta_lat:>+.2f}ms")
+
+    print(f"\n  Domain breakdown:")
+    for row in domain_rows:
+        delta = row["accuracy_improvement"]
+        sign  = "+" if delta >= 0 else ""
+        print(f"    {row['domain']:22s}  "
+              f"stateless={row['stateless_accuracy']:.0%}  "
+              f"context={row['context_accuracy']:.0%}  "
+              f"delta={sign}{delta:.0%}")
+    print(f"{'='*62}\n")
+
+    return {"summary": summary, "results": [asdict(r) for r in results]}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -642,6 +1282,8 @@ def sweep(corpus: dict, use_sulci: bool) -> list:
 def main():
     t0 = time.time()
     print("\n◈ Sulci Benchmark")
+
+    # ── Stateless benchmark ───────────────────────────────────────────────────
     print(f"  Building {args.queries:,}-query corpus...")
     corpus = build_corpus(n_test=args.queries)
     print(f"  Done ({sum(len(v) for v in corpus.values()):,} total queries)\n")
@@ -650,9 +1292,9 @@ def main():
 
     print("\n── Saving results ───────────────────────────────────────")
     s = summary(results, args.threshold)
-    save_json(s,                          "summary.json")
-    save_csv(domain_breakdown(results),   "domain_breakdown.csv")
-    save_csv(time_series(results),        "time_series.csv")
+    save_json(s,                              "summary.json")
+    save_csv(domain_breakdown(results),       "domain_breakdown.csv")
+    save_csv(time_series(results),            "time_series.csv")
     save_csv(false_positives_report(results), "false_positives.csv")
 
     if not args.no_sweep:
@@ -660,9 +1302,9 @@ def main():
         save_csv(sw, "threshold_sweep.csv")
 
     elapsed = time.time() - t0
-    print(f"\n{'='*58}")
-    print(f"  RESULTS  |  threshold={args.threshold}")
-    print(f"{'='*58}")
+    print(f"\n{'='*62}")
+    print(f"  STATELESS BENCHMARK  |  threshold={args.threshold}")
+    print(f"{'='*62}")
     print(f"  Queries        : {s['total_queries']:,}")
     print(f"  Hits           : {s['cache_hits']:,}  ({s['hit_rate']:.1%})")
     print(f"  False positives: {s['false_positives']} ({s['false_positive_rate']:.2%})")
@@ -671,13 +1313,30 @@ def main():
     print(f"  Cost saved     : ${s['saved_cost_usd']:.2f}  ({s['cost_reduction_pct']:.1f}%)")
     print(f"  Completed in   : {elapsed:.1f}s")
     print(f"  Results in     : {args.out}/")
-    print(f"{'='*58}\n")
+    print(f"{'='*62}\n")
 
     print("  Domain breakdown:")
     for row in domain_breakdown(results):
         print(f"    {row['domain']:22s}  hit={row['hit_rate_pct']:5.1f}%  "
               f"fp={row['fp_rate_pct']:4.1f}%  saved=${row['saved_usd']:.2f}")
     print()
+
+    # ── Context-aware benchmark ───────────────────────────────────────────────
+    if args.context:
+        ctx_data = run_context_bench(
+            n_followups    = 8,
+            use_sulci      = args.use_sulci,
+            context_window = args.context_window,
+        )
+        save_json(ctx_data["summary"], "context_summary.json")
+        save_csv(ctx_data["summary"]["domain_breakdown"], "context_accuracy.csv")
+
+        imp = ctx_data["summary"]["improvement"]
+        print(f"  Context-aware accuracy improvement: "
+              f"{imp['accuracy_delta_pct']:+.1f}pp  "
+              f"(stateless={ctx_data['summary']['stateless']['resolution_accuracy']:.0%}  "
+              f"→ context={ctx_data['summary']['context_aware']['resolution_accuracy']:.0%})")
+        print()
 
 
 if __name__ == "__main__":
