@@ -6,6 +6,9 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.2] - Mar 2026
+- Packaging fix: re-publish of 0.2.1 (PyPI file conflict resolution)
+
 ## [0.2.0] — 2026-03-10
 
 ### Added
