@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name            = "sulci"
-version         = "0.2.0"
+version         = "0.2.1"
 description     = "Context aware Semantic caching for LLM apps — stop paying for the same answer twice"
 readme          = "README.md"
 license         = { file = "LICENSE" }
@@ -50,10 +50,10 @@ all     = [
 dev = ["pytest>=7.0", "pytest-cov", "build", "twine"]
 
 [project.urls]
-Homepage      = "https://sulci.dev"
-Repository    = "https://github.com/id4git/semanticache"
-Documentation = "https://github.com/id4git/semanticache#readme"
-"Bug Tracker" = "https://github.com/id4git/semanticache/issues"
+Homepage      = "https://sulci.io"
+Repository    = "https://github.com/id4git/sulci"
+Documentation = "https://github.com/id4git/sulci#readme"
+"Bug Tracker" = "https://github.com/id4git/sulci/issues"
 
 [tool.setuptools.packages.find]
 where   = ["."]        # look in the repo root (sulci/)
