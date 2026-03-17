@@ -138,15 +138,14 @@ class TestChromaBackend:
         import math
         from sulci.backends.chroma import ChromaBackend
 
-        def make_vec(val):
-            v    = [val] * 384
+        def unit(v):
             norm = math.sqrt(sum(x * x for x in v))
             return [x / norm for x in v]
 
         backend = ChromaBackend(db_path=str(tmp_path / "chroma_rank"))
-        vec_a   = make_vec(0.1)
-        vec_b   = make_vec(0.9)
-        query   = make_vec(0.95)         # closer to vec_b
+        vec_a   = unit([1.0] + [0.0] * 383)           # pure dim-0
+        vec_b   = unit([0.0, 1.0] + [0.0] * 382)      # pure dim-1
+        query   = unit([0.05, 0.999] + [0.0] * 382)   # near dim-1 → matches vec_b
 
         backend.store("a", "query A", "Response A", vec_a)
         backend.store("b", "query B", "Response B", vec_b)
