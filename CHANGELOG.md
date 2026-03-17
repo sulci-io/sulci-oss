@@ -6,6 +6,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.2.4] - 2026-03-16
+
+- Release v0.2.4 — Developer Edition baseline — pre-enterprise transition
+
 ## [0.2.3] - 2026-03-16
 
 - Release v0.2.3 — correct test counts, updated docs

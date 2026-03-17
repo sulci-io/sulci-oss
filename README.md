@@ -223,7 +223,7 @@ No network calls are made unless you explicitly configure `embedding_model="open
 │   ├── basic_usage.py          ← stateless cache demo, no API key needed
 │   ├── context_aware.py        ← 4-demo walkthrough, fully offline
 │   └── context_aware_example.py← additional context-aware patterns
-├── pyproject.toml              ← name="sulci", version="0.2.3"
+├── pyproject.toml              ← name="sulci", version="0.2.4"
 ├── setup.py
 ├── sulci
 │   ├── __init__.py             ← exports Cache, ContextWindow, SessionStore
