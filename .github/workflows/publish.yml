@@ -3,7 +3,7 @@ name: Publish to PyPI
 on:
   push:
     tags:
-      - "v*"          # triggers on v0.1.1, v0.2.0, etc.
+      - "v*" # triggers on v0.1.1, v0.2.0, etc.
 
 jobs:
   test:
@@ -19,13 +19,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install test dependencies
-        run: pip install ".[sqlite]" pytest pytest-cov
+        run: pip install ".[sqlite]" pytest pytest-cov httpx
 
       - name: Run tests
         run: pytest tests/ -v --tb=short
 
   publish:
-    needs: test          # only publish if all tests pass
+    needs: test # only publish if all tests pass
     runs-on: ubuntu-latest
     permissions:
       contents: read

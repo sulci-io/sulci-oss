@@ -37,8 +37,8 @@ class TestBasicOperations:
 
     def test_version(self):
         import sulci
-        assert hasattr(sulci, "__version__")
-        assert sulci.__version__
+        assert hasattr(sulci, "_SDK_VERSION")
+        assert sulci._SDK_VERSION
 
     def test_repr(self, cache):
         assert "Cache" in repr(cache)

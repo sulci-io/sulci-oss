@@ -10,6 +10,7 @@ Context-awareness : sliding window per session, blended embedding lookup
 import time
 import hashlib
 import importlib
+import time as _time
 from typing import Optional, Callable, Any
 
 from sulci.context import ContextWindow, SessionStore
@@ -83,7 +84,10 @@ class Cache:
         query_weight:    float         = 0.70,
         context_decay:   float         = 0.50,
         session_ttl:     Optional[int] = 3600,
+        telemetry                      = True,
+        api_key:         Optional[str] = None,
     ):
+        self._telemetry     = telemetry
         self.backend        = backend
         self.threshold      = threshold
         self.ttl_seconds    = ttl_seconds
@@ -92,7 +96,7 @@ class Cache:
         self._stats         = {"hits": 0, "misses": 0, "saved_cost": 0.0}
 
         self._embedder = self._load_embedder(embedding_model)
-        self._backend  = self._load_backend(backend, db_path)
+        self._backend  = self._load_backend(backend, db_path, api_key)
 
         # Session store — created only when context_window > 0
         self._sessions: Optional[SessionStore] = (
@@ -115,7 +119,24 @@ class Cache:
         from sulci.embeddings.minilm import MiniLMEmbedder
         return MiniLMEmbedder(name)
 
-    def _load_backend(self, name: str, db_path: str):
+    def _load_backend(self, name: str, db_path: str, api_key: Optional[str] = None):
+        # sulci cloud backend — special construction, needs api_key not db_path
+        if name == "sulci":
+            import os, sys
+            _module_key = None
+            _sulci_mod  = sys.modules.get("sulci")
+            if _sulci_mod is not None:
+                _module_key = getattr(_sulci_mod, "_api_key", None)
+
+            resolved_key = (
+                api_key
+                or os.environ.get("SULCI_API_KEY")
+                or _module_key
+            )
+            from sulci.backends.cloud import SulciCloudBackend
+            return SulciCloudBackend(api_key=resolved_key)
+
+        # all other backends — loaded dynamically via importlib
         registry = {
             "chroma": "sulci.backends.chroma.ChromaBackend",
             "qdrant": "sulci.backends.qdrant.QdrantBackend",
@@ -124,10 +145,13 @@ class Cache:
             "sqlite": "sulci.backends.sqlite.SQLiteBackend",
             "milvus": "sulci.backends.milvus.MilvusBackend",
         }
+
         if name not in registry:
             raise ValueError(
-                f"Unknown backend '{name}'. Choose from: {list(registry.keys())}"
+                f"Unknown backend '{name}'. "
+                f"Choose from: {list(registry.keys()) + ['sulci']}"
             )
+        
         module_path, cls_name = registry[name].rsplit(".", 1)
         mod = importlib.import_module(module_path)
         return getattr(mod, cls_name)(db_path=db_path)
@@ -190,6 +214,7 @@ class Cache:
             response is None on cache miss.
             context_depth = number of prior turns that influenced lookup.
         """
+        _t0 = _time.time()
         vec, depth = self._context_vec(query, session_id)
         resp, sim  = self._backend.search(
             embedding = vec,
@@ -197,6 +222,20 @@ class Cache:
             user_id   = user_id if self.personalized else None,
             now       = time.time(),
         )
+        try:
+            if self._telemetry:
+                import sys
+                _sulci = sys.modules.get("sulci")
+                if _sulci is not None:
+                    _sulci._emit("cache.get", {
+                            "backend":    self.backend,
+                            "hits":       1 if resp is not None else 0,
+                            "misses":     0 if resp is not None else 1,
+                            "latency_ms": round((_time.time() - _t0) * 1000, 2),
+                        })
+        except Exception:
+            pa
+
         return resp, sim, depth
 
     def set(

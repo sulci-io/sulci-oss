@@ -23,7 +23,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: pip install ".[sqlite]" pytest pytest-cov
+        run: pip install ".[sqlite]" pytest pytest-cov httpx
 
       - name: Test core
         run: pytest tests/test_core.py -v --tb=short --cov=sulci --cov-report=term-missing

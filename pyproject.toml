@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name            = "sulci"
-version         = "0.2.5"
+version         = "0.3.0"
 description     = "The AI native context-aware semantic cache for LLM apps — stop paying for the same answer twice"
 readme          = "README.md"
 license         = { file = "LICENSE" }
@@ -36,6 +36,7 @@ redis   = ["redis>=5.0.0",        "redisvl>=0.1.0", "sentence-transformers>=2.2.
 sqlite  = ["sentence-transformers>=2.2.0"]
 milvus  = ["pymilvus>=2.3.0",     "sentence-transformers>=2.2.0"]
 openai  = ["openai>=1.0.0"]
+cloud   = ["httpx>=0.27.0"]
 all     = [
     "chromadb>=0.4.0",
     "qdrant-client>=1.7.0",
@@ -45,8 +46,9 @@ all     = [
     "pymilvus>=2.3.0",
     "sentence-transformers>=2.2.0",
     "openai>=1.0.0",
+    "httpx>=0.27.0",
 ]
-dev = ["pytest>=7.0", "pytest-cov", "build", "twine"]
+dev = ["pytest>=7.0", "pytest-cov", "build", "twine", "httpx>=0.27.0"]
 
 [project.urls]
 Homepage      = "https://sulci.io"

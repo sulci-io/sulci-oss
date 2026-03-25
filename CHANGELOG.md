@@ -6,15 +6,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.0] — 2026-03-25
+
+### Added
+
+- **Sulci Cloud backend** — `Cache(backend="sulci", api_key="sk-sulci-...")` routes
+  cache operations to `api.sulci.io` via HTTPS. Zero infrastructure for the user —
+  one parameter change from any self-hosted backend.
+- `sulci/backends/cloud.py` — `SulciCloudBackend` via httpx
+  - `search()` returns `(None, 0.0)` on timeout or any error — never crashes caller
+  - `upsert()` failure is silent — fire and forget
+  - `delete_user()` and `clear()` also fail silently
+- `sulci.connect(api_key, telemetry=True)` — opt-in gateway to Sulci Cloud
+  - Stores API key at module level for all `Cache(backend="sulci")` instances
+  - Enables optional usage telemetry — flushed to `api.sulci.io` every 60 seconds
+  - Strictly opt-in: `_telemetry_enabled = False` until `connect()` is called
+- `Cache` gains two new constructor parameters:
+  - `api_key` — API key for `backend="sulci"` (resolution: arg > env > `connect()`)
+  - `telemetry` — per-instance opt-out (default `True`)
+- `SULCI_API_KEY` environment variable — zero-code alternative to `api_key=`
+- `sulci[cloud]` install extra — `pip install "sulci[cloud]"`
+- `tests/test_connect.py` — 32 tests covering `sulci.connect()` and telemetry
+- `tests/test_cloud_backend.py` — 25 tests covering `SulciCloudBackend` and wiring
+
+### Changed
+
+- Version bumped to `0.3.0`
+- `README.md` updated with Sulci Cloud section and `sulci.connect()` docs
+- `LOCAL_SETUP.md` updated with Week 2 and Week 3 setup instructions
+- `pyproject.toml` — added `cloud = ["httpx>=0.27.0"]` extra
+
+### Backward compatibility
+
+- All existing code using local backends (`sqlite`, `chroma`, `faiss`, etc.) is
+  completely unaffected — zero breaking changes
+- `connect()` and `api_key=` are purely additive
+- Default backend behaviour unchanged
+
 ## [0.2.5] — 2026-03-17
 
 ### Repository & Housekeeping
+
 - Transferred repository from `id4git/sulci` to `sulci-io/sulci-oss` under new GitHub org
 - Renamed repo from `sulci` to `sulci-oss` (PyPI package name `sulci-cache` and import `from sulci` unchanged)
 - Added `LICENSE` (MIT) and `NOTICE` files to repo root with clear OSS/enterprise demarcation
 - Updated `pyproject.toml` repository URLs to reflect new org and repo name
 
 ### Docs
+
 - Added `LOCAL_SETUP.md` — full local development guide: venv setup, install, test runs, smoke test, troubleshooting
 - Corrected test counts across `README.md` and `LOCAL_SETUP.md`:
   - `test_core.py`: 27 tests (was 26)

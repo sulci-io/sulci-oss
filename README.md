@@ -20,7 +20,7 @@ Sulci is a drop-in Python library that caches LLM responses by **semantic meanin
 | 1–3 second response time     | Cache hits return in <10ms                               |
 | No memory across sessions    | Context-aware: understands conversation history          |
 
-**Benchmark results (v0.2.1, 5,000 queries):**
+**Benchmark results (v0.2.5, 5,000 queries):**
 
 - Overall hit rate: **85.9%**
 - Hit latency p50: **0.74ms** (vs ~1,840ms for a live LLM call)
@@ -38,9 +38,57 @@ pip install "sulci[faiss]"     # FAISS
 pip install "sulci[qdrant]"    # Qdrant
 pip install "sulci[redis]"     # Redis + RedisVL
 pip install "sulci[milvus]"    # Milvus Lite
+pip install "sulci[cloud]"     # Sulci Cloud managed backend (Week 2+)
 ```
 
 > **zsh users:** always wrap extras in quotes — `".[sqlite]"` not `.[sqlite]`.
+
+---
+
+## Sulci Cloud — zero infrastructure option
+
+Get a free API key at **[sulci.io/signup](https://sulci.io/signup)** and switch
+to the managed backend with a single parameter change. Everything else stays identical.
+
+```python
+# Before — self-hosted (works today)
+cache = Cache(backend="sqlite", threshold=0.85)
+
+# After — managed cloud (zero other code changes)
+cache = Cache(backend="sulci", api_key="sk-sulci-...", threshold=0.85)
+
+# Or via environment variable — zero code changes at all
+# export SULCI_API_KEY=sk-sulci-...
+cache = Cache(backend="sulci", threshold=0.85)
+```
+
+**Free tier:** 50,000 requests/month. No credit card required.
+
+### sulci.connect()
+
+For apps that want to set the key once at startup and enable optional telemetry:
+
+```python
+import sulci
+
+sulci.connect(
+    api_key   = "sk-sulci-...",   # or set SULCI_API_KEY env var
+    telemetry = True,             # default True — set False to disable reporting
+)
+
+cache = Cache(backend="sulci")    # picks up key from connect() automatically
+```
+
+**Telemetry is strictly opt-in.** Nothing is sent unless `sulci.connect()` is called.
+`_telemetry_enabled = False` until you explicitly connect. Disable per-instance with
+`Cache(backend="sulci", telemetry=False)`.
+
+**Key resolution order:**
+```
+1. Explicit api_key= argument to Cache()
+2. SULCI_API_KEY environment variable
+3. Key stored by a prior sulci.connect() call
+```
 
 ---
 
@@ -124,7 +172,7 @@ print(f"Saved:   ${result['saved_cost']:.4f}")
 
 ```python
 cache = Cache(
-    backend         = "sqlite",   # sqlite | chroma | faiss | qdrant | redis | milvus
+    backend         = "sqlite",   # sqlite | chroma | faiss | qdrant | redis | milvus | sulci
     threshold       = 0.85,       # cosine similarity cutoff (0–1)
     embedding_model = "minilm",   # minilm | openai
     ttl_seconds     = None,       # None = no expiry
@@ -134,6 +182,8 @@ cache = Cache(
     query_weight    = 0.70,       # α in blending formula
     context_decay   = 0.50,       # per-turn decay weight
     session_ttl     = 3600,       # session expiry in seconds
+    api_key         = None,       # required when backend="sulci"
+    telemetry       = True,       # set False to disable per-instance
 )
 ```
 
@@ -189,8 +239,9 @@ lookup_vec = α · embed(query) + (1−α) · Σ(decay^i · turn_i)
 | Qdrant          | `qdrant` | <5ms        | Production, metadata filtering          |
 | Redis + RedisVL | `redis`  | <1ms        | Existing Redis infra, lowest latency    |
 | Milvus Lite     | `milvus` | <7ms        | Dev-to-prod without code changes        |
+| **Sulci Cloud** | `sulci`  | <8ms        | **Zero infra — managed service (NEW)**  |
 
-All backends are free tier or self-hostable at zero cost.
+All self-hosted backends are free tier or self-hostable at zero cost.
 
 ---
 
@@ -226,10 +277,12 @@ No network calls are made unless you explicitly configure `embedding_model="open
 ├── pyproject.toml              ← name="sulci", version="0.2.5"
 ├── setup.py
 ├── sulci
-│   ├── __init__.py             ← exports Cache, ContextWindow, SessionStore
+│   ├── __init__.py             ← exports Cache, ContextWindow, SessionStore, connect()
+│   │                              NEW (Week 2): connect(), _emit(), _flush(), _SDK_VERSION
 │   ├── backends
-│   │   ├── __init__.py
+│   │   ├── __init__.py         ← empty — core.py loads backends via importlib
 │   │   ├── chroma.py
+│   │   ├── cloud.py            ← SulciCloudBackend — NEW (Week 3)
 │   │   ├── faiss.py
 │   │   ├── milvus.py
 │   │   ├── qdrant.py
@@ -237,16 +290,20 @@ No network calls are made unless you explicitly configure `embedding_model="open
 │   │   └── sqlite.py
 │   ├── context.py              ← ContextWindow + SessionStore
 │   ├── core.py                 ← Cache engine (context-aware)
+│   │                              Week 2: telemetry= param, _emit() in get()
+│   │                              Week 3: api_key= param, _load_backend handles sulci
 │   └── embeddings
 │       ├── __init__.py
 │       ├── minilm.py           ← default: all-MiniLM-L6-v2 (free, local)
 │       └── openai.py           ← requires OPENAI_API_KEY
 └── tests
     ├── test_backends.py        —  9 tests: per-backend contract + persistence
-    ├── test_context.py         — 35 tests: ContextWindow, SessionStore, integration
-    └── test_core.py            — 27 tests: cache.get/set, TTL, stats, personalization
+    ├── test_cloud_backend.py   — 25 tests: SulciCloudBackend + Cache wiring — NEW (Week 3)
+    ├── test_connect.py         — 32 tests: sulci.connect(), _emit(), _flush(), Cache telemetry flag
+    ├── test_context.py         — 27 tests: ContextWindow, SessionStore, integration
+    └── test_core.py            — 26 tests: cache.get/set, TTL, stats, personalization
 
-7 directories, 29 files
+7 directories, 31 files
 ```
 
 ---
@@ -254,13 +311,15 @@ No network calls are made unless you explicitly configure `embedding_model="open
 ## Running Tests
 
 ```bash
-# full suite — 71 tests total
+# full suite — 121 tests total (7 skipped if optional backend deps not installed)
 python -m pytest tests/ -v
 
 # by file
-python -m pytest tests/test_core.py -v       # 27 tests
-python -m pytest tests/test_context.py -v    # 35 tests
-python -m pytest tests/test_backends.py -v   #  9 tests (skipped if dep missing)
+python -m pytest tests/test_core.py -v         # 26 tests
+python -m pytest tests/test_context.py -v      # 27 tests
+python -m pytest tests/test_backends.py -v     #  9 tests (skipped if dep missing)
+python -m pytest tests/test_connect.py -v      # 32 tests — sulci.connect() + telemetry
+python -m pytest tests/test_cloud_backend.py -v # 25 tests — NEW Week 3, SulciCloudBackend
 
 # single backend only
 python -m pytest tests/test_backends.py -v -k sqlite
@@ -269,6 +328,10 @@ python -m pytest tests/test_backends.py -v -k chroma
 # with coverage
 python -m pytest tests/ -v --cov=sulci --cov-report=term-missing
 ```
+
+> **Week 2:** `test_connect.py` (32 tests) — `sulci.connect()`, `_emit()`, `_flush()`, `Cache(telemetry=)`. Requires `httpx`.
+
+> **Week 3:** `test_cloud_backend.py` (25 tests) — `SulciCloudBackend` construction, `search()`, `upsert()`, `delete_user()`, `clear()`, and `Cache(backend='sulci')` wiring. Requires `httpx`.
 
 Backend tests are **skipped — not failed** when their dependency isn't installed.
 Install the backend extra to run its tests: `pip install -e ".[chroma]"`.
@@ -309,6 +372,9 @@ MIT — see [`LICENSE`](./LICENSE).
 
 ## Links
 
+- **Website:** [sulci.io](https://sulci.io)
+- **Sign up (free key):** [sulci.io/signup](https://sulci.io/signup)
+- **API:** [api.sulci.io](https://api.sulci.io)
 - **PyPI:** [sulci](https://pypi.org/project/sulci/)
 - **GitHub:** [sulci-io/sulci-oss](https://github.com/sulci-io/sulci-oss)
 - **Issues:** [github.com/sulci-io/sulci-oss/issues](https://github.com/sulci-io/sulci-oss/issues)
