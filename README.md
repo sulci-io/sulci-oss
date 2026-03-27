@@ -2,10 +2,11 @@
 
 **The AI native context-aware semantic caching for LLM apps — stop paying for the same answer twice**
 
+[![Patent Pending](https://img.shields.io/badge/Patent-Pending-blue.svg)](https://sulci.io)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Tests](https://github.com/sulci-io/sulci-oss/actions/workflows/tests.yml/badge.svg)](https://github.com/sulci-io/sulci-oss/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/sulci)](https://pypi.org/project/sulci/)
 [![Python](https://img.shields.io/pypi/pyversions/sulci)](https://pypi.org/project/sulci/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Sulci is a drop-in Python library that caches LLM responses by **semantic meaning**, not exact string match. When a user asks _"How do I deploy to AWS?"_ and someone else later asks _"What's the process for deploying on AWS?"_, Sulci returns the cached answer instead of calling the LLM again — saving cost and latency.
 
@@ -370,9 +371,9 @@ Apache License 2.0 — see [`LICENSE`](./LICENSE).
 
 Copyright 2026 Kathiravan Sengodan.
 
-This software may be covered by one or more pending patent applications.
-The Apache 2.0 license grants you a royalty-free patent license for your
-use of this code. See Section 3 of the Apache License and the NOTICE file.
+U.S. Patent Application No. 64/018,452 (pending) covers the
+context-aware semantic caching algorithm. Apache 2.0 grants users
+a royalty-free patent license for use of this code.
 
 ---
 
