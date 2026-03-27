@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Kathiravan Sengodan
+
 """
 sulci/embeddings/openai.py
 OpenAI embeddings — highest quality, requires API key.

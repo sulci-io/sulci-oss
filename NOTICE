@@ -1,11 +1,13 @@
-Sulci Library — Open Source Edition
-Copyright (c) 2026 [sulci.io]
+Sulci — Context-Aware Semantic Caching Library
+Copyright 2026 Kathiravan Sengodan
 
-The sulci PyPI package (sulci-oss/ library code) is open source
-and licensed under the MIT License. See LICENSE for full terms.
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for full license terms.
 
-Enterprise platform features, the sulci-platform repository, and
-associated commercial services are proprietary and available under
-a separate commercial license.
+This product includes software developed at sulci.io (https://sulci.io).
 
-Contact: [legal@sulci.io]
+Patent Notice:
+One or more patent applications may cover the context-aware semantic
+caching algorithm implemented in this software (IDF-SULCI-2026-001).
+Apache 2.0 grants recipients a royalty-free patent license for use
+of this code as described in Section 3 of the Apache License.

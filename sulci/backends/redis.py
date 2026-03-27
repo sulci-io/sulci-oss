@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Kathiravan Sengodan
+
 """
 sulci/backends/redis.py
 Redis backend — sub-millisecond latency, battle-tested at scale.

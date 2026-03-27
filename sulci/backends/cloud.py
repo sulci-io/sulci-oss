@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Kathiravan Sengodan
+
 # sulci/backends/cloud.py
 """
 SulciCloudBackend — routes cache operations to Sulci Cloud via HTTPS.

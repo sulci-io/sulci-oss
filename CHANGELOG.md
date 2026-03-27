@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.3.1] — 2026-03-27
+
+### License
+- Changed from MIT License to Apache License 2.0
+- Added NOTICE file as required by Apache 2.0
+- Updated pyproject.toml classifier to Apache Software License
+- Added SPDX identifiers to all Python source files
+- Rationale: Apache 2.0 includes patent retaliation clause and explicit
+  patent grant; aligns with pending patent application IDF-SULCI-2026-001
+
+### No code changes — library behaviour is unchanged
+
 ## [0.3.0] — 2026-03-25
 
 ### Added

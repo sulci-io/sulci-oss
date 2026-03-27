@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Kathiravan Sengodan
+
 """
 sulci/backends/milvus.py
 Milvus Lite backend — embedded vector DB, no server required.

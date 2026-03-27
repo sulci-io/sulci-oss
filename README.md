@@ -5,7 +5,7 @@
 [![Tests](https://github.com/sulci-io/sulci-oss/actions/workflows/tests.yml/badge.svg)](https://github.com/sulci-io/sulci-oss/actions/workflows/tests.yml)
 [![PyPI](https://img.shields.io/pypi/v/sulci)](https://pypi.org/project/sulci/)
 [![Python](https://img.shields.io/pypi/pyversions/sulci)](https://pypi.org/project/sulci/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 Sulci is a drop-in Python library that caches LLM responses by **semantic meaning**, not exact string match. When a user asks _"How do I deploy to AWS?"_ and someone else later asks _"What's the process for deploying on AWS?"_, Sulci returns the cached answer instead of calling the LLM again — saving cost and latency.
 
@@ -366,7 +366,13 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for branching model, PR process, and 
 
 ## License
 
-MIT — see [`LICENSE`](./LICENSE).
+Apache License 2.0 — see [`LICENSE`](./LICENSE).
+
+Copyright 2026 Kathiravan Sengodan.
+
+This software may be covered by one or more pending patent applications.
+The Apache 2.0 license grants you a royalty-free patent license for your
+use of this code. See Section 3 of the Apache License and the NOTICE file.
 
 ---
 
