@@ -811,3 +811,161 @@ class TestDeviceCodeFlow:
 
         assert sulci._api_key == "sk-sulci-from-flow"
         assert sulci._telemetry_enabled is True
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v0.7.0 — Cache() auto-connect from api_key (ADR 0001 / sulci-platform ADR 0021)
+# ══════════════════════════════════════════════════════════════════════════════
+
+class TestCacheAutoConnect:
+    """Cache.__init__ implicitly calls sulci.connect() when an api_key is
+    resolvable (kwarg, SULCI_API_KEY env, or module-level _api_key) AND
+    telemetry is left at the default True.
+
+    Unified opt-in rule (v0.7.0):
+        api_key present (any source) + telemetry=True  →  telemetry flows
+        api_key absent everywhere   OR  telemetry=False →  no telemetry
+
+    Pre-0.7.0 the kwarg path silently failed to enable telemetry — a footgun
+    that left TrendChart / AuditEventsTable / DeploymentsTable empty for both
+    OSS-Connect and paid (Pro/Business) tenants. The env-var path was always
+    a valid opt-in signal per §5.2 trust-boundary spec, so the kwarg path
+    matches it.
+    """
+
+    def setup_method(self):
+        _reset_module()
+        # Clear env in case prior test left SULCI_API_KEY set.
+        os.environ.pop("SULCI_API_KEY", None)
+
+    def teardown_method(self):
+        _reset_module()
+        os.environ.pop("SULCI_API_KEY", None)
+
+    def test_kwarg_api_key_triggers_auto_connect(self):
+        """Cache(backend='sulci', api_key=...) enables telemetry per v0.7.0."""
+        import sulci
+        assert sulci._telemetry_enabled is False  # baseline
+
+        from sulci import Cache
+        with patch("sulci._start_flush_thread"), patch("sulci._emit"):
+            Cache(backend="sulci", api_key="sk-sulci-kwarg-test")
+
+        assert sulci._telemetry_enabled is True
+        assert sulci._api_key == "sk-sulci-kwarg-test"
+
+    def test_env_var_api_key_triggers_auto_connect_with_local_backend(self):
+        """Setting SULCI_API_KEY + local backend triggers auto-connect.
+
+        Canonical OSS-Connect shape: self-hosted cache, telemetry to Sulci.
+        Mocks the local embedder load to keep this an isolated unit test
+        (no sentence-transformers requirement); the equivalent integration
+        test lives in tests/integration/.
+        """
+        import sulci
+        os.environ["SULCI_API_KEY"] = "sk-sulci-env-test"
+        from sulci import Cache
+        with patch("sulci._start_flush_thread"), patch("sulci._emit"), \
+             patch.object(Cache, "_load_embedder", return_value=None):
+            Cache(backend="sqlite")          # no api_key kwarg, local backend
+
+        assert sulci._telemetry_enabled is True
+        assert sulci._api_key == "sk-sulci-env-test"
+
+    def test_no_api_key_anywhere_does_not_auto_connect(self):
+        """Pure self-hosted (no Sulci account at all) → no telemetry.
+
+        Embedder loader patched out — see test_env_var_... for rationale.
+        """
+        import sulci
+        from sulci import Cache
+        with patch.object(Cache, "_load_embedder", return_value=None):
+            Cache(backend="sqlite")
+
+        assert sulci._telemetry_enabled is False
+        assert sulci._api_key is None
+
+    def test_explicit_telemetry_false_blocks_auto_connect(self):
+        """telemetry=False is the documented opt-out — honored even with api_key."""
+        import sulci
+        from sulci import Cache
+        with patch("sulci._start_flush_thread"), patch("sulci._emit"):
+            Cache(backend="sulci",
+                  api_key="sk-sulci-optout-test",
+                  telemetry=False)
+
+        assert sulci._telemetry_enabled is False
+
+    def test_does_not_override_prior_explicit_connect_with_telemetry_false(self):
+        """If user called sulci.connect(telemetry=False) first, Cache respects that.
+
+        Uses backend='sulci' to avoid the local embedder load; the value
+        being tested is the short-circuit logic in __init__, which is
+        backend-agnostic.
+        """
+        import sulci
+        with patch("sulci._start_flush_thread"), patch("sulci._emit"):
+            sulci.connect(api_key="sk-sulci-prior", telemetry=False)
+        assert sulci._telemetry_enabled is False
+
+        from sulci import Cache
+        with patch("sulci._start_flush_thread"), patch("sulci._emit"):
+            Cache(backend="sulci", api_key="sk-sulci-prior")
+
+        # The user's explicit telemetry=False survives — auto-connect's
+        # short-circuit looks at _telemetry_enabled, which the prior
+        # explicit connect() with telemetry=False left at False. _api_key
+        # was set by that prior connect() though, so resolved_key is
+        # non-None; the short-circuit is the only thing preventing a
+        # second connect() call with telemetry=True from overriding the
+        # user's earlier explicit choice.
+        assert sulci._telemetry_enabled is False
+
+    def test_does_not_re_call_connect_when_already_enabled(self):
+        """Prior connect() with telemetry on → Cache() does not re-call connect."""
+        import sulci
+        with patch("sulci._start_flush_thread"), patch("sulci._emit"):
+            sulci.connect(api_key="sk-sulci-prior")
+        assert sulci._telemetry_enabled is True
+
+        # Now construct Cache and verify connect() is not called again.
+        from sulci import Cache
+        with patch("sulci.connect") as mock_connect:
+            Cache(backend="sulci", api_key="sk-sulci-different")
+            assert not mock_connect.called
+
+    def test_auto_connect_failure_does_not_crash_cache(self, caplog):
+        """If connect() raises, Cache still constructs; warning is logged.
+
+        Uses backend='sulci' so Cache construction reaches the auto-connect
+        block without loading the local embedder.
+        """
+        import sulci
+        from sulci import Cache
+
+        def _raising_connect(**kwargs):
+            raise RuntimeError("simulated connect failure")
+
+        with patch("sulci.connect", side_effect=_raising_connect):
+            with caplog.at_level(logging.WARNING, logger="sulci"):
+                # Must NOT raise.
+                cache = Cache(backend="sulci", api_key="sk-sulci-fail-test")
+
+        # Cache itself is usable.
+        assert cache is not None
+        # A warning was logged identifying the failure mode.
+        assert any("auto-connect from Cache() failed" in rec.message
+                   for rec in caplog.records)
+
+    def test_default_backend_no_api_key_no_auto_connect(self):
+        """No api_key anywhere → no telemetry, regardless of backend.
+
+        Embedder loader patched out — see test_env_var_... for rationale.
+        Regression guard for the most common 'just install and try it' path.
+        """
+        import sulci
+        from sulci import Cache
+        with patch.object(Cache, "_load_embedder", return_value=None):
+            Cache(backend="sqlite")
+
+        assert sulci._telemetry_enabled is False

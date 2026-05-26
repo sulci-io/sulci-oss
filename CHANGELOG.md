@@ -6,7 +6,119 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [0.6.5] — 2026-05-13 — `sulci.connect()` resolution-path observability + config staleness guard
+## [0.7.0] — 2026-05-26 — Cache() auto-connects telemetry when an api_key is resolvable
+
+> Minor release closing a long-running footgun across **all tiers**
+> (OSS-Connect, Pro, Business): pre-0.7.0, constructing
+> `Cache(backend="sulci", api_key=...)` registered the key for cache backend
+> auth but did **not** enable the telemetry flush path. The four
+> telemetry-backed dashboard panels — TrendChart, AuditEventsTable,
+> DeploymentsTable, the Active-SDKs counter — stayed empty until the user
+> separately called `sulci.connect()`. The aggregate stat cards (Cost Saved,
+> Hit Rate, Requests, Quota) populated normally via the cache event pipeline,
+> producing a half-broken dashboard that looked like a product bug.
+>
+> The footgun was identical for paid managed-tier customers: a $29/mo Pro
+> tenant following the documented `Cache(backend="sulci", api_key=...)`
+> quickstart would land on `ProOverview` with a blank trend chart and empty
+> audit feed immediately after upgrade.
+>
+> v0.7.0 unifies the opt-in rule per §5.2 trust-boundary spec and
+> sulci-oss ADR 0001 (mirror: sulci-platform ADR 0021):
+>
+>     If api_key is resolvable AND telemetry=True (default) → telemetry flows.
+>
+> One sentence. Three personas covered (paid managed, OSS-Connect, pure
+> self-hosted). One canonical quickstart shape everywhere.
+
+### Changed — Cache() auto-connects telemetry
+
+- `Cache.__init__` now auto-calls `sulci.connect()` when **all three** hold:
+  1. `self._telemetry` is `True` (the constructor default; explicit
+     `telemetry=False` opt-out remains and wins),
+  2. an api_key is resolvable from any of `{kwarg, SULCI_API_KEY env,
+     module-level _api_key set by a prior connect()}`,
+  3. `sulci._telemetry_enabled` is still `False` (no prior `connect()` has
+     run — the user's earlier explicit `telemetry=False` choice survives).
+- Auto-connect runs with `prompt=False` so it never blocks Cache
+  construction on a 15-minute device-code timeout. Users who want the
+  device-code flow continue to call `sulci.connect(prompt=True)` explicitly
+  before constructing a Cache; the "already connected" short-circuit
+  preserves that ordering.
+- Auto-connect failures **never crash Cache construction**. The cache
+  itself stays fully functional; only telemetry stays disabled, and a
+  WARNING is logged on the `sulci` logger naming the exception type +
+  message and pointing the operator at `sulci.connect()` to retry.
+
+### Why this is not a breaking change
+
+- The semantic contract — *passing an api_key is explicit opt-in to
+  telemetry* — was already documented in §5.2 trust-boundary spec via the
+  "or set SULCI_API_KEY" clause. v0.7.0 makes the kwarg path behave
+  identically to the env-var path that was already an authorized opt-in
+  signal.
+- Users who want the prior "cache without telemetry" shape have a clean,
+  documented opt-out: `Cache(backend="sulci", api_key=..., telemetry=False)`.
+  That kwarg has existed since the cloud backend shipped (v0.6.x); v0.7.0
+  doesn't change its semantics, only makes it more useful as an explicit
+  opt-out anchor.
+- Existing `sulci.connect()` callsites are unchanged. The short-circuit
+  at `_telemetry_enabled is False` (rung 3 above) means any prior
+  `connect()` invocation wins — including `connect(telemetry=False)`.
+
+### Canonical one-line quickstart (new)
+
+The pattern that now works for every tier and every backend:
+
+```python
+from sulci import Cache
+
+cache = Cache(
+    backend = "sulci",                # or "sqlite"/"chroma"/etc. for OSS-Connect
+    api_key = "sk-sulci-...",         # or set SULCI_API_KEY env var
+)
+
+cache.get("hello")  # populates the entire dashboard
+```
+
+`sulci.connect()` remains as the canonical entry point for two advanced
+flows: the OSS-Connect device-code browser onboarding
+(`sulci.connect(prompt=True)`), and the "register key without constructing
+a Cache yet" boot pattern (`sulci.connect()` at module load, Cache instances
+spawn later in worker threads).
+
+### Added — Tests
+
+- `tests/test_connect.py::TestCacheAutoConnect` — 8 new tests covering:
+  kwarg trigger, env-var trigger with local backend, no-api-key short-circuit,
+  `telemetry=False` opt-out, prior-connect-with-telemetry-False respect,
+  prior-connect-no-re-call, connect-failure-does-not-crash-Cache, and the
+  default-backend-no-key regression guard.
+- Total test count: 488 → 496 passed (8 new), 30 skipped (unchanged).
+
+### Added — Documentation
+
+- `docs/architecture/adrs/0001-cache-auto-connect-telemetry.md` —
+  decision capture, mirroring sulci-platform ADR 0021. First ADR in the
+  sulci-oss repo; `docs/architecture/adrs/README.md` introduces the registry
+  with the same conventions used in sulci-platform (sequential, never
+  renumbered, ISO date-stamped going forward).
+- `README.md` § "Sulci Cloud — zero infrastructure option" rewritten to
+  show the auto-connect quickstart as primary. Advanced `sulci.connect()`
+  patterns moved into a clearly-flagged subsection. Key resolution order
+  table updated to reflect three equivalent opt-in signals (kwarg, env,
+  prior `connect()`).
+
+### Coordinated release
+
+`sulci-cache==0.7.0` ships alongside `sulci-gateway==0.7.0` in the
+sulci-platform repo. The gateway version bump is purely operational —
+no behavioral change on the gateway side, since the auto-connect logic
+lives entirely in the SDK. Bumping both to the same `0.7.0` marker
+keeps the canonical version cross-reference clean in docs and support
+conversations.
+
+
 
 > Patch release closing the two sulci-oss follow-up issues filed during
 > the v0.6.x close-out (#79, #80). Both target the same surface — the
