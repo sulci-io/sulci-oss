@@ -223,6 +223,70 @@ class Cache:
         self._embedder = None  # set conditionally below — see v0.6.1 note
         self._backend  = self._load_backend(backend, db_path, api_key, gateway_url)
 
+        # ── v0.7.0 — auto-connect to the telemetry path ──────────────────────
+        # ADR 0001 (sulci-oss) / ADR 0021 (sulci-platform): when an api_key is
+        # resolvable from {kwarg, SULCI_API_KEY env, module-level _api_key} and
+        # telemetry is left at its default (True), Cache() implicitly calls
+        # sulci.connect() so the four telemetry-backed dashboard panels
+        # (TrendChart, AuditEventsTable, DeploymentsTable, Active-SDKs counter)
+        # populate without a second SDK call.
+        #
+        # Privacy invariant preserved: per Sulci_UI_Design_and_Dev_Tracker §5.2
+        # trust boundaries, presence of api_key (kwarg or SULCI_API_KEY env) is
+        # explicit user opt-in. This block makes the kwarg path behave
+        # identically to the env path (which was already an authorized opt-in
+        # signal per the spec). Pre-0.7.0 the kwarg path silently failed to
+        # enable telemetry — a footgun documented in sulci-platform PR #249
+        # session notes.
+        #
+        # Short-circuited when ANY of:
+        #   - self._telemetry is False (explicit instance-level opt-out wins)
+        #   - sulci._api_key is already set (any prior connect() call ran —
+        #     including connect(telemetry=False); the user's explicit choice
+        #     survives whether they opted in OR out)
+        #   - no api_key resolvable from any of the three sources (pure
+        #     self-hosted: no Sulci account, no dashboard, no telemetry)
+        #
+        # Rationale for the `_api_key is set` short-circuit: module-level
+        # `_api_key` is None at import time and is ONLY set non-None by
+        # sulci.connect(). So `_api_key is not None` is a reliable proxy for
+        # "the user has explicitly invoked connect() and chose some posture."
+        # That posture — whether telemetry=True (enabled) or telemetry=False
+        # (deliberate opt-out) — is preserved by this check; auto-connect will
+        # not second-guess it.
+        #
+        # Auto-connect failures NEVER crash Cache construction. The cache
+        # still serves get/set normally; only the telemetry side stays off,
+        # and a WARNING is logged identifying the failure mode.
+        if self._telemetry:
+            import os, sys
+            _sulci_mod = sys.modules.get("sulci")
+            if _sulci_mod is not None:
+                _user_already_connected = (
+                    getattr(_sulci_mod, "_telemetry_enabled", False)
+                    or getattr(_sulci_mod, "_api_key", None) is not None
+                )
+                if not _user_already_connected:
+                    resolved_key = (
+                        api_key
+                        or os.environ.get("SULCI_API_KEY")
+                    )
+                    if resolved_key:
+                        try:
+                            _sulci_mod.connect(
+                                api_key   = resolved_key,
+                                telemetry = True,
+                                prompt    = False,
+                            )
+                        except Exception as exc:
+                            import logging
+                            logging.getLogger("sulci").warning(
+                                "auto-connect from Cache() failed; telemetry "
+                                "disabled. Call sulci.connect() explicitly to "
+                                "retry. (%s: %s)",
+                                type(exc).__name__, exc,
+                            )
+
         # v0.6.0 (sulci-oss #62, umbrella #63) — cloud-transport detection.
         # When self._backend is the cloud transport (SulciCloudBackend), the
         # gateway-side library does ALL engine work (embed + search + emit);

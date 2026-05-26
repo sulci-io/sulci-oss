@@ -212,24 +212,75 @@ cache = Cache(backend="sulci", threshold=0.85)
 
 **Free tier:** 50,000 requests/month. No credit card required.
 
-### sulci.connect()
+### One-line setup — telemetry just works (v0.7.0+)
 
-For apps that want to set the key once at startup and enable optional telemetry:
+As of v0.7.0, passing `api_key` to `Cache()` enables the Sulci Cloud
+dashboard automatically. **One line is enough** — no separate `sulci.connect()`
+call required for the dashboard panels (TrendChart, AuditEventsTable,
+DeploymentsTable, Active SDKs) to populate.
+
+```python
+from sulci import Cache
+
+cache = Cache(
+    backend = "sulci",                # or "sqlite"/"chroma"/etc. — see below
+    api_key = "sk-sulci-...",         # or set SULCI_API_KEY env var
+)
+
+cache.get("hello")                    # populates the entire dashboard
+```
+
+This works for every tier and every backend choice:
+
+| Persona | Backend | api_key role |
+|---|---|---|
+| **Pro / Business (paid managed)** | `"sulci"` | cache auth + telemetry |
+| **OSS-Connect (free, self-host + dashboard)** | `"sqlite"` / `"chroma"` / `"qdrant"` / etc. | **telemetry only** — cache lives locally |
+| **Pure self-hosted (no Sulci account)** | local backend | omit `api_key` — no telemetry, no cloud |
+
+**One rule covers all three:**
+
+> If `api_key` is present anywhere (kwarg, `SULCI_API_KEY` env, or prior
+> `sulci.connect()`) AND `telemetry=True` (the default), telemetry flows
+> to Sulci. Backend choice is independent.
+
+**Telemetry remains strictly opt-in.** No api_key anywhere → no telemetry,
+ever. Pass `telemetry=False` to override: `Cache(backend="sulci",
+api_key="sk-sulci-...", telemetry=False)` uses the managed cache without
+emitting telemetry (useful in compliance-restricted environments or
+internal staging where dev traffic should not pollute production
+dashboards).
+
+### sulci.connect() — advanced flows
+
+`sulci.connect()` is still the canonical entry point for two patterns that
+benefit from explicit ordering:
+
+**1. OSS-Connect device-code onboarding (browser-based auth)**
 
 ```python
 import sulci
 
-sulci.connect(
-    api_key   = "sk-sulci-...",   # or set SULCI_API_KEY env var
-    telemetry = True,             # default True — set False to disable reporting
-)
-
-cache = Cache(backend="sulci")    # picks up key from connect() automatically
+sulci.connect(prompt=True)            # opens browser, registers key in ~/.sulci/config
+cache = Cache(backend="sqlite")       # cache lives locally; telemetry already wired
 ```
 
-**Telemetry is strictly opt-in.** Nothing is sent unless `sulci.connect()` is called.
-`_telemetry_enabled = False` until you explicitly connect. Disable per-instance with
-`Cache(backend="sulci", telemetry=False)`.
+**2. Register key at boot, construct Cache later (multi-worker apps)**
+
+```python
+# At app startup, before workers spawn:
+import sulci
+sulci.connect(api_key="sk-sulci-...")
+
+# Later, in a worker thread / lazy init:
+from sulci import Cache
+cache = Cache(backend="sulci")        # picks up the already-registered key
+```
+
+Both flows short-circuit the v0.7.0 auto-connect logic by setting
+`sulci._telemetry_enabled` to its intended state before `Cache()` runs.
+The auto-connect block respects that and does nothing — your explicit
+`connect()` choice (including `telemetry=False` if you passed it) survives.
 
 **Key resolution order** (first match wins):
 
@@ -240,6 +291,11 @@ cache = Cache(backend="sulci")    # picks up key from connect() automatically
 4. Browser-based OSS-Connect device-code flow — only if prompt=True
 ```
 
+All four are equivalent opt-in signals per the §5.2 trust-boundary spec.
+Pre-v0.7.0 only paths (1) via `connect()`, (2), and (3) flipped the
+telemetry flag; v0.7.0 makes path (1) via `Cache(api_key=...)` equivalent
+to the others, which is what eliminates the historic footgun.
+
 Step 3 (config persistence) ships in **v0.5.3**. After your first successful
 `sulci.connect(api_key="sk-sulci-...")`, the key is persisted to
 `~/.sulci/config` (mode 0600) and subsequent `sulci.connect()` calls with
@@ -248,12 +304,12 @@ no arguments will pick it up automatically.
 Step 4 (device-code flow) ships **latent** in v0.5.3. The SDK code is in
 place, but the gateway endpoints and dashboard page need to deploy
 end-to-end before it's usable. The `prompt` parameter defaults to `False`
-in v0.5.3:
+in v0.5.3+:
 
 ```python
-# v0.5.3 default — safe everywhere:
+# v0.5.3+ default — safe everywhere:
 sulci.connect()
-# - Step 1-3 work normally
+# - Steps 1-3 work normally
 # - Step 4 is skipped (prompt=False default)
 # - If no key found, connect() returns silently (no telemetry enabled)
 
@@ -269,9 +325,9 @@ sulci.connect(prompt=True)
 OSS-Connect chain (gateway endpoints + dashboard page) is announced as
 publicly available. v0.6.0 was originally pencilled in for this flip; it
 shipped (2026-05-11) focused on the cloud transport rewrite instead, so
-`prompt` is still `False`-by-default in v0.6.x. **Setting `prompt=True`
-against an environment that hasn't announced OSS-Connect availability is
-user error** — wait for the release announcement.
+`prompt` is still `False`-by-default in v0.6.x and v0.7.0. **Setting
+`prompt=True` against an environment that hasn't announced OSS-Connect
+availability is user error** — wait for the release announcement.
 
 ---
 
