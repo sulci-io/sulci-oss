@@ -109,6 +109,20 @@ verify-integration-examples:
 benchmark-verify:
 	$(PYTHON) scripts/verify_benchmark.py
 
+## Run the agent-workload benchmark and verify against the pinned baseline.
+## Distinct from `make checkin` because it adds ~30s wall-clock and the
+## headline numbers (cost saved, calls-per-session) are most useful for
+## release-prep / launch-post material rather than every commit.
+##
+## NB: --queries default (5000) is required so the stateless block matches
+## the baseline.json numbers. The agent block adds ~15s on top.
+##
+## Use --use-sulci for the real-MiniLM run (slower, requires sulci[sqlite]
+## installed; produces the conservative numbers we cite externally).
+benchmark-agent:
+	$(PYTHON) benchmark/run.py --agent --context --no-sweep
+	$(PYTHON) scripts/verify_benchmark.py --skip-run
+
 ## Comprehensive pre-PR check: smoke + tests-per-file + examples
 ## Add 'matrix' manually if you want to also verify provider detection
 checkin: smoke test-per-file examples benchmark-verify
@@ -116,11 +130,12 @@ checkin: smoke test-per-file examples benchmark-verify
 	@echo "════════════════════════════════════════════════════════════════════"
 	@echo " ✓ checkin verification complete"
 	@echo "   For provider-detection coverage too: make verify-integration-examples"
+	@echo "   For agent benchmark too:              make benchmark-agent"
 	@echo "════════════════════════════════════════════════════════════════════"
 
 # ── PHONY ─────────────────────────────────────────────────────────────────────
 
 .PHONY: smoke smoke-core smoke-langchain smoke-llamaindex smoke-async \
         test test-async test-integrations test-all test-cov \
-        test-per-file test-per-file-fast examples verify-integration-examples benchmark-verify checkin \
-        verify
+        test-per-file test-per-file-fast examples verify-integration-examples \
+        benchmark-verify benchmark-agent checkin verify
