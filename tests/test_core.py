@@ -245,17 +245,38 @@ class TestStats:
         # If either path double-counted, total would be 3 or 4.
         assert s["total_queries"] == 2
 
-    def test_saved_cost_only_from_cached_call(self, tmp_path):
-        """saved_cost stays a cached_call()-only metric (issue #42).
+    def test_saved_cost_from_raw_get_when_cost_per_call_set(self, tmp_path):
+        """v0.7.1 (#88) — raw .get() populates saved_cost using Cache's
+        cost_per_call (default $0.005, overridable on construction).
 
-        Raw .get() doesn't know what an LLM call would have cost, so
-        it must not contribute to saved_cost. Only cached_call() does.
+        Previously raw .get() left saved_cost at $0, which made the metric
+        meaningless for LangChain users (set_llm_cache routes through .get(),
+        not cached_call). With cost_per_call resolvable from Cache.__init__,
+        .get() now contributes — using the instance default — on every hit.
         """
         cache = Cache(backend="sqlite", threshold=0.85,
+                      cost_per_call=0.003,
                       db_path=str(tmp_path / "raw_savings_db"))
         cache.set("a question", "an answer")
-        cache.get("a question")  # exact hit, but raw — no saved_cost
+        cache.get("a question")           # exact hit
+        cache.get("a question")           # exact hit (identical query — guaranteed)
+        assert cache.stats()["saved_cost"] == pytest.approx(0.006)
+
+    def test_saved_cost_zero_when_cost_per_call_zero(self, tmp_path):
+        """v0.7.1 (#88) — Cache(cost_per_call=0) opts out of saved_cost
+        accounting on raw .get(), preserving the pre-v0.7.1 semantics for
+        users who want only cached_call() to contribute.
+        """
+        cache = Cache(backend="sqlite", threshold=0.85,
+                      cost_per_call=0.0,
+                      db_path=str(tmp_path / "raw_savings_off_db"))
+        cache.set("a question", "an answer")
+        cache.get("a question")            # raw hit, no contribution
         assert cache.stats()["saved_cost"] == 0.0
+        # cached_call with explicit override still works
+        cache.cached_call("a question", lambda q: "irrelevant",
+                          cost_per_call=0.01)
+        assert cache.stats()["saved_cost"] == pytest.approx(0.01)
 
 
 # ── Threshold behaviour ───────────────────────────────────────

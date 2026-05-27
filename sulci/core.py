@@ -210,6 +210,8 @@ class Cache:
         # ── v0.5.0 additions (ADR 0004 + ADR 0007) ──
         session_store:   Optional[SessionStoreProtocol] = None,
         event_sink:      Optional[EventSink]            = None,
+        # ── v0.7.1 — issue #88 ──────────────────────────────────────────────
+        cost_per_call:   float         = 0.005,
     ):
         self._telemetry     = telemetry
         self.backend        = backend
@@ -219,6 +221,14 @@ class Cache:
         self.context_window  = context_window
         self.embedding_model = embedding_model
         self._stats          = {"hits": 0, "misses": 0, "saved_cost": 0.0}
+
+        # v0.7.1 (issue #88) — Cache-instance default for the per-call cost
+        # used to populate _stats["saved_cost"]. Previously saved_cost only
+        # incremented inside cached_call(), which left users of the raw
+        # get()/set() API (notably LangChain via set_llm_cache) reporting $0
+        # saved indefinitely. Now get() also contributes to saved_cost using
+        # this value; opt out with cost_per_call=0.
+        self._cost_per_call = cost_per_call
 
         self._embedder = None  # set conditionally below — see v0.6.1 note
         self._backend  = self._load_backend(backend, db_path, api_key, gateway_url)
@@ -537,8 +547,14 @@ class Cache:
         # seeing {"hits": 0, "misses": 0} regardless of activity. cached_call()
         # no longer increments these itself — it goes through .get() like
         # everyone else, so there's no double-counting.
+        #
+        # #88 (v0.7.1) — saved_cost also now contributes here using the
+        # instance default self._cost_per_call (set on Cache.__init__).
+        # cached_call() still applies a delta when called with an explicit
+        # per-call override; see comment block at the cached_call() hit site.
         if resp is not None:
-            self._stats["hits"]   += 1
+            self._stats["hits"]       += 1
+            self._stats["saved_cost"] += self._cost_per_call
         else:
             self._stats["misses"] += 1
 
@@ -679,11 +695,11 @@ class Cache:
         query:         str,
         llm_fn:        Callable,
         *,
-        tenant_id:     Optional[str] = None,
-        user_id:       Optional[str] = None,
-        session_id:    Optional[str] = None,
-        cost_per_call: float         = 0.005,
-        plan:          Optional[str] = None,
+        tenant_id:     Optional[str]   = None,
+        user_id:       Optional[str]   = None,
+        session_id:    Optional[str]   = None,
+        cost_per_call: Optional[float] = None,
+        plan:          Optional[str]   = None,
         **llm_kwargs:  Any,
     ) -> dict:
         """
@@ -700,6 +716,10 @@ class Cache:
             user_id:       For personalized per-user caching.
             session_id:    Conversation ID — enables context-aware lookup.
             cost_per_call: Estimated LLM cost per call (for savings stats).
+                           If None (default), uses ``Cache.cost_per_call``
+                           (set on construction, default $0.005). Pass an
+                           explicit value to override for this call only —
+                           the delta is reflected in ``stats()['saved_cost']``.
             plan:          Optional customer plan tier; forwarded onto
                            the underlying .get/.set calls and thence onto
                            emitted CacheEvent.plan. v0.5.6 (sulci-oss #36).
@@ -720,10 +740,13 @@ class Cache:
         ms              = (time.perf_counter() - t0) * 1000
 
         if hit is not None:
-            # _stats["hits"] is incremented inside .get() — see #42 note there.
-            # cached_call() owns saved_cost since it's the only path that knows
-            # cost_per_call.
-            self._stats["saved_cost"] += cost_per_call
+            # _stats["hits"] AND _stats["saved_cost"] are both incremented
+            # inside .get() — see #42 / #88 notes there. cached_call() applies
+            # only the *delta* when an explicit per-call cost_per_call override
+            # was passed, so per-call accounting still works for users who
+            # mix instance-default and per-call costs.
+            if cost_per_call is not None and cost_per_call != self._cost_per_call:
+                self._stats["saved_cost"] += (cost_per_call - self._cost_per_call)
             # Record turn even on hits so future queries see this exchange.
             # v0.6.1 (sulci-oss #60) — skip on remote transport: self._embedder
             # is None there (gateway-side library tracks session state for the

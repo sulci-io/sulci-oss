@@ -33,7 +33,14 @@ class MiniLMEmbedder:
             )
         model_id    = self.MODELS.get(model_name, model_name)
         self._model = SentenceTransformer(model_id)
-        self._dim   = self._model.get_sentence_embedding_dimension()
+        # sentence-transformers v3+ renamed get_sentence_embedding_dimension →
+        # get_embedding_dimension (the old name still works but emits a
+        # FutureWarning). hasattr guard preserves v2.x compatibility.
+        self._dim   = (
+            self._model.get_embedding_dimension()
+            if hasattr(self._model, "get_embedding_dimension")
+            else self._model.get_sentence_embedding_dimension()
+        )
 
     @property
     def dimension(self) -> int:
