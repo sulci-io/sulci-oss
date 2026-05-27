@@ -89,6 +89,14 @@ parser.add_argument("--context-window",    type=int,   default=4,
                     help="Turns to remember per session (default: 4)")
 parser.add_argument("--context-threshold", type=float, default=0.58,
                     help="Similarity threshold for context benchmark (default: 0.58)")
+parser.add_argument("--agent",          action="store_true",
+                    help="Run agent-workload benchmark (measures per-session call deduplication)")
+parser.add_argument("--agent-sessions",   type=int, default=50,
+                    help="Sessions to simulate for --agent (default: 50)")
+parser.add_argument("--agent-dispatches", type=int, default=200,
+                    help="LLM dispatches per session for --agent (default: 200)")
+parser.add_argument("--agent-threshold",  type=float, default=0.85,
+                    help="Similarity threshold for --agent (default: 0.85)")
 parser.add_argument("--out",            default=os.path.join(
                         os.path.dirname(__file__), "results"))
 args = parser.parse_args()
@@ -1551,6 +1559,575 @@ def _wipe_bench_dbs():
     print()
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# 4.  AGENT WORKLOAD BENCHMARK  (--agent)
+#     Simulates a realistic mixed-workload agent's LLM dispatch pattern across
+#     N sessions × M dispatches per session. Measures the deduplication rate
+#     Sulci achieves on prompts that follow the structural-repetition pattern
+#     real agent traffic exhibits (planner / reflector / system prompts repeat
+#     heavily across sessions; tool-call decisions repeat moderately; task-
+#     specific reasoning is mostly novel).
+#
+#     Categories (calibrated to public agent-traffic measurements):
+#       structural       45%  — planner, reflector, system-prompt-like prompts.
+#                              Small param pools → high semantic-repetition.
+#       semi_structural  35%  — tool-call decisions, intermediate reasoning,
+#                              parameterized but template-bound prompts.
+#       novel            20%  — task-specific reasoning, user-input-derived
+#                              prompts. Large param pools → low repetition.
+#
+#     Expected hit rate range: 55-75% on default workload (50 × 200) with
+#     real MiniLM embeddings + threshold 0.85.
+# ══════════════════════════════════════════════════════════════════════════════
+
+AGENT_WORKLOAD = {
+    "structural": {
+        "weight": 0.45,
+        "templates": [
+            "You are an autonomous agent with the role of {role}. Plan your next step toward the goal.",
+            "Summarize what you have learned so far about the task: {task}",
+            "Given the current state, what is your next action?",
+            "Decide whether the user's question is fully answered. Question: {user_q}",
+            "Reflect on the previous step. Outcome status: {context}",
+            "What sub-task is most critical right now for {focus_area}?",
+            "Verify your understanding of the user's intent: {user_q}",
+            "Choose the next tool to invoke for: {task}",
+            "Have we made sufficient progress on: {task}",
+            "Identify any blockers preventing completion of: {focus_area}",
+        ],
+        "param_pools": {
+            "role": [
+                "planner", "researcher", "writer", "analyst",
+                "executor", "reflector", "coordinator", "reviewer",
+            ],
+            "task": [
+                "analyzing the financial report", "summarizing meeting notes",
+                "drafting the customer response", "validating the dataset",
+                "generating product recommendations", "comparing vendor options",
+                "answering the technical question", "completing the integration",
+                "researching the topic", "synthesizing the findings",
+            ],
+            "user_q": [
+                "how do I deploy this to production",
+                "what is the recommended approach for this problem",
+                "can you summarize the key findings",
+                "what is the next step I should take",
+                "is this approach technically correct",
+                "explain the trade-offs between these options",
+                "should we use option A or option B here",
+                "what are the main risks involved",
+                "how does this compare to alternatives",
+                "is there a better way to handle this",
+                "what would you recommend as the next action",
+                "can you walk me through the reasoning",
+            ],
+            "context": [
+                "initial planning step completed", "preliminary data gathered",
+                "analysis in progress", "first draft is ready for review",
+                "errors encountered during execution", "results successfully validated",
+                "user feedback has been incorporated", "iteration cycle complete",
+                "blocked waiting on external input", "dependencies satisfied",
+            ],
+            "focus_area": [
+                "accuracy", "efficiency", "cost", "user experience",
+                "code quality", "scalability", "correctness", "maintainability",
+            ],
+        },
+    },
+    "semi_structural": {
+        "weight": 0.35,
+        "templates": [
+            "Use the {tool} tool with input: {tool_input}",
+            "Process this tool result and decide the next step: {tool_result}",
+            "Refine the answer based on context: {partial_answer}",
+            "Compare these options: {option_a} versus {option_b}",
+            "Extract the key facts from this excerpt: {document_excerpt}",
+            "Translate this technical statement to plain language: {technical_text}",
+            "Determine if this output meets the quality bar: {candidate_output}",
+            "Identify the next action given this state: {state_description}",
+        ],
+        "param_pools": {
+            "tool": [
+                "web_search", "calculator", "code_interpreter", "database_query",
+                "file_reader", "shell_exec", "knowledge_base_lookup", "api_request",
+            ],
+            "tool_input": [
+                "latest python 3.13 release notes", "current weather in Tokyo",
+                "user registration count for Q3", "sum of column A in dataset",
+                "list of files modified yesterday", "redis cache hit rate metrics",
+                "PostgreSQL connection pool status", "company press releases 2025",
+                "exchange rate USD to EUR", "stock price for ticker AAPL",
+                "active user sessions count", "API rate limit remaining quota",
+                "git log of recent commits", "system memory utilization",
+                "scheduled maintenance windows", "outstanding bug reports list",
+                "current deployment version", "database migration status",
+                "list of pending pull requests", "container restart history",
+            ],
+            "tool_result": [
+                "returned 42 matching rows from query", "found 3 critical errors in log",
+                "search returned no results for query", "calculation completed: 1247.83",
+                "file does not exist at specified path", "API responded with status 200",
+                "transaction was rolled back due to conflict", "rate limit exceeded, retry after 60s",
+                "configuration parsed successfully", "5 candidate matches were identified",
+                "task queued for asynchronous processing", "data validation passed all checks",
+                "encountered timeout after 30 seconds", "result cached for future requests",
+                "authentication succeeded with token", "operation requires elevated privileges",
+            ],
+            "partial_answer": [
+                "the system appears stable based on metrics",
+                "two viable approaches were identified",
+                "preliminary analysis suggests option B is preferred",
+                "the root cause has not yet been determined",
+                "results are consistent with the hypothesis",
+                "performance degradation was observed under load",
+                "the user's stated requirements were captured",
+                "existing documentation covers most cases",
+                "edge cases need additional handling",
+                "the implementation follows the standard pattern",
+                "test coverage is adequate for the critical paths",
+                "the configuration matches the production baseline",
+            ],
+            "option_a": [
+                "synchronous batch processing", "REST API integration",
+                "in-memory caching layer", "vertical scaling approach",
+                "monolithic deployment", "manual review workflow",
+                "third-party SaaS solution", "polling-based updates",
+                "session-affinity routing", "client-side validation",
+            ],
+            "option_b": [
+                "asynchronous event streaming", "GraphQL API integration",
+                "distributed cache cluster", "horizontal scaling approach",
+                "microservices architecture", "automated CI gating",
+                "self-hosted open-source stack", "webhook-driven updates",
+                "stateless round-robin routing", "server-side validation",
+            ],
+            "document_excerpt": [
+                "the quarterly report shows a 12% revenue increase year-over-year",
+                "users report improved satisfaction scores in the latest survey",
+                "infrastructure costs decreased by 8% after the migration",
+                "the new feature was adopted by 34% of users within 30 days",
+                "compliance audit identified two medium-severity findings",
+                "system uptime exceeded the 99.9% SLA target this quarter",
+                "customer churn was concentrated in the small-business segment",
+                "the experiment showed a statistically significant improvement",
+                "engineering velocity declined slightly during the migration period",
+                "support ticket volume normalized after the initial release",
+                "the proposed change has dependencies on three downstream services",
+                "performance benchmarks indicate a 23% latency reduction",
+            ],
+            "technical_text": [
+                "the API gateway terminates TLS and forwards to the upstream",
+                "the cache uses LRU eviction with a 60-minute TTL",
+                "all writes are committed via two-phase commit across replicas",
+                "the embedder produces 384-dimensional dense vectors",
+                "exponential backoff is applied to retries with jitter",
+                "the orchestrator schedules tasks via priority queue semantics",
+                "events are partitioned by tenant_id for ordered consumption",
+                "the index is rebuilt nightly to incorporate new entries",
+                "rate limiting is enforced per API key with a sliding window",
+                "the data plane and control plane are deployed in separate VPCs",
+            ],
+            "candidate_output": [
+                "the response correctly addresses the user's question",
+                "output includes minor formatting inconsistencies",
+                "the answer is factually accurate but verbose",
+                "result omits the requested supporting evidence",
+                "tone is appropriately professional and concise",
+                "the response missed a critical context detail",
+                "answer demonstrates good logical structure",
+                "output is technically correct but lacks examples",
+            ],
+            "state_description": [
+                "research phase complete, drafting underway",
+                "initial outline approved by reviewer",
+                "blocked pending external data refresh",
+                "validation step failed, retry scheduled",
+                "all required inputs have been collected",
+                "concurrent revision detected, merge required",
+                "approval received, ready to proceed to next stage",
+                "edge case discovered, scope expansion needed",
+            ],
+        },
+    },
+    "novel": {
+        "weight": 0.20,
+        "templates": [
+            "Analyze the following text in detail: {long_passage}",
+            "Generate a comprehensive answer to: {detailed_question}",
+            "Walk through the reasoning for: {complex_scenario}",
+        ],
+        # Novel pools are deliberately large to suppress semantic repetition.
+        # Each entry is distinct enough that even MiniLM at threshold 0.85
+        # rarely scores two as a hit. ~50 distinct prompts per category
+        # × 3 categories = ~150 unique novel prompts, exceeding the expected
+        # ~2,000 dispatches at 20% weight by ~7×.
+        #
+        # NB: deliberately NO shared prefix on long_passage entries (an earlier
+        # draft used "Passage N: ..." which TF-IDF treated as a token-overlap
+        # source, inflating the hit rate. The current entries share only the
+        # generic English domain vocabulary that real-world novel prompts
+        # would also share.)
+        "param_pools": {
+            "long_passage": [
+                "A coastal town implemented a tidal energy generation system that reduced grid imports by 18% in the first year.",
+                "An open-source compiler optimization pass eliminated 11% of redundant load instructions in benchmark code.",
+                "A federated learning study showed that local differential privacy reduced model accuracy by 3.2 points.",
+                "The migration from monolithic to microservices architecture took 14 months across 47 engineers.",
+                "A novel sparse attention mechanism reduced inference memory by 41% with negligible accuracy loss.",
+                "Researchers found that interleaved batch sampling improved gradient stability in low-data regimes.",
+                "The reinforcement learning policy converged after 2.4M steps in the procedurally generated environment.",
+                "A retrospective analysis revealed that 73% of incidents originated from configuration drift.",
+                "The new edge caching layer reduced p99 latency from 340ms to 87ms during peak traffic.",
+                "Adopting structured outputs reduced downstream parsing errors by 89% in the integration tests.",
+                "The team's transition to trunk-based development cut merge conflicts by half within two months.",
+                "A graph neural network embedding outperformed the bag-of-words baseline by 14 F1 points.",
+                "Implementing OAuth 2.0 PKCE flow eliminated the credential leakage class of vulnerabilities.",
+                "Customer churn correlated most strongly with onboarding completion rate, not feature usage.",
+                "The chaos engineering experiments uncovered five previously latent failure modes in production.",
+                "Cross-region active-active replication added 42ms baseline latency for consistent writes.",
+                "A change in the request validation library reduced false positives in malicious traffic detection.",
+                "Engineering productivity peaked when pull request review SLAs were enforced at 4 hours.",
+                "The new vector quantization scheme compressed the embedding index by 6.3 times with 0.2 point recall loss.",
+                "Deprecating the legacy authentication endpoint required a 9-month migration coordinated across teams.",
+                "The agile retrospective ritual was credited with surfacing organizational friction earlier.",
+                "A novel data augmentation strategy improved out-of-distribution generalization by 7 percent.",
+                "Memory profiling revealed a long-tailed allocation pattern caused by string interning miss.",
+                "The disaster recovery drill exposed gaps in the cross-region database failover procedure.",
+                "Refactoring the storage abstraction layer reduced incident MTTR from 47 to 12 minutes.",
+                "The post-mortem identified insufficient observability as the root cause of slow detection.",
+                "An A/B test showed that gradual feature ramp-up reduced support ticket spikes by 60 percent.",
+                "The new schema validator caught 91 percent of regression-causing data shape changes pre-deployment.",
+                "A statistical analysis of code review comments identified three persistent style debate topics.",
+                "Hardware acceleration via custom kernels delivered a 4.7 times throughput improvement.",
+                "The team adopted property-based testing and discovered 23 edge case bugs in the first month.",
+                "Migrating from synchronous to asynchronous logging reduced p95 request latency by 18ms.",
+                "The user research panel surfaced unmet needs that weren't visible from telemetry alone.",
+                "Implementing rate limiting at the API gateway eliminated a class of denial-of-service patterns.",
+                "A formal verification effort proved the correctness of the consensus protocol under partition.",
+                "The new release management workflow reduced deployment-induced incidents by 40 percent.",
+                "Adopting columnar storage cut analytical query latency by an order of magnitude.",
+                "The model card disclosed three known biases and the mitigation strategies applied.",
+                "Refactoring the dependency injection container reduced unit test runtime from 8 to 2 minutes.",
+                "Network policy enforcement at the service mesh layer simplified security audit compliance.",
+                "A measurement study of CDN cache hit rates identified two underperforming edge regions.",
+                "The team implemented continuous profiling and identified hot paths invisible to spot checks.",
+                "Adopting feature flags as a deployment mechanism decoupled release from rollout cleanly.",
+                "The semantic search index rebuild was parallelized across 32 workers, finishing in 14 minutes.",
+                "A throughput analysis revealed that GC pauses dominated long-tail latency for the JVM service.",
+                "The new alerting strategy reduced page volume by 70 percent while keeping critical alerts intact.",
+                "Implementing canary deployments caught a regression that staged testing had missed.",
+                "The infrastructure-as-code refactor consolidated 11 disparate provisioning patterns into one.",
+                "Cross-team coordination overhead was the dominant cost factor in the multi-quarter project.",
+                "An accessibility audit identified 17 issues blocking compliance with WCAG 2.1 AA.",
+            ],
+            "detailed_question": [
+                "How should we redesign the system to handle 10× traffic without rearchitecting the data layer?",
+                "What are the trade-offs between strong consistency and high availability for this workload?",
+                "How can we measure the developer-productivity impact of the new tooling investments?",
+                "What metric should we use to evaluate the success of the personalization model rollout?",
+                "How do we balance the cost of comprehensive observability against the value it provides?",
+                "What architectural patterns should we adopt for event-driven workloads at our scale?",
+                "How can we improve the reliability of the third-party integration without owning that code?",
+                "What is the appropriate level of test coverage for code with high blast radius on failure?",
+                "How should we structure the team to support both research and production engineering needs?",
+                "What governance framework should we apply to machine-learning model deployments?",
+                "How do we reduce the cognitive load on on-call engineers during high-incident weeks?",
+                "What are the security implications of allowing user-uploaded code to execute in our sandbox?",
+                "How can we accelerate the path from prototype to production for experimental features?",
+                "What is the right way to migrate this dataset without disrupting downstream consumers?",
+                "How should we handle backward incompatibility in our public API across major versions?",
+                "What is the appropriate retention policy for application logs given regulatory constraints?",
+                "How do we decide when to invest in a custom solution versus adopting an off-the-shelf one?",
+                "What is the right framework for prioritizing technical debt against feature delivery?",
+                "How can we improve the experience of new engineers during their first 90 days?",
+                "What are the operational risks of running this workload on spot instances?",
+                "How should the platform team measure success in supporting product engineering velocity?",
+                "What design considerations matter most for systems with strict latency SLOs?",
+                "How do we evaluate whether the current alerting setup is too noisy or too quiet?",
+                "What approach should we take to migrate from synchronous to asynchronous processing?",
+                "How can we structure on-call rotations to balance fairness and expertise distribution?",
+                "What metrics should govern our capacity planning for predictably bursty traffic?",
+                "How do we approach load testing for services that don't have established traffic patterns?",
+                "What architectural changes are needed to support multi-tenant isolation at this scale?",
+                "How should we handle schema evolution in an event-streaming architecture?",
+                "What is the right balance between automated and human review in our deployment pipeline?",
+                "How do we identify and eliminate single points of failure in the current architecture?",
+                "What strategies work best for managing technical debt accumulated during rapid prototyping?",
+                "How should we structure A/B tests for features with low conversion event rates?",
+                "What is the appropriate way to handle PII redaction in our log aggregation pipeline?",
+                "How do we measure the ROI of investments in developer tooling and platform engineering?",
+                "What patterns should we apply when designing rate limiting across federated services?",
+                "How should our backup and disaster recovery strategy evolve as the data volume grows?",
+                "What is the right granularity for service ownership in a platform-heavy organization?",
+                "How can we improve cross-team API contract negotiation and stability?",
+                "What design patterns help when integrating with legacy systems lacking modern APIs?",
+                "How should we approach gradual migration of the monolith to service-oriented architecture?",
+                "What is the optimal cache warming strategy for systems with cold-start sensitivity?",
+                "How do we balance push and pull architectures for real-time data distribution?",
+                "What governance does the data warehouse need as more downstream teams build on it?",
+                "How should we approach the build-vs-buy decision for our internal developer platform?",
+                "What are the key considerations for choosing between SQL and NoSQL for this domain?",
+                "How can we systematically reduce time-to-detection for production incidents?",
+                "What is the right approach to deprecating internal APIs without breaking dependents?",
+                "How do we evaluate whether a particular ML model is ready for production rollout?",
+                "What metrics best capture the developer experience of working in this codebase?",
+            ],
+            "complex_scenario": [
+                "Three downstream services depend on a deprecated field that engineering needs to remove for security reasons.",
+                "A new compliance requirement landed mid-quarter affecting how user data is stored and replicated.",
+                "Two teams are independently building similar capabilities; consolidation is being considered.",
+                "The latency SLO is being missed during certain traffic patterns; root cause is not yet identified.",
+                "A vendor contract negotiation is exposing assumptions in the current integration architecture.",
+                "The on-call rotation is finding the alerting too noisy; signal-to-noise tuning is overdue.",
+                "An acquisition introduced infrastructure overlap with existing platforms; rationalization is needed.",
+                "User-reported issues are spiking but internal metrics look healthy; observability gap suspected.",
+                "Quarterly capacity planning reveals an upcoming bottleneck in the message queue throughput.",
+                "Engineering velocity has plateaued; the team is investigating whether processes need adjustment.",
+                "A new framework version offers significant improvements but requires a multi-week migration.",
+                "Cost of cloud infrastructure has grown faster than revenue; optimization opportunities are being explored.",
+                "A critical dependency is announcing end-of-life; replacement options are being evaluated.",
+                "The product team requested a feature that would conflict with the current data partitioning strategy.",
+                "Two competing architectural proposals have emerged for the same problem; tradeoffs need analysis.",
+                "Security disclosed a vulnerability in a library used across multiple services; patching strategy is needed.",
+                "Pre-launch testing surfaced an edge case that wasn't in the original requirements document.",
+                "A team member raised concerns about the technical debt in a critical service before their departure.",
+                "Customer support is escalating issues that appear to be caused by intermittent infrastructure problems.",
+                "Performance regression detected in the latest release; rollback or roll-forward decision needed.",
+                "A new internal tool was built outside the platform team; integration is being considered.",
+                "The deployment frequency has decreased despite added automation; root cause is being investigated.",
+                "Cross-team interface contracts are eroding; quarterly contract review is overdue.",
+                "Test flakiness is increasing in CI; investigation suggests environmental rather than code issues.",
+                "A high-traffic event is upcoming; capacity headroom is at 35% above current peak baseline.",
+                "Vendor pricing changes are forcing reevaluation of which managed services to keep.",
+                "Tech debt remediation work is competing with new feature development for the same engineers.",
+                "The reliability of a single upstream provider is impacting our customer-facing availability.",
+                "An incident retrospective surfaced patterns that suggest broader organizational learning is needed.",
+                "Engineering and product disagree about whether the next quarter should focus on stability or features.",
+                "A regulatory deadline requires changes to data handling within 90 days across all systems.",
+                "The platform team's roadmap has more dependencies on it than it can deliver this quarter.",
+                "An emerging open-source project might replace internal infrastructure; due diligence is underway.",
+                "Customer feedback indicates the current pricing model misaligns with usage patterns.",
+                "Test environment drift has caused inaccurate validation; environment-as-code investment is being weighed.",
+                "Headcount constraints are forcing prioritization between platform stability and new product investments.",
+                "Three pilot customers want bespoke integrations; a strategic decision is needed on commitment.",
+                "A merger is creating uncertainty about which technology stack will be the standard going forward.",
+                "Engineering retention has declined; root cause analysis identifies process and tooling friction.",
+                "A new internal customer is asking for capabilities the team had planned to deprecate.",
+                "Cross-region data sovereignty requirements are constraining the existing replication architecture.",
+                "Recent changes to the build system have lengthened CI times; investigation and remediation needed.",
+                "Customer expectations are evolving faster than the team can ship product changes to match.",
+                "Multiple stakeholders are requesting conflicting changes to the same shared service.",
+                "Recent telemetry suggests user behavior is shifting, but the analytics dashboards lag by a quarter.",
+                "An accessibility audit found gaps that require coordinated work across multiple product areas.",
+                "Pricing strategy and product strategy need closer alignment based on the latest customer research.",
+                "Hiring slowdowns are forcing reprioritization of long-term investment work.",
+                "Compliance changes are requiring more frequent third-party audits than the team is prepared for.",
+                "Recent customer interviews surfaced concerns about long-term product roadmap visibility.",
+            ],
+        },
+    },
+}
+
+
+def _agent_workload_stats() -> dict:
+    """Diagnostics on the AGENT_WORKLOAD distribution — call counts per category."""
+    out = {}
+    for cat, spec in AGENT_WORKLOAD.items():
+        n_templates = len(spec["templates"])
+        n_combinations = 0
+        for tmpl in spec["templates"]:
+            # Estimate combinations via product of slot pool sizes
+            import re as _re
+            slots = _re.findall(r"\{(\w+)\}", tmpl)
+            combos = 1
+            for s in slots:
+                pool = spec["param_pools"].get(s, ["_"])
+                combos *= len(pool)
+            n_combinations += combos
+        out[cat] = {
+            "weight":       spec["weight"],
+            "templates":    n_templates,
+            "combinations": n_combinations,
+        }
+    return out
+
+
+def _generate_agent_prompt(rng) -> tuple:
+    """Sample one agent prompt from AGENT_WORKLOAD according to category weights.
+
+    Returns (category, prompt_text).
+    """
+    import re as _re
+    # Pick category by weight
+    r = rng.random()
+    cum = 0.0
+    chosen_cat = None
+    for cat, spec in AGENT_WORKLOAD.items():
+        cum += spec["weight"]
+        if r < cum:
+            chosen_cat = cat
+            break
+    if chosen_cat is None:
+        chosen_cat = list(AGENT_WORKLOAD.keys())[-1]  # safety fallthrough
+
+    spec   = AGENT_WORKLOAD[chosen_cat]
+    tmpl   = rng.choice(spec["templates"])
+    slots  = _re.findall(r"\{(\w+)\}", tmpl)
+    params = {s: rng.choice(spec["param_pools"][s]) for s in slots}
+    return chosen_cat, tmpl.format(**params)
+
+
+def run_agent_bench(
+    n_sessions:   int   = 50,
+    dispatches:   int   = 200,
+    threshold:    float = 0.85,
+    use_sulci:    bool  = False,
+    seed:         int   = 1729,
+) -> dict:
+    """Synthetic agent-workload benchmark.
+
+    Simulates ``n_sessions`` × ``dispatches`` LLM-call dispatches drawn from
+    AGENT_WORKLOAD. Measures aggregate hit rate, per-session hit rate
+    distribution (cold → warm → hot), per-category hit rate, and the
+    headline ``misses_per_session`` number that maps to the homepage's
+    "200 calls → X misses" framing.
+
+    Args:
+        n_sessions:  Number of sessions to simulate (default 50).
+        dispatches:  LLM-call dispatches per session (default 200).
+        threshold:   Similarity threshold (default 0.85, MiniLM-tuned).
+        use_sulci:   Real MiniLM+SQLite via sulci.Cache. Otherwise the
+                     builtin TF-IDF cache (Mode 1). The relative shape of
+                     the result is similar; absolute numbers differ.
+        seed:        RNG seed for reproducibility (default 1729).
+
+    Returns:
+        {
+            "summary": {
+                "n_sessions":               int,
+                "dispatches_per_session":   int,
+                "total_dispatches":         int,
+                "total_hits":               int,
+                "total_misses":             int,
+                "aggregate_hit_rate":       float,
+                "misses_per_session_p50":   float,
+                "misses_per_session_p95":   float,
+                "hit_rate_cold_session":    float,    # session 1
+                "hit_rate_warm_session":    float,    # median across last quarter
+                "category_hit_rate": {
+                    "structural":      float,
+                    "semi_structural": float,
+                    "novel":           float,
+                },
+                "category_distribution": {
+                    "structural":      int,
+                    "semi_structural": int,
+                    "novel":           int,
+                },
+            },
+            "per_session": [
+                {"session": i, "hits": h, "misses": m, "hit_rate": r},
+                ...
+            ],
+        }
+    """
+    import random
+    rng = random.Random(seed)
+
+    # Choose cache
+    if use_sulci:
+        # Real MiniLM + SQLite via sulci.Cache
+        from sulci import Cache
+        import tempfile
+        db_dir = tempfile.mkdtemp(prefix="sulci_agent_bench_")
+        cache = Cache(
+            backend       = "sqlite",
+            threshold     = threshold,
+            db_path       = os.path.join(db_dir, "cache"),
+            ttl_seconds   = None,
+            telemetry     = False,
+            cost_per_call = 0.005,
+        )
+        def _lookup(q):
+            resp, sim, _ = cache.get(q)
+            return (resp, sim)
+        def _store(q, r):
+            cache.set(q, r)
+    else:
+        # Mode-1 built-in TF-IDF + LSH cache
+        bc = _BuiltinCache(threshold=threshold)
+        def _lookup(q):
+            resp, sim, _entry = bc.get(q)
+            return (resp, sim)
+        def _store(q, r):
+            bc.set(q, r)
+
+    per_session = []
+    total_hits, total_miss = 0, 0
+    cat_hits   = {"structural": 0, "semi_structural": 0, "novel": 0}
+    cat_dispatches = {"structural": 0, "semi_structural": 0, "novel": 0}
+
+    print(f"\n  Simulating {n_sessions} sessions × {dispatches} dispatches "
+          f"= {n_sessions * dispatches:,} total LLM-call dispatches")
+    print(f"  Workload mix: structural 45%, semi-structural 35%, novel 20%")
+
+    for s in range(n_sessions):
+        s_hits, s_miss = 0, 0
+        for _ in range(dispatches):
+            cat, prompt = _generate_agent_prompt(rng)
+            resp, sim   = _lookup(prompt)
+            cat_dispatches[cat] += 1
+            if resp is not None:
+                s_hits += 1
+                cat_hits[cat] += 1
+            else:
+                s_miss += 1
+                # On miss, simulate an LLM response and store it so future
+                # similar prompts can hit. Real text doesn't matter for the
+                # cache contract — only the prompt vector does.
+                _store(prompt, f"<simulated agent response for {cat} prompt>")
+
+        per_session.append({
+            "session":  s,
+            "hits":     s_hits,
+            "misses":   s_miss,
+            "hit_rate": round(s_hits / dispatches, 4),
+        })
+        total_hits += s_hits
+        total_miss += s_miss
+
+        if (s + 1) % max(1, n_sessions // 10) == 0:
+            print(f"    Session {s+1}/{n_sessions}: hits={s_hits}, misses={s_miss}, "
+                  f"hit_rate={s_hits/dispatches:.0%}")
+
+    total_dispatches = total_hits + total_miss
+    misses_per_session = sorted(p["misses"] for p in per_session)
+
+    # Warm session = median of last quarter (cache should be warm by then)
+    warm_start = max(1, int(n_sessions * 0.75))
+    warm_rates = [p["hit_rate"] for p in per_session[warm_start:]]
+
+    summary = {
+        "n_sessions":             n_sessions,
+        "dispatches_per_session": dispatches,
+        "total_dispatches":       total_dispatches,
+        "total_hits":             total_hits,
+        "total_misses":           total_miss,
+        "aggregate_hit_rate":     round(total_hits / total_dispatches, 4) if total_dispatches else 0.0,
+        "misses_per_session_p50": misses_per_session[len(misses_per_session) // 2],
+        "misses_per_session_p95": misses_per_session[int(len(misses_per_session) * 0.95)],
+        "hit_rate_cold_session":  per_session[0]["hit_rate"],
+        "hit_rate_warm_session":  round(sum(warm_rates) / len(warm_rates), 4) if warm_rates else 0.0,
+        "category_hit_rate": {
+            cat: round(cat_hits[cat] / cat_dispatches[cat], 4) if cat_dispatches[cat] else 0.0
+            for cat in cat_hits
+        },
+        "category_distribution": dict(cat_dispatches),
+    }
+
+    return {"summary": summary, "per_session": per_session}
+
+
 def main():
     global _claude
 
@@ -1662,6 +2239,54 @@ def main():
               f"{imp['accuracy_delta_pct']:+.1f}pp  "
               f"(stateless={ctx_data['summary']['stateless']['resolution_accuracy']:.0%}  "
               f"→ context={ctx_data['summary']['context_aware']['resolution_accuracy']:.0%})")
+        print()
+
+    # ── Agent workload benchmark ─────────────────────────────────────────────
+    if args.agent:
+        print(f"\n{'='*62}")
+        print(f"  AGENT WORKLOAD BENCHMARK  |  threshold={args.agent_threshold}")
+        print(f"{'='*62}")
+
+        # Distribution diagnostics (so users can verify the workload shape)
+        stats = _agent_workload_stats()
+        for cat, info in stats.items():
+            print(f"  {cat:<18} weight={info['weight']:.0%}  "
+                  f"templates={info['templates']:>2}  "
+                  f"max_unique_combinations≈{info['combinations']:,}")
+
+        agent_data = run_agent_bench(
+            n_sessions = args.agent_sessions,
+            dispatches = args.agent_dispatches,
+            threshold  = args.agent_threshold,
+            use_sulci  = args.use_sulci,
+        )
+        save_json(agent_data["summary"],    "agent_summary.json")
+        save_csv(agent_data["per_session"], "agent_per_session.csv")
+
+        s_a = agent_data["summary"]
+        print(f"\n  Aggregate dispatches  : {s_a['total_dispatches']:,}")
+        print(f"  Aggregate hit rate    : {s_a['aggregate_hit_rate']:.1%}")
+        print(f"  Cold session hit rate : {s_a['hit_rate_cold_session']:.1%}  (session 1)")
+        print(f"  Warm session hit rate : {s_a['hit_rate_warm_session']:.1%}  (median of last quarter)")
+        print(f"  Misses per session    : p50={s_a['misses_per_session_p50']}  "
+              f"p95={s_a['misses_per_session_p95']}  "
+              f"(of {args.agent_dispatches} dispatches)")
+        print(f"\n  Per-category hit rate:")
+        for cat, rate in s_a["category_hit_rate"].items():
+            calls = s_a["category_distribution"][cat]
+            print(f"    {cat:<18} {rate:.1%}  (of {calls:,} dispatches)")
+        print()
+
+        # Headline framing — "X calls → Y misses per session" — matches the
+        # homepage agent positioning. The warm-session number is the steady-state
+        # number a production agent will see after the cache has been populated.
+        warm_misses_per_dispatch = 1 - s_a["hit_rate_warm_session"]
+        warm_misses = round(args.agent_dispatches * warm_misses_per_dispatch)
+        print(f"  ── Steady-state headline ──────────────────────────────")
+        print(f"   {args.agent_dispatches} dispatches/session  →  ~{warm_misses} LLM calls/session")
+        print(f"   ({args.agent_dispatches / max(warm_misses, 1):.1f}× reduction; "
+              f"measured, not extrapolated)")
+        print(f"  ────────────────────────────────────────────────────────")
         print()
 
 

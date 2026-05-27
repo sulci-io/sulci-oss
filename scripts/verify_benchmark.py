@@ -70,9 +70,15 @@ def run_benchmark(timeout_sec: int) -> int:
         return -1
 
 
-def load_results() -> tuple[dict, dict]:
+def load_results() -> tuple[dict, dict, dict]:
+    """Load benchmark output JSONs.
+
+    Returns (summary, context, agent_or_None). The agent file is optional —
+    only present when benchmark/run.py was invoked with --agent.
+    """
     summary = RESULTS_DIR / "summary.json"
     context = RESULTS_DIR / "context_summary.json"
+    agent   = RESULTS_DIR / "agent_summary.json"
     if not summary.exists():
         print(f"ERROR: {summary} not found (benchmark didn't produce stateless results)",
               file=sys.stderr)
@@ -81,8 +87,10 @@ def load_results() -> tuple[dict, dict]:
         print(f"ERROR: {context} not found (benchmark didn't produce context-aware results)",
               file=sys.stderr)
         sys.exit(2)
+    agent_data = json.loads(agent.read_text()) if agent.exists() else None
     return (json.loads(summary.read_text()),
-            json.loads(context.read_text()))
+            json.loads(context.read_text()),
+            agent_data)
 
 
 def compare(label: str, baseline_val, measured_val, tol, kind: str) -> tuple[bool, str]:
@@ -114,6 +122,7 @@ def compare(label: str, baseline_val, measured_val, tol, kind: str) -> tuple[boo
 
 
 def verify_against_baseline(measured_summary: dict, measured_context: dict,
+                            measured_agent: dict | None,
                             baseline: dict) -> bool:
     print("\n" + "=" * 72)
     print(" Verifying benchmark output against baseline")
@@ -192,6 +201,52 @@ def verify_against_baseline(measured_summary: dict, measured_context: dict,
         if not ok:
             all_ok = False
 
+    # Agent workload — verified ONLY when benchmark was run with --agent.
+    # Daily make checkin doesn't pass --agent so agent_summary.json is absent
+    # and this block graceful-skips. Pre-release verification runs the agent
+    # benchmark explicitly and validates against the pinned numbers.
+    if measured_agent is None:
+        print("\n  Agent workload: not measured this run (run benchmark/run.py --agent to check)")
+    elif "agent_workload" not in baseline:
+        print("\n  Agent workload: measured but no baseline pinned — recording, not checking")
+    else:
+        print(f"\n  Agent workload ({baseline['agent_workload']['n_sessions']}-session, "
+              f"{baseline['agent_workload']['dispatches_per_session']}-dispatch):")
+        ba = baseline["agent_workload"]
+        ma = measured_agent
+        # The TF-IDF agent benchmark involves randomness via the sampling seed,
+        # so per-category hit rates can drift ±2pp run-to-run. Aggregate metric
+        # uses a slightly wider tolerance than the stateless / context blocks.
+        AGENT_PCT_TOL = max(PCT_TOL, 3.0)   # 3pp tolerance for agent metrics
+
+        pairs = [
+            ("aggregate_hit_rate",      ba["aggregate_hit_rate"],
+                ma.get("aggregate_hit_rate"),                    "rate", AGENT_PCT_TOL),
+            ("hit_rate_cold_session",   ba["hit_rate_cold_session"],
+                ma.get("hit_rate_cold_session"),                 "rate", AGENT_PCT_TOL),
+            ("hit_rate_warm_session",   ba["hit_rate_warm_session"],
+                ma.get("hit_rate_warm_session"),                 "rate", AGENT_PCT_TOL),
+            ("misses_per_session_p50",  ba["misses_per_session_p50"],
+                ma.get("misses_per_session_p50"),                "count", 5),
+            ("misses_per_session_p95",  ba["misses_per_session_p95"],
+                ma.get("misses_per_session_p95"),                "count", 8),
+            ("structural hit rate",     ba["category_hit_rate_structural"],
+                ma.get("category_hit_rate", {}).get("structural"),       "rate", AGENT_PCT_TOL),
+            ("semi_structural hit rate", ba["category_hit_rate_semi_structural"],
+                ma.get("category_hit_rate", {}).get("semi_structural"),  "rate", AGENT_PCT_TOL),
+            ("novel hit rate",          ba["category_hit_rate_novel"],
+                ma.get("category_hit_rate", {}).get("novel"),            "rate", AGENT_PCT_TOL),
+        ]
+        for label, b_val, m_val, kind, tol in pairs:
+            if m_val is None:
+                print(f"  [MISS ]  {label:<46} not present in agent_summary.json")
+                all_ok = False
+                continue
+            ok, line = compare(label, b_val, m_val, tol, kind)
+            print(line)
+            if not ok:
+                all_ok = False
+
     print("\n" + "=" * 72)
     return all_ok
 
@@ -221,8 +276,9 @@ def main() -> int:
         if rc != 0:
             return 2
 
-    measured_summary, measured_context = load_results()
-    ok = verify_against_baseline(measured_summary, measured_context, baseline)
+    measured_summary, measured_context, measured_agent = load_results()
+    ok = verify_against_baseline(measured_summary, measured_context,
+                                 measured_agent, baseline)
 
     if ok:
         print("\n  ALL METRICS WITHIN TOLERANCE — no regression")

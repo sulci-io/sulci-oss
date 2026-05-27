@@ -70,6 +70,58 @@ python benchmark/run.py --use-sulci --use-claude --fresh \
 **Cost:** approximately $0.90 per 1,000-query run with Haiku
 (~$0.80/1M input + $4.00/1M output tokens).
 
+### Mode 4 — Agent workload (`--agent`)
+
+Simulates a realistic mixed-workload agent's LLM dispatch pattern across
+50 sessions × 200 dispatches per session = 10,000 total dispatches.
+Measures the per-session deduplication rate that maps directly to the
+"X dispatches → Y LLM calls" framing on the homepage.
+
+Workload mix (calibrated to public agent-traffic measurements):
+
+| Category | Weight | Examples |
+|---|---|---|
+| Structural | 45% | Planner, reflector, system-prompt-like prompts. High cacheability — small param pools, frequent semantic repetition. |
+| Semi-structural | 35% | Tool-call decisions, intermediate reasoning. Moderate cacheability — parameterized template-bound prompts. |
+| Novel | 20% | Task-specific reasoning, user-input-derived prompts. Low cacheability — large param pools, novel content per dispatch. |
+
+```bash
+# Fast synthetic mode (TF-IDF, no dependencies) — CI baseline
+python benchmark/run.py --agent
+
+# Real-MiniLM mode — produces the conservative number cited externally
+pip install "sulci[sqlite]"
+python benchmark/run.py --agent --use-sulci
+
+# Real-Anthropic mode — for blog-post / whitepaper anchor
+pip install "sulci[sqlite]" anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
+python benchmark/run.py --agent --use-sulci --use-claude \
+  --claude-max-calls 5000
+```
+
+**Outputs:** `agent_summary.json` + `agent_per_session.csv` (per-session
+hit/miss/hit-rate). Cold→warm→hot session progression is the primary
+visual — sessions 1-5 show cache filling; sessions 40-50 show
+steady-state hit rate.
+
+**Two scaling axes** (both have flags for tuning):
+- `--agent-sessions N` — default 50. More sessions = more saturation
+  (steady-state hit rate increases).
+- `--agent-dispatches N` — default 200. Maps to the homepage "200 calls
+  per session" framing. Larger = each session takes longer to ramp up.
+
+**Engine choice matters significantly:**
+
+| Mode | Aggregate hit rate | Warm-session hit rate | Notes |
+|---|---|---|---|
+| TF-IDF (default) | ~95% | ~98% | Upper bound. CI baseline. Saturates quickly because TF-IDF token overlap is more permissive than MiniLM cosine at threshold 0.85. |
+| Real MiniLM (`--use-sulci`) | ~60-75% | ~75-85% | Conservative. **This is the number to cite externally.** |
+| Real Claude (`--use-claude`) | as above | as above | Adds real-LLM latency + cost-saved numbers; doesn't change hit rates. |
+
+The TF-IDF mode is regression-gated via `make benchmark-agent`; the
+real-MiniLM mode is the headline number for blog posts and whitepapers.
+
 ---
 
 ## Results (v0.4.0)

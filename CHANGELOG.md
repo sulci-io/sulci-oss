@@ -8,6 +8,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`benchmark/run.py --agent` — measured agent-workload deduplication.** New
+  benchmark mode simulates 50 sessions × 200 LLM-call dispatches drawn from a
+  realistic workload distribution (45% structural, 35% semi-structural, 20%
+  novel) and reports per-session hit rate, cold→warm progression, per-category
+  breakdown, and the headline `200 dispatches → X misses` framing that maps
+  directly to homepage agent positioning.
+  - New CLI flags: `--agent`, `--agent-sessions N` (default 50),
+    `--agent-dispatches N` (default 200), `--agent-threshold F` (default 0.85).
+  - Synthetic mode (TF-IDF, default) is regression-gated via the new
+    `benchmark/baseline.json` `agent_workload` block — locked to 8 metrics
+    including aggregate hit rate, cold/warm session rates, per-category
+    breakdowns, and p50/p95 misses-per-session.
+  - Real-MiniLM mode (`--agent --use-sulci`) produces the conservative
+    headline number cited externally (~60-75% aggregate hit rate vs ~95%
+    TF-IDF upper bound).
+  - Real-Anthropic mode (`--agent --use-sulci --use-claude`) adds measured
+    LLM latency + dollar cost saved — the launch-post anchor.
+  - New Makefile target: `make benchmark-agent` runs the agent benchmark +
+    verifies against baseline. Daily `make checkin` is unchanged — the
+    verifier graceful-skips when `agent_summary.json` is absent.
+  - Outputs `agent_summary.json` + `agent_per_session.csv` to
+    `benchmark/results/`.
+
 ### Fixed
 
 - **`Cache.stats()['saved_cost']` now populates for users of the raw

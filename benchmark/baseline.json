@@ -3,7 +3,8 @@
     "description": "Canonical TF-IDF benchmark numbers. The verifier (scripts/verify_benchmark.py) compares fresh run output against these.",
     "source": "GitHub Actions benchmark.yml run #36 (commit 35a0c86, pre-v040-baseline)",
     "verified_stable_across_releases": ["v0.3.4 (run #26)", "v0.3.7 (implicit)", "pre-v040-baseline (run #36)"],
-    "tolerance_notes": "Counts may drift by ±2 across platforms (Linux vs macOS) due to dict-iteration tie-breaks. Headline percentages match exactly. Latency varies by machine; not part of regression check."
+    "tolerance_notes": "Counts may drift by ±2 across platforms (Linux vs macOS) due to dict-iteration tie-breaks. Headline percentages match exactly. Latency varies by machine; not part of regression check.",
+    "agent_workload_note": "agent_workload block is checked ONLY when benchmark/run.py was invoked with --agent (i.e. agent_summary.json was produced). Daily make checkin doesn't include --agent and the verifier graceful-skips. Numbers below are from the TF-IDF builtin mode; real-MiniLM mode (--agent --use-sulci) produces more conservative numbers (~60-75% aggregate vs ~95% TF-IDF) because the 0.85 cosine threshold on real embeddings is stricter than TF-IDF token overlap."
   },
   "stateless": {
     "threshold": 0.85,
@@ -31,5 +32,19 @@
     {"domain": "product_faq",          "stateless_accuracy": 0.72, "context_accuracy": 0.76, "improvement": 0.04},
     {"domain": "medical_information",  "stateless_accuracy": 0.40, "context_accuracy": 0.60, "improvement": 0.20},
     {"domain": "general_knowledge",    "stateless_accuracy": 0.60, "context_accuracy": 0.68, "improvement": 0.08}
-  ]
+  ],
+  "agent_workload": {
+    "_engine":                  "tfidf_builtin",
+    "n_sessions":               50,
+    "dispatches_per_session":   200,
+    "total_dispatches":         10000,
+    "aggregate_hit_rate":       0.9497,
+    "hit_rate_cold_session":    0.43,
+    "hit_rate_warm_session":    0.9785,
+    "misses_per_session_p50":   5,
+    "misses_per_session_p95":   31,
+    "category_hit_rate_structural":      0.9684,
+    "category_hit_rate_semi_structural": 0.9325,
+    "category_hit_rate_novel":           0.9378
+  }
 }
