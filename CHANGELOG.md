@@ -10,6 +10,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`examples/agent_example_crewai.py`** — CrewAI + Sulci agent demo with
+  multi-shot warm-up loop. Builds a 2-agent Crew (researcher + writer) with
+  a sequential task chain, runs it 3 times against the same topic, and
+  prints per-run + aggregate cache stats showing the same cold → warm → hot
+  pattern as the LangGraph example. Real Anthropic via the CrewAI `LLM`
+  wrapper when `ANTHROPIC_API_KEY` is set; deterministic `BaseLLM` mock
+  when not.
+  - Demonstrates the BaseLLM-subclass integration pattern (in contrast to
+    LangGraph's `set_llm_cache()` global-cache pattern). The same recipe
+    works for any non-LangChain agent framework: subclass the framework's
+    LLM base, intercept `call()`, route through `cache.get()`/`cache.set()`.
+  - Suppresses CrewAI's first-run telemetry opt-in dialog and OTEL upload
+    by setting `CREWAI_TRACING_ENABLED=false`, `CREWAI_TELEMETRY_OPT_OUT=true`,
+    `OTEL_SDK_DISABLED=true` at module load. Users who want CrewAI tracing
+    can re-enable it in their own code.
+  - Registered in `scripts/run_examples.py` (LLM-using examples block)
+    so `make checkin` exercises it on every dev run.
 - **`examples/agent_example_langgraph.py`** — LangGraph + Sulci agent demo
   with multi-shot warm-up loop. Builds a 2-node ReAct-style graph (planner →
   actor), runs the same research task 3 times, and prints per-run + aggregate
