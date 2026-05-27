@@ -6,6 +6,31 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`examples/agent_example_langgraph.py`** — LangGraph + Sulci agent demo
+  with multi-shot warm-up loop. Builds a 2-node ReAct-style graph (planner →
+  actor), runs the same research task 3 times, and prints per-run + aggregate
+  cache stats. Demonstrates the agent-workload value prop concretely
+  (planner/reflector inner-loop dedupe) that GA-era homepage messaging
+  references. Real Anthropic via `ANTHROPIC_API_KEY` when set; falls back to
+  a deterministic `BaseChatModel` mock so the demo runs in CI / sandboxes
+  without a key.
+  - Documents the install pattern: `pip install "sulci[sqlite,langchain]" langgraph langchain-anthropic`.
+  - Uses `set_llm_cache(SulciCache(context_window=4, threshold=0.85, ...))`
+    so every LLM call in the LangGraph automatically routes through Sulci —
+    no LangGraph-specific code needed.
+  - Subclasses `SulciCache` as `CountingSulciCache` to expose per-run
+    hit/miss counters for live demo visibility. Production code should use
+    `SulciCache` directly and read aggregate numbers from `cache.stats()`.
+  - Filename namespaces the framework explicitly (`agent_example_langgraph.py`)
+    so future `agent_example_crewai.py` and `agent_example_autogen.py` siblings
+    can land without disturbing existing references.
+
+---
+
 ## [0.7.0] — 2026-05-26 — Cache() auto-connects telemetry when an api_key is resolvable
 
 > Minor release closing a long-running footgun across **all tiers**
