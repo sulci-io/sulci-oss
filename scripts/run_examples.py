@@ -9,7 +9,8 @@ per file, and produce a summary table.
 
 What it covers:
     * examples/*.py              — usage examples (basic_usage, context_aware,
-                                   anthropic, langchain, llamaindex, async)
+                                   anthropic, langchain, llamaindex, async,
+                                   agent_example_langgraph)
     * examples/extending_sulci/  — protocol-implementation reference impls
     * smoke_test*.py             — end-to-end smoke tests at repo root
 
@@ -73,6 +74,7 @@ DEFAULT_FILES = [
     "examples/anthropic_example.py",
     "examples/langchain_example.py",
     "examples/llamaindex_example.py",
+    "examples/agent_example_langgraph.py",
 ]
 
 
