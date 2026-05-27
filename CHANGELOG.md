@@ -8,6 +8,32 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`Cache.stats()['saved_cost']` now populates for users of the raw
+  `get()`/`set()` API (closes #88).** Previously `saved_cost` only
+  incremented inside `cached_call()`, which left LangChain integrations —
+  the most common high-traffic path, via `set_llm_cache(SulciCache(...))`
+  — reporting $0 saved indefinitely. `Cache.__init__` now accepts
+  `cost_per_call: float = 0.005`; `get()` contributes that amount to
+  `saved_cost` on every hit. `cached_call()` continues to support a
+  per-call override (signature changed: default now `None` instead of
+  `0.005`, meaning "use the Cache's setting"); explicit overrides apply
+  as a delta to preserve identical numeric output for the existing
+  `cached_call(cost_per_call=X)` pattern.
+
+  Behavior change worth noting: pre-v0.7.1, `Cache().get()` alone left
+  `saved_cost` at $0; now it adds $0.005 per hit (using the default).
+  Opt out with `Cache(cost_per_call=0)` to preserve old semantics.
+  All other paths produce identical numeric output to v0.7.0.
+
+- **No more `FutureWarning` from sentence-transformers v3+ (closes #89).**
+  `sulci/embeddings/minilm.py` now uses `get_embedding_dimension()` when
+  available, falling back to the deprecated `get_sentence_embedding_dimension()`
+  on sentence-transformers v2.x. The warning was harmless but appeared on
+  every smoke run since the v3 upgrade earlier this year, polluting the
+  examples output.
+
 ### Added
 
 - **`examples/agent_example_crewai.py`** — CrewAI + Sulci agent demo with
