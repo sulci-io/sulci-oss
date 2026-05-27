@@ -957,6 +957,7 @@ python examples/context_aware.py        # context-aware — no API key needed
 python examples/anthropic_example.py    # requires ANTHROPIC_API_KEY
 python examples/langchain_example.py    # OpenAI or Anthropic or mock fallback
 python examples/llamaindex_example.py   # OpenAI or Anthropic or mock fallback
+python examples/agent_example_langgraph.py  # LangGraph agent demo, multi-shot warm-up loop
 python examples/async_example.py        # AsyncCache demo, OpenAI/Anthropic/mock
 ```
 
