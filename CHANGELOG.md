@@ -35,6 +35,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **`AsyncCache.cached_call()` and `AsyncCache.acached_call()` now preserve
+  `AsyncCache(cost_per_call=...)` by default (closes #92).** The async wrapper
+  methods now pass `None` through to `Cache.cached_call()` unless callers
+  explicitly override the per-call cost, matching the sync cache sentinel
+  behavior and preventing the old hard-coded `$0.005` default from replacing
+  the constructor value.
+
 - **`Cache.stats()['saved_cost']` now populates for users of the raw
   `get()`/`set()` API (closes #88).** Previously `saved_cost` only
   incremented inside `cached_call()`, which left LangChain integrations —

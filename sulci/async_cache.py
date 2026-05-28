@@ -63,7 +63,7 @@ class AsyncCache:
         **kwargs: All arguments accepted by sulci.Cache — backend,
                   threshold, embedding_model, ttl_seconds, personalized,
                   db_path, context_window, query_weight, context_decay,
-                  session_ttl, api_key, telemetry.
+                  session_ttl, cost_per_call, api_key, telemetry.
 
     Examples
     --------
@@ -141,7 +141,7 @@ class AsyncCache:
         llm_fn:        Callable[[str], str],
         session_id:    Optional[str]   = None,
         user_id:       Optional[str]   = None,
-        cost_per_call: float           = 0.005,
+        cost_per_call: Optional[float] = None,
     ) -> dict:
         """
         Async drop-in LLM wrapper — checks cache first, calls llm_fn on miss.
@@ -221,7 +221,7 @@ class AsyncCache:
         llm_fn:        Callable[[str], str],
         session_id:    Optional[str] = None,
         user_id:       Optional[str] = None,
-        cost_per_call: float         = 0.005,
+        cost_per_call: Optional[float] = None,
     ) -> dict:
         """Sync passthrough — cache.cached_call()."""
         return self._cache.cached_call(
