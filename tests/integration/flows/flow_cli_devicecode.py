@@ -26,7 +26,7 @@ real network, Clerk, or dashboard touched.
 
 Known platform-side gap (P2, was P0 before flow demotion)
 ---------------------------------------------------------
-The platform-side dashboard route (``app.sulci.io/oss-connect``) still
+The platform-side dashboard route (``dashboard.sulci.io/oss-connect``) still
 redirects to the paid-tier key-paste page after Clerk sign-up. This
 script does NOT exercise the dashboard surface, so it PASSes even while
 the dashboard is broken. When the CLI ships, the dashboard route bug
@@ -76,8 +76,8 @@ def _stub_httpx_post(url: str, json=None, timeout=None, **kwargs):
         resp.json = MagicMock(return_value={
             "device_code":              "x" * 43,
             "user_code":                "WXYZ-1234",
-            "verification_uri":         "https://app.sulci.io/oss-connect",
-            "verification_uri_complete":"https://app.sulci.io/oss-connect?code=WXYZ-1234",
+            "verification_uri":         "https://dashboard.sulci.io/oss-connect",
+            "verification_uri_complete":"https://dashboard.sulci.io/oss-connect?code=WXYZ-1234",
             # interval=0 so the SDK's time.sleep is a no-op and the test
             # runs in milliseconds rather than waiting 5s between polls.
             "expires_in":               900,
