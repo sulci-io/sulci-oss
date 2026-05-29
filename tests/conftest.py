@@ -9,7 +9,7 @@ this guard, a developer with ``SULCI_API_KEY`` exported in their shell
 (common while iterating on the SDK) would have every test call to
 ``sulci.connect()`` that doesn\'t pass an explicit ``api_key=`` argument
 silently emit telemetry to the production gateway — polluting that
-account\'s request count and showing up on ``app.sulci.io`` as
+account\'s request count and showing up on ``dashboard.sulci.io`` as
 "deployment" rows that are really test runs.
 
 Tests that explicitly want telemetry enabled — e.g. the
