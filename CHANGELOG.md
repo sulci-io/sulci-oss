@@ -339,7 +339,7 @@ forcing a fresh resolution that picks the actually-current key.
 ## [0.6.4] — 2026-05-12 — Drain telemetry buffer on process exit
 
 > Patch release. Closes the "I ran the snippet, nothing appeared on
-> app.sulci.io" failure mode: short-lived processes (CLI commands,
+> dashboard.sulci.io" failure mode: short-lived processes (CLI commands,
 > demo scripts, serverless invocations, test runs) now flush their
 > telemetry buffer before exit instead of silently dropping it.
 
@@ -354,7 +354,7 @@ forcing a fresh resolution that picks the actually-current key.
 ### Why this matters
 
 Before v0.6.4: running the /why-connect demo snippet (or any script
-shorter than 30 seconds) showed no telemetry on app.sulci.io. The
+shorter than 30 seconds) showed no telemetry on dashboard.sulci.io. The
 script exited before the first 30-second flush tick fired, and the
 daemon thread died with the buffer intact. Workaround required adding
 `time.sleep(35)` to scripts — fine for development, broken for
@@ -412,7 +412,7 @@ asymmetric outcomes depending on which code path the user hit first:
 |---|---|
 | `Cache(backend="sqlite")`                  | Loud `ImportError` with helpful "install `sulci[sqlite]`" message (via the existing `sulci/embeddings/minilm.py` try/except wrapping). |
 | `Cache(backend="sulci", api_key=…)`        | Loud but unhelpful `ModuleNotFoundError: No module named 'httpx'` from the top-of-module import in `sulci/backends/cloud.py`. |
-| `sulci.connect(api_key=…)`                 | **Silent** failure: the telemetry path is contractually "never raise"; the missing-httpx ImportError is swallowed by the flush thread. User sees no error, but their deployment never appears on `app.sulci.io`. |
+| `sulci.connect(api_key=…)`                 | **Silent** failure: the telemetry path is contractually "never raise"; the missing-httpx ImportError is swallowed by the flush thread. User sees no error, but their deployment never appears on `dashboard.sulci.io`. |
 
 The third outcome is the worst — it looks like everything works but the
 user gets zero signal that anything's wrong. Promoting `httpx` to

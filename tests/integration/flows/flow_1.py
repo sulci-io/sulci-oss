@@ -11,7 +11,7 @@ locally:
     sulci.connect(api_key="sk-sulci-…")          # one-time, per machine
     cache = Cache(backend="sqlite", ...)           # any local backend
     cache.get(...)                                 # operations stay LOCAL
-    # background thread POSTs 8-WIRE-FIELD telemetry to app.sulci.io
+    # background thread POSTs 8-WIRE-FIELD telemetry to dashboard.sulci.io
 
 This script asserts the SDK side of that contract:
 - explicit-arg api_key resolves through precedence rung 1
@@ -30,7 +30,7 @@ Current-state caveat
 Flow 1's telemetry POST depends on `httpx`, which is in the [cloud]
 extra (bug B1, see flows.md). On a bare `pip install sulci`, the
 telemetry thread silently fails — user sees no error but no deployment
-appears on app.sulci.io. This script doesn't exercise that failure mode
+appears on dashboard.sulci.io. This script doesn't exercise that failure mode
 (we test the contract, not the missing-dep failure).
 """
 from __future__ import annotations

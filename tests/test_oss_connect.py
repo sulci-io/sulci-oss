@@ -36,8 +36,8 @@ import pytest
 _DEVICE_CODE_BODY = {
     "device_code":               "fake-device-code-43-chars-padded-pad-pad-padd",
     "user_code":                 "WXYZ-2345",
-    "verification_uri":          "https://app.sulci.io/oss-connect",
-    "verification_uri_complete": "https://app.sulci.io/oss-connect?code=WXYZ-2345",
+    "verification_uri":          "https://dashboard.sulci.io/oss-connect",
+    "verification_uri_complete": "https://dashboard.sulci.io/oss-connect?code=WXYZ-2345",
     "expires_in":                900,
     "interval":                  5,
 }

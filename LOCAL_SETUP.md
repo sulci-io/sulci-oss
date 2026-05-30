@@ -551,7 +551,7 @@ sulci.connect()
 # To opt into the browser-based onboarding flow:
 sulci.connect(prompt=True)
 # → if no key found through the first three steps:
-#     [sulci] Visit https://app.sulci.io/oss-connect and enter code: WXYZ-2345
+#     [sulci] Visit https://dashboard.sulci.io/oss-connect and enter code: WXYZ-2345
 #     [sulci] Waiting for authorization (Ctrl+C to cancel)...
 #   On success: SDK gets the api_key, writes to ~/.sulci/config (mode 0600)
 #   On user-deny / 15-min timeout: raises RuntimeError
