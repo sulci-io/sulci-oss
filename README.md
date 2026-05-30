@@ -316,7 +316,7 @@ sulci.connect()
 # Once your environment has OSS-Connect end-to-end deployed
 # (gateway + dashboard), opt in:
 sulci.connect(prompt=True)
-# - First-run: prints "Visit https://app.sulci.io/oss-connect and enter code: WXYZ-2345"
+# - First-run: prints "Visit https://dashboard.sulci.io/oss-connect and enter code: WXYZ-2345"
 # - User authorizes via browser → SDK gets api_key and persists to ~/.sulci/config
 # - Subsequent runs: step 3 short-circuits, no browser needed
 ```
