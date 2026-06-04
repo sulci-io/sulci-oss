@@ -33,6 +33,29 @@ jobs:
       - name: Install
         run: pip install ".[sqlite,redis]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-minilm-${{ runner.os }}
+
+      - name: Pre-fetch MiniLM (retry through HF 429s)
+        shell: bash
+        run: |
+          for i in 1 2 3 4 5; do
+          if python - <<'PYEOF'
+          import importlib.util, sys
+          if importlib.util.find_spec("sentence_transformers") is None:
+              sys.exit(0)   # model-less env; tests guard/skip themselves
+          from sentence_transformers import SentenceTransformer
+          SentenceTransformer("all-MiniLM-L6-v2")
+          PYEOF
+          then exit 0; fi
+          echo "HF fetch attempt $i failed (likely 429); backing off $((i*60))s"
+          sleep $((i*60))
+          done
+          echo "::warning::MiniLM pre-fetch failed after 5 attempts; tests may flake"
+
       - name: Test Qdrant tenant isolation
         run: pytest tests/test_qdrant_tenant_isolation.py -v --tb=short
 
