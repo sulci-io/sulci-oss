@@ -10,6 +10,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **Per-entry hit attribution (`v0.7.2`)** — three additive pieces enabling
+  downstream consumers (sulci-platform's Top Queries pipeline) to count how
+  many times each cached entry is actually SERVED, aligning the dashboard's
+  "Hits" column with the hit-rate stat computed from the same events:
+  - `QdrantBackend.store()` writes a `created` timestamp in the payload, so
+    aggregators can report an honest "last seen" for entries never served.
+  - `QdrantBackend.search_match()` — like `search()`, plus the matched
+    entry's STORED query text as a third element. `search()` keeps its
+    2-tuple contract by delegating; the `Backend` protocol and the other
+    backends are untouched (feature-detected via `hasattr`).
+  - `CacheEvent.matched_query_hash` — populated on hits when the backend
+    exposes `search_match()` (additive-with-default per ADR 0005, same
+    pattern as `plan` in v0.5.6). Privacy: a hash, never text, and
+    deliberately NOT on the sink allowlist — `TelemetrySink` and
+    `RedisStreamSink` scrub it, so it is consumable only by in-process
+    sinks injected by the caller.
+  - `sulci.sinks.query_hash()` — the hash scheme (sha256, first 32 hex
+    chars), exported as a documented cross-repo contract and pinned with a
+    literal-value test on both sides.
+  - New test module `tests/test_hit_attribution.py` (12 tests against
+    embedded Qdrant).
+
 - **`benchmark/run.py --agent` — measured agent-workload deduplication.** New
   benchmark mode simulates 50 sessions × 200 LLM-call dispatches drawn from a
   realistic workload distribution (45% structural, 35% semi-structural, 20%

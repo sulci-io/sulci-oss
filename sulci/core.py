@@ -23,6 +23,7 @@ from sulci.context import SessionStore as _BuiltinSessionStore
 # v0.5.0 — sessions and sinks protocols (additive; see ADR 0004 + ADR 0007)
 from sulci.sessions import SessionStore as SessionStoreProtocol
 from sulci.sinks import EventSink, NullSink, CacheEvent
+from sulci.sinks.protocol import query_hash as _query_hash
 
 # v0.6.0 — Backend + Embedder protocols for instance injection in Cache.__init__
 # (sulci-oss #34 C1c + C1d, umbrella #63). Used only in type hints + isinstance
@@ -517,6 +518,7 @@ class Cache:
         """
         _t0 = _time.time()
         self._query_count += 1
+        matched_query: Optional[str] = None
         if self._is_remote_transport:
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.
             # The gateway-side library does the embedding, ANN search, and
@@ -532,13 +534,27 @@ class Cache:
         else:
             # Self-hosted path — library is the engine in-process.
             vec, depth = self._context_vec(query, session_id)
-            resp, sim  = self._backend.search(
-                embedding = vec,
-                threshold = self.threshold,
-                tenant_id = tenant_id,
-                user_id   = user_id if self.personalized else None,
-                now       = time.time(),
-            )
+            # v0.7.2 — backends that expose search_match() also report
+            # WHICH stored entry was served, so the emitted CacheEvent
+            # can carry matched_query_hash for per-entry hit counting
+            # (see sinks/protocol.py). Feature-detected so the Backend
+            # protocol and custom backends are untouched.
+            if hasattr(self._backend, "search_match"):
+                resp, sim, matched_query = self._backend.search_match(
+                    embedding = vec,
+                    threshold = self.threshold,
+                    tenant_id = tenant_id,
+                    user_id   = user_id if self.personalized else None,
+                    now       = time.time(),
+                )
+            else:
+                resp, sim  = self._backend.search(
+                    embedding = vec,
+                    threshold = self.threshold,
+                    tenant_id = tenant_id,
+                    user_id   = user_id if self.personalized else None,
+                    now       = time.time(),
+                )
         latency_ms = round((_time.time() - _t0) * 1000, 2)
 
         # #42 — count every .get() call so users who use the raw .get()/.set()
@@ -589,6 +605,12 @@ class Cache:
                 context_depth   = depth,
                 timestamp       = _time.time(),
                 plan            = plan,
+                # v0.7.2 — identity of the served entry, hits only.
+                # Hash, never text (privacy posture; see protocol.py).
+                matched_query_hash = (
+                    _query_hash(matched_query)
+                    if (resp is not None and matched_query) else None
+                ),
             ))
         except Exception:
             # Sink failures must not break Cache calls
