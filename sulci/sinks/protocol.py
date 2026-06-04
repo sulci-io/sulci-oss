@@ -6,8 +6,26 @@ sulci/sinks/protocol.py — EventSink protocol + CacheEvent (v0.5.0)
 STABLE API — modifications require superseding ADR per ADR 0005.
 """
 from __future__ import annotations
+import hashlib
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable, Optional, Dict, Any
+
+
+def query_hash(text: str) -> str:
+    """
+    Stable identity hash for a stored query's text.
+
+    CONTRACT — shared with consumers outside this repo: sulci-platform's
+    top-queries pipeline (workers/top_queries + shared/hashing.py)
+    computes the same value independently when aggregating Qdrant
+    payloads, and joins it against CacheEvent.matched_query_hash to
+    attribute cache serves to stored entries. Changing the algorithm or
+    truncation length breaks that join silently; both repos pin the
+    scheme with a literal-value test.
+
+    sha256 of the UTF-8 text, first 32 hex chars.
+    """
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
 @dataclass
@@ -46,6 +64,24 @@ class CacheEvent:
     # burden that two realworld E2E tests caught (test_09 / test_j09).
     # Carrying plan on the event closes that gap.
     plan: Optional[str] = None
+    # ── v0.7.2 addition (true hit-count semantics) ──
+    # Identity hash (see query_hash() above) of the STORED query whose
+    # entry was served, populated only on 'hit' events and only when the
+    # backend exposes search_match() (QdrantBackend does). None on
+    # misses, on backends without search_match, and for pre-0.7.2
+    # callers — additive per ADR 0005, same pattern as `plan` above.
+    #
+    # Why the field exists: sulci-platform's Top Queries pipeline needs
+    # to count how many times each cached entry was actually SERVED,
+    # not how many times it was stored — otherwise the dashboard's
+    # "Hits" column contradicts the hit-rate stat computed from these
+    # very events. Carrying the matched entry's hash on the existing
+    # hit event closes that gap with zero extra hot-path I/O.
+    #
+    # Privacy: this is a hash, never text. It is deliberately NOT in the
+    # sink allowlist, so TelemetrySink and RedisStreamSink scrub it —
+    # it is consumable only by in-process sinks injected by the caller.
+    matched_query_hash: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)   # extension point
 
 

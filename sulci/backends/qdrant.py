@@ -66,6 +66,11 @@ class QdrantBackend:
                     "tenant_id": tenant_id or "global",
                     "user_id": user_id or "global",
                     "expires": expires or 0.0,
+                    # v0.7.2 — store-time timestamp so consumers (e.g.
+                    # sulci-platform top_queries) can report an honest
+                    # "last seen" for entries that have never been served,
+                    # instead of fabricating one at aggregation time.
+                    "created": time.time(),
                     **(metadata or {}),
                 },
             )],
@@ -78,6 +83,30 @@ class QdrantBackend:
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None, now: Optional[float] = None,
     ) -> tuple[Optional[str], float]:
+        resp, score, _matched = self.search_match(
+            embedding, threshold,
+            tenant_id=tenant_id, user_id=user_id, now=now,
+        )
+        return resp, score
+
+    def search_match(
+        self,
+        embedding: list[float], threshold: float,
+        *,
+        tenant_id: Optional[str] = None,
+        user_id: Optional[str] = None, now: Optional[float] = None,
+    ) -> tuple[Optional[str], float, Optional[str]]:
+        """
+        Like search(), but also returns the STORED query text of the
+        matched entry as the third element (None on miss).
+
+        v0.7.2 — optional backend extension, feature-detected by
+        Cache.get via hasattr(). The matched query identifies which
+        cached entry was served, enabling per-entry hit counting by
+        downstream consumers (CacheEvent.matched_query_hash). search()
+        keeps its 2-tuple contract by delegating here, so the Backend
+        protocol and the other backends are untouched.
+        """
         from qdrant_client.models import Filter, FieldCondition, MatchValue
         now = now or time.time()
 
@@ -112,8 +141,8 @@ class QdrantBackend:
             if p.get("expires") and now > p["expires"]:
                 continue
             if r.score >= threshold:
-                return p.get("response"), r.score
-        return None, 0.0
+                return p.get("response"), r.score, p.get("query")
+        return None, 0.0, None
 
     def clear(self) -> None:
         # Delete all points but keep the collection (and its HNSW index)
