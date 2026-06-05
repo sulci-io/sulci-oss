@@ -36,6 +36,8 @@ jobs:
 
       - name: Pre-fetch MiniLM (retry through HF 429s)
         shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           for i in 1 2 3 4 5; do
           if python - <<'PYEOF'
