@@ -1,0 +1,4 @@
+[allowlist]
+description = "Sulci test fixtures — deliberately fake credentials"
+regexes = ['''sk-sulci-[A-Za-z0-9_.]+''']
+paths = ['''tests/.*''', '''LOCAL_SETUP\.md''']
