@@ -59,8 +59,10 @@ jobs:
   publish:
     needs: test # only publish if all tests pass
     runs-on: ubuntu-latest
+    environment: pypi            # must match the Trusted Publisher config
     permissions:
       contents: read
+      id-token: write            # OIDC token for PyPI — this replaces PYPI_TOKEN
 
     steps:
       - uses: actions/checkout@v5
@@ -70,7 +72,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install build tools
-        run: pip install build twine
+        run: pip install build
 
       - name: Build wheel + sdist
         run: python -m build
@@ -83,7 +85,6 @@ jobs:
           echo "Must show sulci/*.py  NOT  sulci_lib/sulci/*.py"
 
       - name: Publish to PyPI
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-        run: twine upload dist/* --verbose
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # No username/password — OIDC via Trusted Publisher.
+        # PEP 740 attestations are generated automatically.
