@@ -22,21 +22,32 @@ that's fine; it's the *adaptive/fleet* layer that is the moat.
 
 ## 2. Release integrity (protects users AND your account)
 
-1. **PyPI Trusted Publishing** — replace the long-lived `PYPI_TOKEN` secret with OIDC:
-   PyPI → project → Publishing → add GitHub publisher
-   (repo `id4git/sulci`, workflow `publish.yml`, environment `pypi`).
-   Then in `publish.yml`:
+> **Status (2026-06-05):** all three items are DONE and live-verified by the
+> `v0.7.3` release (OSS PR #100 + Publish-to-PyPI run #48 — OIDC exchange in
+> the logs, attestations on the PyPI file listing).
+
+1. ✅ **PyPI Trusted Publishing** (done 2026-06-05) — the long-lived `PYPI_TOKEN`
+   secret is replaced with OIDC:
+   PyPI → project → Publishing → GitHub publisher registered
+   (repo `sulci-io/sulci-oss`, workflow `publish.yml`, environment `pypi`).
+   In `publish.yml`:
    ```yaml
+   environment: pypi          # must match the publisher config exactly
    permissions:
      id-token: write
    steps:
      - uses: pypa/gh-action-pypi-publish@release/v1   # no password input
    ```
-2. **Tag protection** — GitHub → Settings → Tags → protect `v*` so only admins can
-   push release tags (publish.yml is tag-triggered; an attacker with push access must
-   not be able to trigger a release).
-3. **Attestations** — `pypa/gh-action-pypi-publish` generates PEP 740 attestations
-   automatically under Trusted Publishing; leave it on.
+   `PYPI_TOKEN` was deleted from repo secrets AND revoked on PyPI
+   (`sulci-github-actions`, all-projects scope) — the old path is dead at
+   both ends.
+2. ✅ **Tag protection** (set 2026-06-05) — tag ruleset `protect-release-tags`:
+   pattern `v*` (matched 34 existing release tags at creation), restrict
+   create/update/delete + block force pushes, Repository-admin bypass.
+   publish.yml is tag-triggered, so this closes the last path by which
+   non-admin push access could mint a PyPI release.
+3. ✅ **Attestations** (live as of v0.7.3) — `pypa/gh-action-pypi-publish` generates
+   PEP 740 attestations automatically under Trusted Publishing; leave it on.
 
 ## 3. History hygiene before GA
 
@@ -49,6 +60,15 @@ gitleaks detect --source . --log-opts="--all"
 
 If anything real surfaces: rotate the credential FIRST, then scrub history with
 `git filter-repo` if the repo is public.
+
+> **Executed 2026-06-05 across all three repos** — sulci-platform (559 commits,
+> 205 hits), sulci-web (228 commits, 0 hits), sulci-oss (148 commits, 7 hits).
+> Every hit classified as deliberate test fixtures (`sk-sulci-*` keys + their
+> sha256 hashes in seed/fixture SQL; Clerk `pk_test_` publishable key). **Zero
+> real secrets, zero rotations.** `.gitleaks.toml` allowlists committed to
+> platform + oss so the scan now reports `no leaks found` and is viable as a
+> pre-push gate. Git remotes audited the same day: no embedded tokens (the old
+> `https://id4git:TOKEN@…` workaround is gone everywhere).
 
 ## 4. Legal markers (verify, all present already)
 
