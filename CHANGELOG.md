@@ -8,6 +8,46 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+---
+
+## [0.7.3] — 2026-06-06 — Release integrity: PyPI Trusted Publishing (OIDC)
+
+No library changes — `sulci==0.7.3` is 0.7.2 plus the version bump. This
+release exists to live-verify the new credential-free publishing path.
+
+### Changed
+
+- **`publish.yml` publishes via PyPI Trusted Publishing (OIDC).** The
+  publish job now declares `environment: pypi` + `permissions: id-token:
+  write` and uploads with `pypa/gh-action-pypi-publish@release/v1` — no
+  password input, no `twine`. The long-lived `PYPI_TOKEN` was deleted from
+  repo secrets **and revoked on PyPI** (the `sulci-github-actions`
+  all-projects token). Releases can now only originate from this repo's
+  `publish.yml` on a `v*` tag. PEP 740 attestations are generated
+  automatically — **0.7.3 is the first attested release** (verified on the
+  PyPI file listing and the repo Attestations panel). (PR #100; live
+  verification: Publish to PyPI run #48 on tag `v0.7.3`.)
+
+### Added
+
+- **`.gitleaks.toml`** — allowlists the deliberately fake `sk-sulci-*`
+  test-fixture credentials so `gitleaks detect --log-opts="--all"` is a
+  clean, usable gate. Full-history scan 2026-06-05: 148 commits, 7 hits,
+  all fixtures, zero real secrets.
+- **`docs/OSS_BOUNDARY_POLICY.md`** — the per-PR checklist for what may
+  never land in sulci-oss (fleet-derived tuning, billing/quota/plan logic,
+  platform internals) plus the release-integrity runbook this release
+  executed.
+
+---
+
+## [0.7.2] — 2026-06-05 — Per-entry hit attribution, agent benchmark mode, agent examples
+
+> Note: no 0.7.1 was published to PyPI — the fixes below that reference
+> 0.7.1-era behavior shipped here.
+
 ### Added
 
 - **Per-entry hit attribution (`v0.7.2`)** — three additive pieces enabling
