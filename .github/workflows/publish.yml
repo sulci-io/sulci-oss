@@ -29,7 +29,7 @@ jobs:
         run: pip install ".[sqlite,redis]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
       - name: Cache HuggingFace models
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/huggingface
           key: hf-minilm-${{ runner.os }}

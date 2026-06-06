@@ -30,7 +30,7 @@ jobs:
           cat benchmark/results/context_summary.json
 
       - name: Upload results as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: benchmark-results-${{ github.sha }}
           path: benchmark/results/
