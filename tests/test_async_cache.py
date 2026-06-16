@@ -14,11 +14,11 @@ Test classes
 TestConstruction        ( 4) — constructor passthrough, repr, invalid backend
 TestAget                ( 5) — hit, miss, session_id, user_id, 3-tuple return
 TestAset                ( 3) — stores entry, advances context window, session_id
-TestAcachedCall         ( 4) — hit, miss, dict shape, cost_per_call
+TestAcachedCall         ( 5) — hit, miss, dict shape, cost_per_call
 TestContextMethods      ( 4) — aget_context, aclear_context, acontext_summary,
                                session isolation
 TestStats               ( 3) — astats dict shape, aclear resets stats, repr
-TestSyncPassthrough     ( 2) — sync get/set still work on AsyncCache instance
+TestSyncPassthrough     ( 3) — sync get/set still work on AsyncCache instance
 """
 
 import os
@@ -26,6 +26,18 @@ import tempfile
 import pytest
 
 from sulci import AsyncCache
+
+
+class _FakeEmbedder:
+    @property
+    def dimension(self):
+        return 2
+
+    def embed(self, text):
+        return [1.0, 0.0]
+
+    def embed_batch(self, texts):
+        return [self.embed(text) for text in texts]
 
 
 # ── Shared fixture ────────────────────────────────────────────────────────────
@@ -202,6 +214,23 @@ class TestAcachedCall:
         s = await tmp_cache.astats()
         assert s["saved_cost"] >= 0.0
 
+    @pytest.mark.asyncio
+    async def test_respects_constructor_cost_per_call(self, tmp_path):
+        cache = AsyncCache(
+            backend="sqlite",
+            db_path=str(tmp_path / "async_cost_db"),
+            embedding_model=_FakeEmbedder(),
+            threshold=0.85,
+            cost_per_call=0.003,
+        )
+        await cache.aset("What is pgvector?", "pgvector adds vector search to Postgres.")
+
+        result = await cache.acached_call("What is pgvector?", lambda _: "unused")
+
+        assert result["source"] == "cache"
+        s = await cache.astats()
+        assert s["saved_cost"] == pytest.approx(0.003)
+
 
 # ── TestContextMethods ───────────────────────────────────────────────────────
 
@@ -286,3 +315,18 @@ class TestSyncPassthrough:
         s = tmp_cache.stats()
         assert isinstance(s, dict)
         assert "hits" in s
+
+    def test_sync_cached_call_respects_constructor_cost_per_call(self, tmp_path):
+        cache = AsyncCache(
+            backend="sqlite",
+            db_path=str(tmp_path / "sync_cost_db"),
+            embedding_model=_FakeEmbedder(),
+            threshold=0.85,
+            cost_per_call=0.003,
+        )
+        cache.set("What is pgvector?", "pgvector adds vector search to Postgres.")
+
+        result = cache.cached_call("What is pgvector?", lambda _: "unused")
+
+        assert result["source"] == "cache"
+        assert cache.stats()["saved_cost"] == pytest.approx(0.003)
