@@ -27,7 +27,7 @@ Sulci Cache is a drop-in Python library that caches LLM responses by **semantic 
 
 - Overall hit rate: **85.9%**
 - Hit latency p50: **0.74ms** (vs ~1,840ms for a live LLM call)
-- Cost saved per 10k queries: **$21.47**
+- Cost saved on the 5,000-query benchmark: **$21.47** (4,294 hits × $0.005)
 - Context-aware mode: **+20.8pp resolution accuracy** over stateless
 
 ---
