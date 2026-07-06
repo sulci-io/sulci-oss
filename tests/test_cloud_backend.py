@@ -154,6 +154,60 @@ class TestConstruction:
         b = make_backend(gateway_url="https://cache.acme.internal/")
         assert b._base_url == "https://cache.acme.internal"
 
+    # ── SULCI_GATEWAY env var (closes v0.5.5 follow-up #TBD-2) ────────────
+    # v0.5.5 shipped SULCI_GATEWAY for telemetry; cloud backend was left
+    # honoring gateway_url= kwarg only, creating a split-brain state in
+    # staging (telemetry to staging URL, cache traffic to prod). These
+    # tests lock in the 3-tier precedence chain: kwarg > env > default.
+
+    def test_env_var_used_when_no_kwarg(self, monkeypatch):
+        """SULCI_GATEWAY env var is honored when no explicit gateway_url."""
+        monkeypatch.setenv("SULCI_GATEWAY", "https://staging.sulci.io")
+        b = make_backend()
+        assert b._base_url == "https://staging.sulci.io"
+
+    def test_env_var_trailing_slash_stripped(self, monkeypatch):
+        """Trailing slash on SULCI_GATEWAY is stripped, matching kwarg path."""
+        monkeypatch.setenv("SULCI_GATEWAY", "https://staging.sulci.io/")
+        b = make_backend()
+        assert b._base_url == "https://staging.sulci.io"
+
+    def test_kwarg_wins_over_env_var(self, monkeypatch):
+        """Explicit gateway_url= kwarg overrides SULCI_GATEWAY env var."""
+        monkeypatch.setenv("SULCI_GATEWAY", "https://staging.sulci.io")
+        b = make_backend(gateway_url="https://cache.acme.internal")
+        assert b._base_url == "https://cache.acme.internal"
+
+    def test_empty_env_var_falls_through_to_default(self, monkeypatch):
+        """Empty SULCI_GATEWAY string is treated as unset — falls to default.
+
+        Guards against subtle CI misconfigurations that export the var but
+        leave it empty (e.g., ``export SULCI_GATEWAY=$STAGING_URL`` when
+        ``STAGING_URL`` is unset)."""
+        monkeypatch.setenv("SULCI_GATEWAY", "")
+        b = make_backend()
+        assert b._base_url == "https://api.sulci.io"
+
+    def test_whitespace_env_var_falls_through_to_default(self, monkeypatch):
+        """Whitespace-only SULCI_GATEWAY is treated as unset."""
+        monkeypatch.setenv("SULCI_GATEWAY", "   ")
+        b = make_backend()
+        assert b._base_url == "https://api.sulci.io"
+
+    def test_env_var_read_at_instance_time_not_import_time(self, monkeypatch):
+        """Setting SULCI_GATEWAY AFTER `import sulci` still takes effect
+        on the next Cache() construction. Regression guard against a
+        future refactor that promotes the env-var read to module level."""
+        # Ensure it's unset at import time
+        monkeypatch.delenv("SULCI_GATEWAY", raising=False)
+        b_before = make_backend()
+        assert b_before._base_url == "https://api.sulci.io"
+
+        # Set it after import, verify next backend picks it up
+        monkeypatch.setenv("SULCI_GATEWAY", "https://runtime.example.com")
+        b_after = make_backend()
+        assert b_after._base_url == "https://runtime.example.com"
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # search()

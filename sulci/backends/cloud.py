@@ -51,6 +51,7 @@ deletion confirmation should check the gateway access logs or run
 """
 
 import logging
+import os
 
 import httpx
 from typing import Optional
@@ -66,6 +67,14 @@ class SulciCloudBackend:
 
     Preserves the exact same backend interface as all local backends
     so core.py needs zero changes to use it.
+
+    Base URL resolution — precedence chain, first match wins:
+        1. ``gateway_url=`` kwarg passed to ``__init__`` (VPC customers
+           per v0.3.4)
+        2. ``SULCI_GATEWAY`` environment variable (staging redirect —
+           matches the same env var honored by ``sulci`` module-level
+           telemetry pipeline since v0.5.5)
+        3. ``self.CLOUD_URL`` default: ``https://api.sulci.io``
 
     Failure policy:
         - search() timeout or error  → returns (None, 0.0)  — treated as cache miss
@@ -96,7 +105,29 @@ class SulciCloudBackend:
 
         self._api_key  = api_key
         self._timeout  = timeout
-        self._base_url = gateway_url.rstrip("/") if gateway_url else self.CLOUD_URL
+
+        # Base URL precedence — first match wins:
+        #   1. explicit ``gateway_url=`` kwarg (VPC customers per v0.3.4)
+        #   2. ``SULCI_GATEWAY`` env var — v0.5.5 shipped this for the
+        #      telemetry path in ``sulci/__init__.py``; this closes the
+        #      follow-up gap (``#TBD-2`` in the v0.5.5 changelog) where
+        #      cache traffic wasn't reading the same env var, creating a
+        #      split-brain state in staging (telemetry to staging URL,
+        #      cache traffic to prod).
+        #   3. ``self.CLOUD_URL`` default (production api.sulci.io)
+        #
+        # Env var is read at instance construction time, not import time —
+        # so ``os.environ["SULCI_GATEWAY"] = "..."; Cache(...)`` works
+        # without needing to set the var before ``import sulci``. Slightly
+        # more flexible than the module-level pattern used by telemetry;
+        # end-user visible effect is identical in the common case (env
+        # vars are set before any Python code runs).
+        if gateway_url:
+            self._base_url = gateway_url.rstrip("/")
+        else:
+            env_gateway = os.environ.get("SULCI_GATEWAY", "").strip()
+            self._base_url = env_gateway.rstrip("/") if env_gateway else self.CLOUD_URL
+
         self._client   = httpx.Client(
             base_url = self._base_url,
             headers  = {

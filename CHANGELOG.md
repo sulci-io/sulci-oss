@@ -8,7 +8,26 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **`SULCI_GATEWAY` env var now redirects cache traffic too** (closes the
+  v0.5.5 `#TBD-2` follow-up). Previously the env var only redirected
+  telemetry POSTs; `Cache(backend="sulci")` cache reads and writes
+  continued hitting `https://api.sulci.io` regardless of `SULCI_GATEWAY`,
+  creating a split-brain state in staging environments (telemetry to
+  staging URL, cache traffic to prod). `sulci/backends/cloud.py::__init__`
+  now honors the env var as the second rung in a 3-tier precedence chain:
+    1. explicit `gateway_url=` kwarg (VPC customers, unchanged)
+    2. `SULCI_GATEWAY` env var (new)
+    3. `https://api.sulci.io` default
+
+  Env var is read at instance construction time, not import time, so
+  `os.environ["SULCI_GATEWAY"] = "..."; Cache(...)` works without needing
+  to set the var before `import sulci`. Backward-compatible: explicit
+  `gateway_url=` still wins, so anyone currently passing the kwarg is
+  unaffected. Six new tests in `tests/test_cloud_backend.py::TestConstruction`
+  lock in the precedence chain, including a regression guard against a
+  future refactor that would promote the read to module level.
 
 ---
 
