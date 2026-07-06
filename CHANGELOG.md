@@ -8,6 +8,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+---
+
+## [0.7.4] — 2026-07-06 — SULCI_GATEWAY on cloud backend + CHANGELOG housekeeping
+
 ### Fixed
 
 - **`SULCI_GATEWAY` env var now redirects cache traffic too** (closes the
@@ -28,6 +34,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   unaffected. Six new tests in `tests/test_cloud_backend.py::TestConstruction`
   lock in the precedence chain, including a regression guard against a
   future refactor that would promote the read to module level.
+  (sulci-oss #106)
+
+### Docs
+
+- Restored missing `## [0.6.5]` and `## [0.5.2]` version headers to
+  CHANGELOG.md (sulci-oss #105). Both versions shipped and their bodies
+  were documented, but the `## [X.Y.Z]` headings had been dropped,
+  leaving content under wrong parent versions and breaking GitHub
+  anchor links `#065` / `#052`. Zero content changes — only headings
+  added, plus one missing `---` separator above 0.6.5.
 
 ---
 
