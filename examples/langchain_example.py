@@ -122,50 +122,62 @@ if _llm is None and _has_anthropic:
     except ImportError:
         print("  ✗ langchain-anthropic not installed — run: pip install langchain-anthropic")
 
+# ── Mock LLM — defined unconditionally so real-LLM calls can fall back to it ──
+# when a provider rejects the API key mid-run. Same fail-fast pattern as
+# anthropic_example.py and async_example.py (both introduced in v0.5.4 #20).
+from langchain_core.language_models.llms import BaseLLM
+from langchain_core.outputs import LLMResult
+from typing import Any, List, Optional
+
+
+def _mock_answer(prompt: str) -> str:
+    p = prompt.lower()
+    if "semantic" in p or "cache" in p:
+        return "Semantic caching stores LLM responses indexed by meaning, not exact text."
+    if "langchain" in p:
+        return "LangChain is a framework for building LLM-powered applications."
+    if "cap" in p or "distributed" in p:
+        return "The CAP theorem: a distributed system can guarantee only two of Consistency, Availability, Partition tolerance."
+    if "rest" in p or "api" in p:
+        return "A REST API uses HTTP methods (GET, POST, PUT, DELETE) to expose resources via URLs."
+    if "decorator" in p:
+        return "A Python decorator wraps a function to extend its behaviour without modifying it."
+    if "example" in p or "show" in p:
+        return "Example: cache = Cache(backend='sqlite'); cache.set('q', 'a')."
+    if "different" in p or "standard" in p or "traditional" in p:
+        return "Unlike exact-match caches, semantic caching matches by meaning — paraphrases hit."
+    if "benefit" in p or "advantage" in p:
+        return "Benefits: lower LLM costs, faster responses, higher hit rates in multi-turn conversations."
+    return f"[Mock] Answer to: {prompt[:60]}"
+
+
+class _MockLLM(BaseLLM):
+    @property
+    def _llm_type(self) -> str:
+        return "mock"
+
+    def _generate(
+        self,
+        prompts:     List[str],
+        stop:        Optional[List[str]] = None,
+        run_manager: Any = None,
+        **kwargs:    Any,
+    ) -> LLMResult:
+        return LLMResult(generations=[
+            [Generation(text=_mock_answer(p))] for p in prompts
+        ])
+
+
+# Sentinel — set to True the first time a real-LLM call is rejected as
+# unauthorised. All subsequent calls in this run route to the mock so the
+# rest of the demo still completes. Same shape as _key_state in
+# anthropic_example.py and async_example.py (both v0.5.4).
+_key_state = {"rejected": False}
+
+
 if _llm is None:
     _using_mock = True
     print("  → Using: mock LLM (no API key found — set OPENAI_API_KEY or ANTHROPIC_API_KEY)\n")
-
-    from langchain_core.language_models.llms import BaseLLM
-    from langchain_core.outputs import LLMResult
-    from typing import Any, List, Optional
-
-    class _MockLLM(BaseLLM):
-        @property
-        def _llm_type(self) -> str:
-            return "mock"
-
-        def _generate(
-            self,
-            prompts:     List[str],
-            stop:        Optional[List[str]] = None,
-            run_manager: Any = None,
-            **kwargs:    Any,
-        ) -> LLMResult:
-            responses = []
-            for prompt in prompts:
-                p = prompt.lower()
-                if "semantic" in p or "cache" in p:
-                    text = "Semantic caching stores LLM responses indexed by meaning, not exact text."
-                elif "langchain" in p:
-                    text = "LangChain is a framework for building LLM-powered applications."
-                elif "cap" in p or "distributed" in p:
-                    text = "The CAP theorem: a distributed system can guarantee only two of Consistency, Availability, Partition tolerance."
-                elif "rest" in p or "api" in p:
-                    text = "A REST API uses HTTP methods (GET, POST, PUT, DELETE) to expose resources via URLs."
-                elif "decorator" in p:
-                    text = "A Python decorator wraps a function to extend its behaviour without modifying it."
-                elif "example" in p or "show" in p:
-                    text = "Example: cache = Cache(backend='sqlite'); cache.set('q', 'a')."
-                elif "different" in p or "standard" in p or "traditional" in p:
-                    text = "Unlike exact-match caches, semantic caching matches by meaning — paraphrases hit."
-                elif "benefit" in p or "advantage" in p:
-                    text = "Benefits: lower LLM costs, faster responses, higher hit rates in multi-turn conversations."
-                else:
-                    text = f"[Mock] Answer to: {prompt[:60]}"
-                responses.append([Generation(text=text)])
-            return LLMResult(generations=responses)
-
     _llm = _MockLLM()
 
 
@@ -187,10 +199,29 @@ def _invoke(question: str, session: str, cache: ContextAwareSulciCache) -> dict:
                 "latency_ms": round(ms, 1), "cache_hit": True}
 
     # Cache miss — call LLM
-    if _using_mock:
-        response_text = _llm._generate([question]).generations[0][0].text
+    if _using_mock or _key_state["rejected"]:
+        response_text = _mock_answer(question)
     else:
-        response_text = _llm.invoke(question).content
+        try:
+            response_text = _llm.invoke(question).content
+        except Exception as exc:
+            # Match by class name so we don't hard-import openai / anthropic
+            # (they're optional deps here). Any real AuthenticationError from
+            # either provider surfaces with that exact class name.
+            name = type(exc).__name__
+            if name == "AuthenticationError":
+                provider = "OpenAI" if _has_openai else "Anthropic"
+                url      = ("https://platform.openai.com/api-keys"
+                            if _has_openai
+                            else "https://console.anthropic.com/settings/keys")
+                print()
+                print(f"⚠  {provider} rejected the API key (HTTP 401).")
+                print(f"   Verify your key at {url}")
+                print("   Falling back to mock LLM for the rest of this demo.\n")
+                _key_state["rejected"] = True
+                response_text = _mock_answer(question)
+            else:
+                raise
 
     ms = (time.perf_counter() - t0) * 1000
     cache.update(question, session, [Generation(text=response_text)])

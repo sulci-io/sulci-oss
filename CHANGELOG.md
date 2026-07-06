@@ -8,7 +8,75 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+
+- **`make smoke-fast` and `make checkin-fast` Makefile targets** — opt-in
+  CPU-forced smoke runs for macOS Apple Silicon (closes sulci-oss #48).
+  Sets `SENTENCE_TRANSFORMERS_DEVICE=cpu` + `CUDA_VISIBLE_DEVICES=""` +
+  `PYTORCH_ENABLE_MPS_FALLBACK=1` + `TOKENIZERS_PARALLELISM=false` +
+  `SULCI_SMOKE_FAST=1` before invoking each smoke script. Reduces total
+  smoke wall time on M2/M3 laptops from ~8 min to ~30 s by skipping the
+  MPS warm-up pass on each of the four smoke processes. Default
+  `make smoke` and `make checkin` are unchanged — CI continues to
+  exercise the accelerator path on macos-latest matrix rows. Full
+  rationale + alternatives-considered documented in
+  [`docs/architecture/adrs/0002-smoke-fast-cpu-mode.md`](docs/architecture/adrs/0002-smoke-fast-cpu-mode.md).
+  `make checkin` success message now points macOS contributors at
+  `make checkin-fast` explicitly.
+
+### Fixed
+
+- **`examples/langchain_example.py` and `examples/llamaindex_example.py`
+  now fail fast with a useful message when an API key is rejected** —
+  extends the pattern shipped in v0.5.4 (`anthropic_example.py` +
+  `async_example.py`, sulci-oss #20) to the two multi-provider integration
+  examples. Both now catch `AuthenticationError` (matched by class name to
+  avoid hard-importing `openai` / `anthropic` — they're optional deps),
+  print a one-line `"<Provider> rejected the API key (HTTP 401). Verify
+  your key at <URL>. Falling back to mock LLM for the rest of this demo."`
+  message on first rejection, flip an internal `_key_state["rejected"]`
+  sentinel, and route all subsequent LLM calls in the run to the deterministic
+  mock. Same sentinel + fallback shape as v0.5.4. The rest of the demo
+  still runs so the reader gets to see semantic hits, context blending, and
+  the summary stats even with a stale key. Previously a stale or wrong key
+  surfaced as a raw `HTTPStatusError` traceback mid-output.
+
+  In the LangChain example this involved refactoring the mock LLM out of
+  the `if _llm is None:` branch to top-level so the rejected-key path can
+  reach it too. In the LlamaIndex example, the mock class had to move to
+  top level and become abstract-method-complete (all `complete` / `chat` /
+  `stream_*` / `a*` variants) so `SulciCacheLLM(llm=_MockLLM(), ...)` can
+  wrap it as a genuine drop-in replacement for the real provider LLM
+  mid-run.
+
+### Docs
+
+- **`sulci.connect(prompt=False)` — explain the sustained default** rather
+  than promise the v0.6.0 flip that v0.5.3's CHANGELOG note pre-committed
+  to. Updates the docstring in `sulci/__init__.py::connect()` and adds a
+  clarifying note in the `[0.5.3]` CHANGELOG section. The full OSS-Connect
+  chain (SDK device-code client D12 in v0.5.3, gateway endpoints D4/D4.5/D5
+  in sulci-platform PR #51 shipped 2026-05-04, dashboard `/oss-connect`
+  page D7 in sulci-platform PR #67 shipped 2026-05-05, cutover 2026-05-08)
+  has been live end-to-end for two months. The default nonetheless stays
+  `prompt=False`, and this change makes that decision permanent and
+  auditable rather than a stale promise. Rationale for keeping opt-in as
+  the default:
+    1. **Non-interactive default is the safe default** for a library called
+       from LangChain / LlamaIndex agents, FastAPI request handlers,
+       LangGraph nodes, and CI runners — none of which have a tty or a
+       browser. `prompt=True` at import time would block those callers on a
+       15-minute device-code timeout with no visible cause.
+    2. **v0.7.0 shipped `Cache()` auto-connect** — passing an `api_key=` to
+       the `Cache` constructor now attaches telemetry automatically, which
+       is the ergonomic "make it easy" path users actually reach for. That
+       covers the goal the pre-committed flip was aimed at without
+       introducing a blocking browser prompt as an import-time side effect.
+    3. **Explicit `prompt=True` remains a first-class supported call** —
+       nothing changed there; users on interactive machines can still opt
+       in per call with one keyword argument.
+
+  No API or behavior change from v0.7.4; just documentation truth-in-labeling.
 
 ---
 
@@ -1139,6 +1207,18 @@ OSS-Connect availability is user error** — wait for the Sulci team's
 release announcement that the full chain is live (gateway + dashboard)
 before flipping it on. v0.6.0 will flip the default to `True` once the
 full chain ships end-to-end.
+
+> **Post-hoc note (added in `[Unreleased]` on 2026-07-06):** the flip
+> promised in the paragraph above did **not** happen in v0.6.0 or any
+> subsequent release. The full OSS-Connect chain _is_ live end-to-end
+> (SDK + gateway D4/D4.5/D5 + dashboard `/oss-connect`, cutover
+> 2026-05-08), but the default nonetheless remains `prompt=False`. See
+> the `## [Unreleased]` → Docs entry at the top of this file for the
+> rationale (non-interactive default is safe for LangChain / LlamaIndex /
+> FastAPI / CI callers; v0.7.0's `Cache()` auto-connect covers the
+> ergonomic path without a blocking browser prompt at import time).
+> Passing `prompt=True` explicitly remains fully supported.
+
 
 ### Added
 

@@ -10,6 +10,22 @@ export KMP_DUPLICATE_LIB_OK := TRUE
 
 PYTHON = python3
 
+# ── macOS smoke-fast env ──────────────────────────────────────────────────────
+# Force sentence-transformers onto CPU during smoke tests on Apple Silicon.
+# On macOS with MPS enabled, each of the four smoke scripts spins up a fresh
+# `SentenceTransformer("all-MiniLM-L6-v2")` which allocates ~200 MB of MPS
+# memory + a JIT warm-up pass; four back-to-back invocations serialise into
+# ~8 minutes of wall time on M2/M3 laptops (sulci-oss #48). CPU inference is
+# fast enough for smoke coverage (<10 s per script) and avoids the MPS
+# warm-up penalty entirely. `smoke-fast` opts in explicitly so nobody wonders
+# where the flag came from. See docs/architecture/adrs/0002-smoke-fast-cpu-mode.md.
+SMOKE_FAST_ENV = \
+	CUDA_VISIBLE_DEVICES="" \
+	SENTENCE_TRANSFORMERS_DEVICE=cpu \
+	PYTORCH_ENABLE_MPS_FALLBACK=1 \
+	TOKENIZERS_PARALLELISM=false \
+	SULCI_SMOKE_FAST=1
+
 # ── Smoke tests ───────────────────────────────────────────────────────────────
 
 ## Run all smoke tests (core + LangChain + LlamaIndex + AsyncCache)
@@ -25,6 +41,24 @@ smoke:
 	@echo ""
 	@echo "── AsyncCache smoke test ───────────────────────────────────────────"
 	$(PYTHON) smoke_test_async.py
+
+## Run all smoke tests forcing CPU inference (macOS 8-min MPS workaround)
+## Opt-in fast mode. Sets SENTENCE_TRANSFORMERS_DEVICE=cpu so MPS warm-up
+## is skipped entirely. ~30 s total on M2 laptops (vs ~8 min without).
+## See docs/architecture/adrs/0002-smoke-fast-cpu-mode.md for rationale.
+smoke-fast:
+	@echo "── smoke-fast: forcing CPU (SENTENCE_TRANSFORMERS_DEVICE=cpu) ──────"
+	@echo "── Core smoke test ─────────────────────────────────────────────────"
+	$(SMOKE_FAST_ENV) $(PYTHON) smoke_test.py
+	@echo ""
+	@echo "── LangChain integration smoke test ────────────────────────────────"
+	$(SMOKE_FAST_ENV) $(PYTHON) smoke_test_langchain.py
+	@echo ""
+	@echo "── LlamaIndex integration smoke test ───────────────────────────────"
+	$(SMOKE_FAST_ENV) $(PYTHON) smoke_test_llamaindex.py
+	@echo ""
+	@echo "── AsyncCache smoke test ───────────────────────────────────────────"
+	$(SMOKE_FAST_ENV) $(PYTHON) smoke_test_async.py
 
 ## Run core smoke test only (no LangChain required)
 smoke-core:
@@ -129,13 +163,24 @@ checkin: smoke test-per-file examples benchmark-verify
 	@echo ""
 	@echo "════════════════════════════════════════════════════════════════════"
 	@echo " ✓ checkin verification complete"
+	@echo "   On macOS?  Use 'make checkin-fast' to skip the 8-min MPS warmup"
+	@echo "   For provider-detection coverage too: make verify-integration-examples"
+	@echo "   For agent benchmark too:              make benchmark-agent"
+	@echo "════════════════════════════════════════════════════════════════════"
+
+## Same as checkin but uses smoke-fast (CPU) — recommended on macOS.
+## See docs/architecture/adrs/0002-smoke-fast-cpu-mode.md for rationale.
+checkin-fast: smoke-fast test-per-file examples benchmark-verify
+	@echo ""
+	@echo "════════════════════════════════════════════════════════════════════"
+	@echo " ✓ checkin-fast verification complete (CPU smoke mode)"
 	@echo "   For provider-detection coverage too: make verify-integration-examples"
 	@echo "   For agent benchmark too:              make benchmark-agent"
 	@echo "════════════════════════════════════════════════════════════════════"
 
 # ── PHONY ─────────────────────────────────────────────────────────────────────
 
-.PHONY: smoke smoke-core smoke-langchain smoke-llamaindex smoke-async \
+.PHONY: smoke smoke-fast smoke-core smoke-langchain smoke-llamaindex smoke-async \
         test test-async test-integrations test-all test-cov \
         test-per-file test-per-file-fast examples verify-integration-examples \
-        benchmark-verify benchmark-agent checkin verify
+        benchmark-verify benchmark-agent checkin checkin-fast verify

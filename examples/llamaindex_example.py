@@ -81,77 +81,88 @@ if _inner_llm is None and _has_anthropic:
     except ImportError:
         print("  ✗ llama-index-llms-anthropic not installed — run: pip install llama-index-llms-anthropic")
 
+# Defined unconditionally so real-LLM calls can fall back to it when a
+# provider rejects the API key mid-run (sibling followup to #20 from v0.5.4 —
+# anthropic_example.py and async_example.py already ship this pattern).
+_call_log: list = []   # external log — survives Pydantic's internal copy
+
+
+class _MockLLM(LLM):
+    """Deterministic mock — returns fixed answers for demo purposes."""
+
+    @property
+    def metadata(self) -> LLMMetadata:
+        return LLMMetadata(model_name="mock-llm")
+
+    def _respond(self, text: str) -> str:
+        _call_log.append(1)
+        t = text.lower()
+        if "semantic" in t or "cache" in t:
+            return "Semantic caching stores LLM responses indexed by meaning, not exact text."
+        if "llama" in t or "llamaindex" in t:
+            return "LlamaIndex is a data framework for building LLM-powered agents over your data."
+        if "cap" in t or "distributed" in t:
+            return "The CAP theorem states a distributed system can guarantee only two of: Consistency, Availability, Partition tolerance."
+        if "example" in t or "show" in t:
+            return "Here is a simple example: cache = Cache(backend='sqlite'); cache.set('q', 'answer')."
+        if "different" in t or "standard" in t or "traditional" in t:
+            return "Unlike standard caches that match exact strings, semantic caching matches by meaning."
+        if "benefit" in t or "advantage" in t:
+            return "Benefits: lower LLM costs, faster responses, and improved hit rates in multi-turn conversations."
+        return f"[Mock] Answer to: {text[:60]}"
+
+    def complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponse:
+        return CompletionResponse(text=self._respond(prompt))
+
+    def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+        last = str(messages[-1].content) if messages else ""
+        return ChatResponse(message=ChatMessage(
+            role=MessageRole.ASSISTANT, content=self._respond(last)
+        ))
+
+    def stream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponseGen:
+        result = self.complete(prompt, formatted, **kwargs)
+        def gen():
+            yield CompletionResponse(text=result.text, delta=result.text)
+        return gen()
+
+    def stream_chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponseGen:
+        result = self.chat(messages, **kwargs)
+        def gen():
+            yield ChatResponse(message=result.message, delta=result.message.content or "")
+        return gen()
+
+    async def acomplete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponse:
+        return self.complete(prompt, formatted, **kwargs)
+
+    async def achat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
+        return self.chat(messages, **kwargs)
+
+    async def astream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponseAsyncGen:
+        result = self.complete(prompt, formatted, **kwargs)
+        async def gen():
+            yield CompletionResponse(text=result.text, delta=result.text)
+        return gen()
+
+    async def astream_chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponseAsyncGen:
+        result = self.chat(messages, **kwargs)
+        async def gen():
+            yield ChatResponse(message=result.message, delta=result.message.content or "")
+        return gen()
+
+
 # 3. Mock fallback
 if _inner_llm is None:
     _using_mock = True
     print("  → Using: mock LLM (no API key found — set OPENAI_API_KEY or ANTHROPIC_API_KEY)\n")
-
-    _call_log: list = []   # external log — survives Pydantic's internal copy
-
-    class _MockLLM(LLM):
-        """Deterministic mock — returns fixed answers for demo purposes."""
-
-        @property
-        def metadata(self) -> LLMMetadata:
-            return LLMMetadata(model_name="mock-llm")
-
-        def _respond(self, text: str) -> str:
-            _call_log.append(1)
-            t = text.lower()
-            if "semantic" in t or "cache" in t:
-                return "Semantic caching stores LLM responses indexed by meaning, not exact text."
-            if "llama" in t or "llamaindex" in t:
-                return "LlamaIndex is a data framework for building LLM-powered agents over your data."
-            if "cap" in t or "distributed" in t:
-                return "The CAP theorem states a distributed system can guarantee only two of: Consistency, Availability, Partition tolerance."
-            if "example" in t or "show" in t:
-                return "Here is a simple example: cache = Cache(backend='sqlite'); cache.set('q', 'answer')."
-            if "different" in t or "standard" in t or "traditional" in t:
-                return "Unlike standard caches that match exact strings, semantic caching matches by meaning."
-            if "benefit" in t or "advantage" in t:
-                return "Benefits: lower LLM costs, faster responses, and improved hit rates in multi-turn conversations."
-            return f"[Mock] Answer to: {text[:60]}"
-
-        def complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponse:
-            return CompletionResponse(text=self._respond(prompt))
-
-        def chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
-            last = str(messages[-1].content) if messages else ""
-            return ChatResponse(message=ChatMessage(
-                role=MessageRole.ASSISTANT, content=self._respond(last)
-            ))
-
-        def stream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponseGen:
-            result = self.complete(prompt, formatted, **kwargs)
-            def gen():
-                yield CompletionResponse(text=result.text, delta=result.text)
-            return gen()
-
-        def stream_chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponseGen:
-            result = self.chat(messages, **kwargs)
-            def gen():
-                yield ChatResponse(message=result.message, delta=result.message.content or "")
-            return gen()
-
-        async def acomplete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponse:
-            return self.complete(prompt, formatted, **kwargs)
-
-        async def achat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponse:
-            return self.chat(messages, **kwargs)
-
-        async def astream_complete(self, prompt: str, formatted: bool = False, **kwargs: Any) -> CompletionResponseAsyncGen:
-            result = self.complete(prompt, formatted, **kwargs)
-            async def gen():
-                yield CompletionResponse(text=result.text, delta=result.text)
-            return gen()
-
-        async def astream_chat(self, messages: Sequence[ChatMessage], **kwargs: Any) -> ChatResponseAsyncGen:
-            result = self.chat(messages, **kwargs)
-            async def gen():
-                yield ChatResponse(message=result.message, delta=result.message.content or "")
-            return gen()
-
     _inner_llm = _MockLLM()
+
+
+# Sentinel — set to True the first time a real-LLM call is rejected as
+# unauthorised. All subsequent calls in this run route to the mock so the
+# rest of the demo still completes. Same shape as _key_state in
+# anthropic_example.py and async_example.py (both v0.5.4).
+_key_state = {"rejected": False}
 
 
 # ── Wrap with SulciCacheLLM and register globally ─────────────────────────────
@@ -197,7 +208,42 @@ class Chat:
         is_hit = cached_resp is not None
 
         t0     = time.perf_counter()
-        result = Settings.llm.complete(question, session_id=self.session_id)
+        try:
+            result = Settings.llm.complete(question, session_id=self.session_id)
+        except Exception as exc:
+            # Match by class name so we don't hard-import openai / anthropic
+            # (they're optional deps here). Any real AuthenticationError from
+            # either provider surfaces with that exact class name.
+            name = type(exc).__name__
+            if name == "AuthenticationError" and not _key_state["rejected"]:
+                provider = "OpenAI" if _has_openai else "Anthropic"
+                url      = ("https://platform.openai.com/api-keys"
+                            if _has_openai
+                            else "https://console.anthropic.com/settings/keys")
+                print()
+                print(f"⚠  {provider} rejected the API key (HTTP 401).")
+                print(f"   Verify your key at {url}")
+                print("   Falling back to mock LLM for the rest of this demo.\n")
+                _key_state["rejected"] = True
+                # Rebuild Settings.llm around the mock inner — keeps the
+                # same SulciCacheLLM instance's cache/session state intact
+                # for readers who inspect it after this point.
+                Settings.llm = SulciCacheLLM(
+                    llm            = _MockLLM(),
+                    backend        = "sqlite",
+                    db_path        = llm._sulci_kwargs.get("db_path", ""),
+                    threshold      = 0.90,
+                    context_window = 4,
+                    query_weight   = 0.70,
+                    context_decay  = 0.60,
+                    session_ttl    = 3600,
+                )
+                # Update our local reference so self._cache still tracks
+                # the active cache instance.
+                self._cache = Settings.llm._get_cache()
+                result = Settings.llm.complete(question, session_id=self.session_id)
+            else:
+                raise
         ms     = (time.perf_counter() - t0) * 1000
 
         if is_hit:

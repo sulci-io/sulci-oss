@@ -160,8 +160,27 @@ def connect(
        Sulci team's release announcement that the full chain is
        live (gateway + dashboard) before flipping it on.
 
-       v0.6.0 will flip the default to ``prompt=True`` once the
-       full chain is shipped end-to-end.
+    .. note::
+       As of 2026-07-06 the full OSS-Connect chain (SDK + gateway
+       D4/D4.5/D5 + dashboard ``/oss-connect``) has been live
+       end-to-end for two months (cutover 2026-05-08). The default
+       nonetheless remains ``prompt=False``, and this is now a
+       sustained decision rather than a stale promise:
+
+         1. Non-interactive default is safe for library callers that
+            have no tty / browser (LangChain / LlamaIndex agents,
+            FastAPI request handlers, LangGraph nodes, CI runners).
+            ``prompt=True`` at import time would block those callers
+            on a 15-minute device-code timeout with no visible cause.
+         2. v0.7.0 shipped ``Cache()`` auto-connect — passing an
+            ``api_key=`` to the ``Cache`` constructor attaches
+            telemetry automatically, which is the ergonomic
+            "make it easy" path users actually reach for. That
+            covers the goal without a blocking browser prompt as
+            an import-time side effect.
+         3. Explicit ``prompt=True`` remains a first-class supported
+            call — users on interactive machines can still opt in
+            per call with one keyword argument.
 
     Parameters
     ----------
@@ -171,11 +190,12 @@ def connect(
     telemetry : bool, default True
         Set to False to register your key without enabling telemetry.
         Useful for the sulci backend driver without usage reporting.
-    prompt : bool, default False (will flip to True in v0.6.0)
+    prompt : bool, default False (sustained — see note above)
         When True, if no api_key is found through args/env/config,
-        run the browser-based device-code flow to obtain one. The
-        v0.5.3 default is False because OSS-Connect's gateway + dashboard
-        pieces may not yet be deployed; see the warning above.
+        run the browser-based device-code flow to obtain one. Safe to
+        use on interactive machines; not recommended in library-facing
+        code paths (agents, request handlers, CI runners) where a
+        15-minute blocking prompt with no tty is a footgun.
 
     Examples
     --------
