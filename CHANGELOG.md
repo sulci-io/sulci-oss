@@ -275,6 +275,10 @@ conversations.
 
 
 
+---
+
+## [0.6.5] — 2026-05-13 — Resolution-path logging in `connect()` + `~/.sulci/config` age-gate (90 days)
+
 > Patch release closing the two sulci-oss follow-up issues filed during
 > the v0.6.x close-out (#79, #80). Both target the same surface — the
 > four-rung api_key resolution chain in `sulci.connect()` — and the same
@@ -1219,6 +1223,8 @@ anywhere in the shipped code. Full chronology is in
 `sulci-platform/docs/architecture/adrs/0014-restore-oss-connect-device-code.md`.
 
 ---
+
+## [0.5.2] — 2026-04-30 — Connected-OSS telemetry wave 1: fingerprint + `cache.set` aggregation + opt-in nudge
 
 Connected-OSS telemetry wave 1: per-deployment fingerprinting, `cache.set` aggregation,
 opt-in nudge. Pairs with sulci-platform's already-shipped `/v1/telemetry`,
