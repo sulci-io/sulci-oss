@@ -566,6 +566,7 @@ What's new at the SDK level:
 - **6 new regression tests** in `tests/test_telemetry_gateway_override.py` covering default URL, env override, trailing-slash normalization, localhost-for-local-dev, and end-to-end verification that `_post()` honors the resolved URL.
 
 - **Out-of-scope follow-up.** `sulci/backends/cloud.py` (the `Cache(backend="sulci")` HTTP backend) still hardcodes `CLOUD_URL = "https://api.sulci.io"` and only honors a programmatic `gateway_url=` kwarg, not `SULCI_GATEWAY`. Tracked separately for a future minor — `Cache(backend="sulci")` users today should pass `gateway_url=os.environ["SULCI_GATEWAY"]` explicitly if they want symmetry.
+  > **Closed** in the [Unreleased] section — `SulciCloudBackend.__init__` now honors `SULCI_GATEWAY` as the second rung in its precedence chain (kwarg → env var → default). The `os.environ["SULCI_GATEWAY"]` workaround above is no longer needed.
 
 ### v0.5.6 additions
 
