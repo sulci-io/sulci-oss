@@ -8,7 +8,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+*Nothing yet.*
+
+---
+
+## [0.8.0] — 2026-07-12
+
 ### Added
+
+- **`Cache.get(threshold=...)` — a per-call similarity threshold** (#34).
+  `None` (the default) uses the instance value, so **every existing caller is
+  unaffected**. Also forwarded by `Cache.cached_call()`, `AsyncCache.aget()` and
+  `AsyncCache.acached_call()`.
+
+  Closes sulci-platform **#44** (option a), sulci-platform **#59** (option 3),
+  and sulci-platform **ADR 0022 Open-7** — three issues, one kwarg.
 
 - **`make smoke-fast` and `make checkin-fast` Makefile targets** — opt-in
   CPU-forced smoke runs for macOS Apple Silicon (closes sulci-oss #48).
@@ -25,6 +39,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `make checkin-fast` explicitly.
 
 ### Fixed
+
+- **The emitted `CacheEvent` can no longer disagree with the answer the caller
+  received.** This is the reason #34 exists, and it is a correctness fix, not an
+  ergonomic one.
+
+  Before this release, a caller who wanted a threshold other than the instance
+  value had exactly one option: let `Cache` return a hit at *its* threshold, then
+  throw the hit away. sulci-platform's gateway did precisely that. The effect:
+
+  ```
+  the LIBRARY decided CacheEvent.cache_hit   (at the instance threshold, 0.65)
+  the CALLER  decided what the customer saw  (at the effective threshold, 0.85)
+  ```
+
+  Two numbers, two decisions. For similarity in `[0.65, 0.85)` the library
+  emitted **`event_type="hit"`** while the customer received a **miss** — so
+  Stripe meter events, `usage_daily` rollups, dashboard hit rates and per-entry
+  hit counters all recorded a hit that never happened. Present since v0.6.0.
+
+  The library now filters at the effective threshold itself, so the event is
+  derived from the same decision that produced the answer. The gateway's
+  post-filter is deleted.
+
+- **A threshold below the instance value is now reachable.** Previously the ANN
+  search discarded those candidates before any caller could see them, so a
+  per-call threshold *lower* than the instance value was not merely unhonoured —
+  it was unreachable. It now reaches the backend unchanged.
 
 - **`examples/langchain_example.py` and `examples/llamaindex_example.py`
   now fail fast with a useful message when an API key is rejected** —
@@ -77,6 +118,36 @@ Versioning follows [Semantic Versioning](https://semver.org/).
        in per call with one keyword argument.
 
   No API or behavior change from v0.7.4; just documentation truth-in-labeling.
+
+### Notes
+
+- **The public `Backend` protocol is UNCHANGED.**
+  `Backend.search(embedding, threshold, ...)` has accepted a per-call threshold
+  since v0.4.0 — `Cache` simply never passed anything but `self.threshold` to it.
+  No custom backend needs updating; the conformance suite is untouched. This is
+  why the fix is a minor, not a major.
+
+- **Validation:** a threshold outside `[0.0, 1.0]` raises `ValueError`. It can
+  never be satisfied (`>1`) or never be missed (`<0`), so it is a programming
+  error, not a runtime condition — and clamping would hide the bug rather than
+  surface it. Safe to raise: the value comes from the caller's own code, never
+  from data.
+
+- **`0.0` is an override, not an inherit.** The resolution uses `is None`, never
+  `or` — a caller asking to match anything must not silently get the instance
+  default.
+
+- **Coordinated release:** requires `sulci-gateway` ≥ 0.8.0, which pins
+  `sulci>=0.8.0` as a hard floor. **Publish this to PyPI *before* deploying the
+  gateway.** On an older library `Cache.get(threshold=...)` raises `TypeError`,
+  the gateway's fail-soft `except` catches it, and every request silently
+  degrades to a cache miss — the service stays up and the hit rate goes to zero.
+
+### Known gap (unchanged by this release)
+
+- `AsyncCache.aget()` still does not accept `tenant_id` or `plan`, though
+  `Cache.get()` has since v0.4.0 / v0.5.6. The docs claim `AsyncCache` mirrors
+  every `Cache` method; it does not. Filed separately — out of scope here.
 
 ---
 

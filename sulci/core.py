@@ -489,10 +489,11 @@ class Cache:
         self,
         query:      str,
         *,
-        tenant_id:  Optional[str] = None,
-        user_id:    Optional[str] = None,
-        session_id: Optional[str] = None,
-        plan:       Optional[str] = None,
+        threshold:  Optional[float] = None,
+        tenant_id:  Optional[str]   = None,
+        user_id:    Optional[str]   = None,
+        session_id: Optional[str]   = None,
+        plan:       Optional[str]   = None,
     ) -> tuple:
         """
         Check cache for a semantically similar query.
@@ -503,6 +504,28 @@ class Cache:
 
         Args:
             query:      The query string to look up.
+            threshold:  Optional per-call minimum cosine similarity, overriding
+                        the instance-wide ``threshold`` set at construction.
+                        ``None`` (default) means "use the instance value" — so
+                        every existing caller is unaffected.
+
+                        v0.8.0 (sulci-oss #34). This closes a real correctness
+                        gap, not just an ergonomic one. Before it existed, a
+                        caller who wanted a different threshold had only one
+                        option: let the Cache return a hit at ITS threshold and
+                        then discard it. That is what sulci-platform's gateway
+                        did — and it meant the LIBRARY decided
+                        ``CacheEvent.cache_hit`` (at the instance threshold)
+                        while the CALLER decided what the customer saw (at the
+                        effective threshold). Similarity in
+                        ``[instance, effective)`` emitted a **hit** event while
+                        returning a **miss**. Billing, usage rollups, and
+                        hit-rate dashboards all counted a hit that never
+                        happened.
+
+                        The event and the answer are now decided by the same
+                        number, in one place. See ADR 0022 Open-7
+                        (sulci-platform), and issues #44 / #59 there.
             tenant_id:  Optional tenant identifier for multi-tenant isolation.
             user_id:    Optional user identifier for personalization.
             session_id: Optional session identifier for context-aware lookup.
@@ -519,6 +542,26 @@ class Cache:
         _t0 = _time.time()
         self._query_count += 1
         matched_query: Optional[str] = None
+
+        # Resolve the effective threshold ONCE, and use it EVERYWHERE below:
+        # the backend search, the telemetry payload, and — critically — the
+        # CacheEvent, whose `event_type` is derived from whether the backend
+        # returned anything. One number, one decision point.
+        #
+        # `is None`, never `or`: 0.0 is a legitimate threshold (match anything)
+        # and must not be silently replaced by the instance default.
+        eff_threshold = self.threshold if threshold is None else float(threshold)
+        if not 0.0 <= eff_threshold <= 1.0:
+            # A cosine similarity threshold outside [0, 1] is a programming
+            # error, not a runtime condition — it can never be satisfied (>1) or
+            # can never be missed (<0), and silently clamping would hide the bug
+            # rather than surface it. Raising here is safe: the value comes from
+            # the caller's own code, so it fails immediately in development,
+            # never in response to bad data at runtime.
+            raise ValueError(
+                f"threshold must be between 0.0 and 1.0, got {eff_threshold!r}"
+            )
+
         if self._is_remote_transport:
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.
             # The gateway-side library does the embedding, ANN search, and
@@ -527,7 +570,7 @@ class Cache:
             # self._embedder is NOT called; self._context_vec is NOT called.
             resp, sim, depth = self._backend.remote_get(
                 query      = query,
-                threshold  = self.threshold,
+                threshold  = eff_threshold,
                 user_id    = user_id if self.personalized else None,
                 session_id = session_id,
             )
@@ -542,7 +585,7 @@ class Cache:
             if hasattr(self._backend, "search_match"):
                 resp, sim, matched_query = self._backend.search_match(
                     embedding = vec,
-                    threshold = self.threshold,
+                    threshold = eff_threshold,
                     tenant_id = tenant_id,
                     user_id   = user_id if self.personalized else None,
                     now       = time.time(),
@@ -550,7 +593,7 @@ class Cache:
             else:
                 resp, sim  = self._backend.search(
                     embedding = vec,
-                    threshold = self.threshold,
+                    threshold = eff_threshold,
                     tenant_id = tenant_id,
                     user_id   = user_id if self.personalized else None,
                     now       = time.time(),
@@ -582,7 +625,11 @@ class Cache:
                     _sulci._emit("cache.get", {
                             "backend":         self.backend,
                             "embedding_model": self.embedding_model,
-                            "threshold":       self.threshold,
+                            # The threshold actually applied to THIS call, not
+                            # the instance default — otherwise a per-call
+                            # override is invisible in telemetry and the hit
+                            # rate looks inexplicable.
+                            "threshold":       eff_threshold,
                             "context_window":  self.context_window,
                             "hits":       1 if resp is not None else 0,
                             "misses":     0 if resp is not None else 1,
@@ -717,6 +764,7 @@ class Cache:
         query:         str,
         llm_fn:        Callable,
         *,
+        threshold:     Optional[float] = None,
         tenant_id:     Optional[str]   = None,
         user_id:       Optional[str]   = None,
         session_id:    Optional[str]   = None,
@@ -758,7 +806,17 @@ class Cache:
             }
         """
         t0              = time.perf_counter()
-        hit, sim, depth = self.get(query, tenant_id=tenant_id, user_id=user_id, session_id=session_id, plan=plan)
+        # v0.8.0 (#34) — forward the per-call threshold. cached_call() is the
+        # ergonomic front door; a kwarg it silently swallows is a kwarg that
+        # doesn't exist to most users.
+        hit, sim, depth = self.get(
+            query,
+            threshold  = threshold,
+            tenant_id  = tenant_id,
+            user_id    = user_id,
+            session_id = session_id,
+            plan       = plan,
+        )
         ms              = (time.perf_counter() - t0) * 1000
 
         if hit is not None:
