@@ -102,9 +102,16 @@ class AsyncCache:
         query:      str,
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
+        threshold:  Optional[float] = None,
     ) -> tuple:
         """
         Async semantic cache lookup.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Per-call minimum cosine similarity, overriding the instance value.
+            ``None`` (default) uses the instance threshold. v0.8.0 (#34).
 
         Returns
         -------
@@ -115,6 +122,7 @@ class AsyncCache:
         """
         return await asyncio.to_thread(
             self._cache.get, query,
+            threshold  = threshold,
             user_id    = user_id,
             session_id = session_id,
         )
@@ -142,9 +150,16 @@ class AsyncCache:
         session_id:    Optional[str]   = None,
         user_id:       Optional[str]   = None,
         cost_per_call: float           = 0.005,
+        threshold:     Optional[float] = None,
     ) -> dict:
         """
         Async drop-in LLM wrapper — checks cache first, calls llm_fn on miss.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Per-call minimum cosine similarity, overriding the instance value.
+            ``None`` (default) uses the instance threshold. v0.8.0 (#34).
 
         Returns
         -------
@@ -158,6 +173,7 @@ class AsyncCache:
         """
         return await asyncio.to_thread(
             self._cache.cached_call, query, llm_fn,
+            threshold     = threshold,
             session_id    = session_id,
             user_id       = user_id,
             cost_per_call = cost_per_call,
