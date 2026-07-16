@@ -7,7 +7,8 @@ smoke_test_async.py
 ===================
 End-to-end smoke test for sulci.AsyncCache.
 
-Covers: create → aset → aget hit → aget miss → acached_call → astats
+Covers: create → aset → aget hit → aget miss → acached_call → astats →
+        aclear → sync passthrough → partition kwargs (tenant_id / plan)
 
 Run:
     python smoke_test_async.py
@@ -138,6 +139,33 @@ async def main() -> None:
     _check("sync set/get works on AsyncCache", resp is not None)
     s3 = cache.stats()
     _check("sync stats() returns dict", isinstance(s3, dict))
+
+    # ── 10. partition kwargs — tenant_id / plan / metadata (v0.8.1, #108) ─────
+    # AsyncCache now mirrors Cache's partition kwargs. Exercise the real async
+    # path end-to-end (not just signatures): a tenant-scoped round-trip plus
+    # the plan tier and metadata, then the same kwargs on the sync passthrough.
+    print("\nStep 10 — partition kwargs (tenant_id / plan / metadata)")
+    await cache.aset(
+        "What is multi-tenancy?",
+        "Multi-tenancy isolates each customer's data within shared infra.",
+        tenant_id = "acme",
+        plan      = "pro",
+        metadata  = {"source": "kb"},
+    )
+    resp, sim, _ = await cache.aget("What is multi-tenancy?", tenant_id="acme", plan="pro")
+    _check("aset/aget accept tenant_id + plan (+ metadata)", resp is not None)
+
+    r = await cache.acached_call(
+        "What is a tenant?",
+        lambda q: "A tenant is an isolated customer partition.",
+        tenant_id = "acme",
+        plan      = "pro",
+    )
+    _check("acached_call accepts tenant_id + plan", r["source"] in ("cache", "llm"))
+
+    cache.set("edge query", "edge answer", tenant_id="acme", plan="pro", metadata={"k": "v"})
+    resp, _, _ = cache.get("edge query", tenant_id="acme", plan="pro")
+    _check("sync passthrough accepts tenant_id + plan", resp is not None)
 
     # ── Done ──────────────────────────────────────────────────────────────────
     print()

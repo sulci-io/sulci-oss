@@ -4,10 +4,11 @@
 """
 tests/test_async_cache.py
 =========================
-Test suite for sulci.AsyncCache — 25 tests, zero API keys required.
+Test suite for sulci.AsyncCache — 35 tests, zero API keys required.
 
 All tests use the SQLite backend (in-memory temp dir) and the MiniLM
-embedding model.  No network calls are made.
+embedding model.  No network calls are made. The Qdrant tenant-isolation
+class skips cleanly when qdrant-client is not installed.
 
 Test classes
 ------------
@@ -19,6 +20,14 @@ TestContextMethods      ( 4) — aget_context, aclear_context, acontext_summary,
                                session isolation
 TestStats               ( 3) — astats dict shape, aclear resets stats, repr
 TestSyncPassthrough     ( 2) — sync get/set still work on AsyncCache instance
+TestAsyncPartitionKwargs( 5) — tenant_id/plan/metadata forwarded onto the
+                               emitted CacheEvent through aget/aset/acached_call
+                               (v0.8.1, sulci-oss #108); back-compat None
+TestAsyncTenantIsolation( 2) — hard cross-tenant isolation through aget on
+                               Qdrant (skips without qdrant-client)
+TestAsyncSyncParity     ( 3) — signature guard: async + sync-passthrough
+                               methods accept the same partition kwargs as
+                               their sync Cache counterparts (v0.8.1)
 """
 
 import os
@@ -286,3 +295,186 @@ class TestSyncPassthrough:
         s = tmp_cache.stats()
         assert isinstance(s, dict)
         assert "hits" in s
+
+
+# ── TestAsyncPartitionKwargs ─────────────────────────────────────────────────
+# v0.8.1 — sulci-oss #108: AsyncCache parity for tenant_id + plan (+ metadata).
+#
+# The async methods historically dropped tenant_id (Cache.get/set/cached_call
+# since v0.4.0) and plan (since v0.5.6). These tests pin that the async path
+# now forwards them so they land on the emitted CacheEvent — the exact async
+# mirror of tests/test_core.py::TestCacheEventPlan. A recording sink captures
+# the real dataclass round-trip (not a mock), matching what RedisStreamSink /
+# TelemetrySink would see downstream.
+
+
+class _RecordingSink:
+    """Captures every CacheEvent emitted to it (mirrors test_core._RecordingSink)."""
+    def __init__(self):
+        self.events = []
+
+    def emit(self, event):
+        self.events.append(event)
+
+    def flush(self):
+        pass
+
+
+@pytest.fixture
+def recording_async_cache(tmp_path):
+    """Fresh SQLite-backed AsyncCache with a recording sink wired in."""
+    sink = _RecordingSink()
+    cache = AsyncCache(
+        backend         = "sqlite",
+        threshold       = 0.85,
+        embedding_model = "minilm",
+        db_path         = str(tmp_path / "rec_db"),
+        event_sink      = sink,
+    )
+    return cache, sink
+
+
+class TestAsyncPartitionKwargs:
+
+    @pytest.mark.asyncio
+    async def test_aget_passes_tenant_id_and_plan_to_event(self, recording_async_cache):
+        cache, sink = recording_async_cache
+        await cache.aget("any query", tenant_id="t-1", plan="pro")
+        assert len(sink.events) == 1
+        assert sink.events[0].tenant_id == "t-1"
+        assert sink.events[0].plan == "pro"
+        assert sink.events[0].event_type == "miss"   # nothing stored yet
+
+    @pytest.mark.asyncio
+    async def test_aset_passes_tenant_id_plan_metadata_to_event(self, recording_async_cache):
+        cache, sink = recording_async_cache
+        await cache.aset("q", "r", tenant_id="t-1", plan="business", metadata={"k": "v"})
+        assert len(sink.events) == 1
+        assert sink.events[0].tenant_id == "t-1"
+        assert sink.events[0].plan == "business"
+        assert sink.events[0].event_type == "set"
+
+    @pytest.mark.asyncio
+    async def test_acached_call_threads_plan_through_get_and_set(self, recording_async_cache):
+        """acached_call delegates to .get() (miss) then .set(); both events
+        must carry the plan, otherwise gateway-style async callers would leak
+        plan=None into the stream on the miss-then-set path."""
+        cache, sink = recording_async_cache
+
+        def stub_llm(query, **_):
+            return "fake llm response"
+
+        await cache.acached_call("fresh query", stub_llm, tenant_id="t-1", plan="enterprise")
+        assert len(sink.events) == 2
+        assert all(e.plan == "enterprise" for e in sink.events), \
+            f"acached_call leaked plan: {[e.plan for e in sink.events]}"
+        assert all(e.tenant_id == "t-1" for e in sink.events)
+
+    @pytest.mark.asyncio
+    async def test_aget_without_plan_emits_none(self, recording_async_cache):
+        """Back-compat: pre-0.8.1 async callers (no plan) still see plan=None."""
+        cache, sink = recording_async_cache
+        await cache.aget("any query", tenant_id="t-1")
+        assert len(sink.events) == 1
+        assert sink.events[0].plan is None
+
+    @pytest.mark.asyncio
+    async def test_aset_without_plan_emits_none(self, recording_async_cache):
+        cache, sink = recording_async_cache
+        await cache.aset("q", "r", tenant_id="t-1")
+        assert sink.events[-1].plan is None
+
+
+# ── TestAsyncTenantIsolation ─────────────────────────────────────────────────
+# v0.8.1 — the *hard boundary* proof through the async path. SQLite treats
+# tenant_id as a label (ENFORCES_TENANT_ISOLATION = False), so isolation can
+# only be proven on a backend that enforces it. QdrantBackend does, via a
+# payload Filter. Skips cleanly when qdrant-client is not installed, exactly
+# like tests/test_qdrant_tenant_isolation.py.
+
+
+class TestAsyncTenantIsolation:
+
+    @pytest.fixture
+    def qdrant_async_cache(self, tmp_path):
+        pytest.importorskip("qdrant_client")
+        return AsyncCache(
+            backend         = "qdrant",
+            embedding_model = "minilm",
+            threshold       = 0.85,
+            db_path         = str(tmp_path / "qdrant_async"),
+        )
+
+    @pytest.mark.asyncio
+    async def test_cross_tenant_entry_not_returned_through_aget(self, qdrant_async_cache):
+        """An entry stored under tenant A must NOT be returned to tenant B
+        through aget, even though the query text (and thus similarity) is
+        identical — similarity must never bypass isolation."""
+        cache = qdrant_async_cache
+        q = "What is our refund policy?"
+        await cache.aset(q, "Tenant-A refund policy: 30 days.", tenant_id="acme")
+
+        # Same query, different tenant → hard miss despite ~1.0 similarity.
+        resp, sim, _ = await cache.aget(q, tenant_id="globex")
+        assert resp is None, "tenant globex must not see acme's cached entry"
+
+    @pytest.mark.asyncio
+    async def test_same_tenant_still_hits_through_aget(self, qdrant_async_cache):
+        """Control: the owning tenant still gets its own entry back."""
+        cache = qdrant_async_cache
+        q = "What is our refund policy?"
+        await cache.aset(q, "Tenant-A refund policy: 30 days.", tenant_id="acme")
+
+        resp, sim, _ = await cache.aget(q, tenant_id="acme")
+        assert resp == "Tenant-A refund policy: 30 days."
+
+
+# ── TestAsyncSyncParity ──────────────────────────────────────────────────────
+# v0.8.1 — a signature guard so the parity gap can't silently reopen. Mirrors
+# tests/test_core.py::TestCacheEventPlan::test_plan_is_keyword_only_on_get_set_cached_call
+# but asserts the ASYNC surface (and the sync passthrough on AsyncCache) carry
+# the same partition kwargs as their sync Cache counterparts.
+
+
+class TestAsyncSyncParity:
+
+    def test_async_methods_are_keyword_only_partition_kwargs(self):
+        import inspect
+        for method_name in ("aget", "aset", "acached_call"):
+            sig = inspect.signature(getattr(AsyncCache, method_name))
+            for kw in ("tenant_id", "plan"):
+                assert kw in sig.parameters, f"AsyncCache.{method_name} missing {kw}"
+                p = sig.parameters[kw]
+                assert p.kind == inspect.Parameter.KEYWORD_ONLY, (
+                    f"AsyncCache.{method_name}.{kw} must be KEYWORD_ONLY, got {p.kind}"
+                )
+                assert p.default is None, (
+                    f"AsyncCache.{method_name}.{kw} must default to None, got {p.default!r}"
+                )
+        # metadata mirrors Cache.set (which has it; Cache.get/cached_call do not).
+        p = inspect.signature(AsyncCache.aset).parameters["metadata"]
+        assert p.kind == inspect.Parameter.KEYWORD_ONLY and p.default is None
+
+    def test_sync_passthrough_mirrors_partition_kwargs(self):
+        import inspect
+        for method_name in ("get", "set", "cached_call"):
+            sig = inspect.signature(getattr(AsyncCache, method_name))
+            for kw in ("tenant_id", "plan"):
+                assert kw in sig.parameters, f"AsyncCache.{method_name} (sync) missing {kw}"
+                assert sig.parameters[kw].kind == inspect.Parameter.KEYWORD_ONLY
+
+    def test_async_partition_kwargs_match_sync_cache(self):
+        """Every partition kwarg the sync Cache method exposes must also be
+        accepted by its a-prefixed async twin. This is the introspective form
+        of "AsyncCache mirrors every Cache method"."""
+        import inspect
+        from sulci.core import Cache
+        partition = {"tenant_id", "plan", "metadata"}
+        pairs = {"aget": "get", "aset": "set", "acached_call": "cached_call"}
+        for async_name, sync_name in pairs.items():
+            sync_p = set(inspect.signature(getattr(Cache, sync_name)).parameters) & partition
+            async_p = set(inspect.signature(getattr(AsyncCache, async_name)).parameters) & partition
+            missing = sync_p - async_p
+            assert not missing, (
+                f"AsyncCache.{async_name} is missing {missing} that Cache.{sync_name} accepts"
+            )

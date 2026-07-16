@@ -12,6 +12,54 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.1] — 2026-07-16 — AsyncCache partition-kwarg parity (`tenant_id` + `plan`)
+
+### Fixed
+
+- **`AsyncCache` now mirrors `Cache`'s partition kwargs** (#108). `aget`,
+  `aset`, and `acached_call` accept and forward `tenant_id` (partition
+  isolation, on the sync API since v0.4.0) and `plan` (plan tier on the
+  emitted `CacheEvent`, since v0.5.6); `aset` also forwards `metadata`. All
+  are **keyword-only, default `None`** — purely additive, so no existing
+  async caller changes behavior. Closes the "Known gap" noted under 0.8.0.
+
+  Before this fix, `AsyncCache.aget(..., tenant_id="t")` raised `TypeError`,
+  and even where a kwarg was silently absent, tenant isolation and plan
+  attribution simply didn't reach the async path — the docstring's "mirrors
+  every method exactly" claim was untrue. Now the same kwarg is decided in
+  one place for both sync and async surfaces.
+
+- **Sync passthrough methods on `AsyncCache` mirror the same kwargs.** The
+  `get` / `set` / `cached_call` passthroughs (provided so `AsyncCache` works
+  in mixed sync/async codebases) also gained `tenant_id` / `plan` (and
+  `metadata` on `set`), so the whole `AsyncCache` surface — not just the
+  `a*` methods — is a faithful mirror of `Cache`.
+
+### Tests
+
+- `tests/test_async_cache.py`: added `TestAsyncPartitionKwargs` (proves
+  `tenant_id` / `plan` / `metadata` land on the emitted `CacheEvent` through
+  the async path via a recording sink — the async mirror of
+  `test_core.py::TestCacheEventPlan`, including the miss-then-set no-leak
+  case on `acached_call` and the back-compat `plan=None` default),
+  `TestAsyncTenantIsolation` (hard cross-tenant boundary through `aget` on
+  Qdrant; skips cleanly without `qdrant-client`), and `TestAsyncSyncParity`
+  (introspective guard asserting the async and sync-passthrough methods
+  carry the same partition kwargs as their sync `Cache` counterparts, so the
+  gap cannot silently reopen).
+
+### Notes
+
+- **Library-only.** `sulci-platform`'s gateway calls the sync `Cache` (in a
+  FastAPI threadpool), never `AsyncCache`, so this changes no gateway
+  behavior and needs no coordinated `sulci-gateway` release. Independent of
+  the gateway / REST-contract / TS-SDK version axes per ADR 0013.
+- Out of scope (tracked separately): the sync passthrough `get` / `cached_call`
+  still lack the per-call `threshold` kwarg added to their async twins in
+  v0.8.0 — a distinct gap from this `tenant_id`/`plan` parity work.
+
+---
+
 ## [0.8.0] — 2026-07-12
 
 ### Added
@@ -148,6 +196,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 - `AsyncCache.aget()` still does not accept `tenant_id` or `plan`, though
   `Cache.get()` has since v0.4.0 / v0.5.6. The docs claim `AsyncCache` mirrors
   every `Cache` method; it does not. Filed separately — out of scope here.
+  **→ Closed in [0.8.1](#081--2026-07-16--asynccache-partition-kwarg-parity-tenant_id--plan)**
+  (#108): `aget` / `aset` / `acached_call` and the sync passthroughs now
+  forward `tenant_id` / `plan` (+ `metadata` on set), and the "mirrors every
+  method" claim is true again.
 
 ---
 
