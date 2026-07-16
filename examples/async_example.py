@@ -29,6 +29,9 @@ Pattern:
     response, sim, depth = await cache.aget(query, session_id=session_id)
     await cache.aset(query, response, session_id=session_id)
     result = await cache.acached_call(query, llm_fn, session_id=session_id)
+
+    # Multi-tenant (v0.8.1): tenant_id + plan mirror sulci.Cache, keyword-only.
+    await cache.aset(query, response, session_id=sid, tenant_id="acme", plan="pro")
 """
 import asyncio
 import os
@@ -276,6 +279,16 @@ async def main():
     print("      response = await call_llm(query)")
     print("      await cache.aset(query, response, session_id=session_id)")
     print("      return {'response': response, 'source': 'llm'}")
+    print("")
+    print("── Multi-tenant SaaS variant (v0.8.1) ─────────────────")
+    print("  # tenant_id + plan mirror sulci.Cache — keyword-only, both async")
+    print("  # methods and sync passthroughs. tenant_id partitions entries")
+    print("  # (a HARD boundary on Qdrant / Sulci Cloud; a label on SQLite);")
+    print("  # plan rides onto the emitted CacheEvent for per-plan telemetry.")
+    print("  resp, sim, depth = await cache.aget(")
+    print("      query, session_id=session_id, tenant_id=tenant, plan=plan)")
+    print("  await cache.aset(")
+    print("      query, response, session_id=session_id, tenant_id=tenant, plan=plan)")
 
 
 if __name__ == "__main__":

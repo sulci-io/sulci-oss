@@ -26,7 +26,10 @@ Typical use — FastAPI endpoint
 
 All constructor parameters are identical to sulci.Cache.
 All async methods mirror their sync counterparts exactly — same
-arguments, same return values.
+arguments, same return values. This includes the partition kwargs
+``tenant_id`` (v0.4.0) and ``plan`` (v0.5.6), plus ``metadata`` on
+``aset`` — all keyword-only, threaded straight through to the wrapped
+sync call (v0.8.1, closing the parity gap noted in the 0.8.0 CHANGELOG).
 
 Sync passthrough methods (get, set, stats, clear) are also available
 so AsyncCache can be used in mixed sync/async codebases without
@@ -103,6 +106,9 @@ class AsyncCache:
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
         threshold:  Optional[float] = None,
+        *,
+        tenant_id:  Optional[str] = None,
+        plan:       Optional[str] = None,
     ) -> tuple:
         """
         Async semantic cache lookup.
@@ -112,6 +118,15 @@ class AsyncCache:
         threshold : float, optional
             Per-call minimum cosine similarity, overriding the instance value.
             ``None`` (default) uses the instance threshold. v0.8.0 (#34).
+        tenant_id : str, optional
+            Tenant identifier for multi-tenant partition isolation. Mirrors
+            ``Cache.get`` (keyword-only since v0.4.0). Forwarded unchanged;
+            on backends that enforce isolation (Qdrant, cloud) entries from
+            other tenants are never returned, even above threshold. v0.8.1.
+        plan : str, optional
+            Customer plan tier ('free' | 'pro' | 'business' | 'enterprise' |
+            'oss_connect'), forwarded onto the emitted ``CacheEvent.plan``.
+            Mirrors ``Cache.get`` (v0.5.6). v0.8.1.
 
         Returns
         -------
@@ -123,8 +138,10 @@ class AsyncCache:
         return await asyncio.to_thread(
             self._cache.get, query,
             threshold  = threshold,
+            tenant_id  = tenant_id,
             user_id    = user_id,
             session_id = session_id,
+            plan       = plan,
         )
 
     async def aset(
@@ -133,14 +150,33 @@ class AsyncCache:
         response:   str,
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
+        *,
+        tenant_id:  Optional[str] = None,
+        plan:       Optional[str] = None,
+        metadata:   Optional[dict] = None,
     ) -> None:
         """
         Async cache store — saves response and advances the context window.
+
+        Parameters
+        ----------
+        tenant_id : str, optional
+            Tenant identifier stored with the entry for partition isolation.
+            Mirrors ``Cache.set`` (v0.4.0). v0.8.1.
+        plan : str, optional
+            Customer plan tier, forwarded onto the emitted ``CacheEvent.plan``.
+            Mirrors ``Cache.set`` (v0.5.6). v0.8.1.
+        metadata : dict, optional
+            Arbitrary metadata persisted alongside the entry. Mirrors
+            ``Cache.set``. v0.8.1.
         """
         return await asyncio.to_thread(
             self._cache.set, query, response,
+            tenant_id  = tenant_id,
             user_id    = user_id,
             session_id = session_id,
+            metadata   = metadata,
+            plan       = plan,
         )
 
     async def acached_call(
@@ -151,6 +187,9 @@ class AsyncCache:
         user_id:       Optional[str]   = None,
         cost_per_call: float           = 0.005,
         threshold:     Optional[float] = None,
+        *,
+        tenant_id:     Optional[str]   = None,
+        plan:          Optional[str]   = None,
     ) -> dict:
         """
         Async drop-in LLM wrapper — checks cache first, calls llm_fn on miss.
@@ -160,6 +199,15 @@ class AsyncCache:
         threshold : float, optional
             Per-call minimum cosine similarity, overriding the instance value.
             ``None`` (default) uses the instance threshold. v0.8.0 (#34).
+        tenant_id : str, optional
+            Tenant identifier threaded through the underlying ``.get()`` and
+            (on miss) ``.set()`` for partition isolation. Mirrors
+            ``Cache.cached_call`` (v0.4.0). v0.8.1.
+        plan : str, optional
+            Customer plan tier threaded onto BOTH emitted events (the 'miss'
+            from ``.get()`` and the 'set' from ``.set()``), so miss-then-set
+            paths never leak ``plan=None`` into the stream. Mirrors
+            ``Cache.cached_call`` (v0.5.6). v0.8.1.
 
         Returns
         -------
@@ -174,9 +222,11 @@ class AsyncCache:
         return await asyncio.to_thread(
             self._cache.cached_call, query, llm_fn,
             threshold     = threshold,
+            tenant_id     = tenant_id,
             session_id    = session_id,
             user_id       = user_id,
             cost_per_call = cost_per_call,
+            plan          = plan,
         )
 
     async def aget_context(self, session_id: str):
@@ -215,9 +265,18 @@ class AsyncCache:
         query:      str,
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
+        *,
+        tenant_id:  Optional[str] = None,
+        plan:       Optional[str] = None,
     ) -> tuple:
-        """Sync passthrough — cache.get()."""
-        return self._cache.get(query, user_id=user_id, session_id=session_id)
+        """Sync passthrough — cache.get(). tenant_id/plan mirror Cache.get (v0.8.1)."""
+        return self._cache.get(
+            query,
+            tenant_id  = tenant_id,
+            user_id    = user_id,
+            session_id = session_id,
+            plan       = plan,
+        )
 
     def set(
         self,
@@ -225,10 +284,19 @@ class AsyncCache:
         response:   str,
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
+        *,
+        tenant_id:  Optional[str] = None,
+        plan:       Optional[str] = None,
+        metadata:   Optional[dict] = None,
     ) -> None:
-        """Sync passthrough — cache.set()."""
+        """Sync passthrough — cache.set(). tenant_id/plan/metadata mirror Cache.set (v0.8.1)."""
         return self._cache.set(
-            query, response, user_id=user_id, session_id=session_id
+            query, response,
+            tenant_id  = tenant_id,
+            user_id    = user_id,
+            session_id = session_id,
+            metadata   = metadata,
+            plan       = plan,
         )
 
     def cached_call(
@@ -238,13 +306,18 @@ class AsyncCache:
         session_id:    Optional[str] = None,
         user_id:       Optional[str] = None,
         cost_per_call: float         = 0.005,
+        *,
+        tenant_id:     Optional[str] = None,
+        plan:          Optional[str] = None,
     ) -> dict:
-        """Sync passthrough — cache.cached_call()."""
+        """Sync passthrough — cache.cached_call(). tenant_id/plan mirror Cache.cached_call (v0.8.1)."""
         return self._cache.cached_call(
             query, llm_fn,
+            tenant_id     = tenant_id,
             session_id    = session_id,
             user_id       = user_id,
             cost_per_call = cost_per_call,
+            plan          = plan,
         )
 
     def stats(self) -> dict:

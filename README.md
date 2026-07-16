@@ -192,6 +192,16 @@ cache = AsyncCache(
 **Sync passthrough:** All sync methods (`get`, `set`, `stats`, `clear`) also
 available — `AsyncCache` works in mixed sync/async codebases without switching types.
 
+**Partition kwargs:** every method mirrors `Cache` exactly, including the
+keyword-only `tenant_id` (multi-tenant isolation) and `plan` (plan tier on the
+emitted `CacheEvent`), plus `metadata` on `aset`/`set` — all default `None`
+(v0.8.1):
+
+```python
+resp, sim, depth = await cache.aget("...", tenant_id="acme", plan="pro")
+await cache.aset("...", "...", tenant_id="acme", plan="pro", metadata={"src": "kb"})
+```
+
 ---
 ## Sulci Cloud — zero infrastructure option
 
