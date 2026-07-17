@@ -909,7 +909,7 @@ Plus: sulci/tests/compat/ — SessionStore + EventSink conformance suites (v0.5.
 ## Running Tests
 
 ```bash
-# full suite — 385 tests total (skipped backend tests if optional deps not installed)
+# full suite — 588 tests total (skipped backend tests if optional deps not installed)
 python -m pytest tests/ -v
 
 # by file
