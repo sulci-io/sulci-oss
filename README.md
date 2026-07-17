@@ -189,16 +189,18 @@ cache = AsyncCache(
 **Async methods:** `aget()`, `aset()`, `acached_call()`, `aget_context()`,
 `aclear_context()`, `acontext_summary()`, `astats()`, `aclear()`
 
-**Sync passthrough:** All sync methods (`get`, `set`, `stats`, `clear`) also
+**Sync passthrough:** All sync methods (`get`, `set`, `cached_call`, `stats`, `clear`) also
 available — `AsyncCache` works in mixed sync/async codebases without switching types.
 
-**Partition kwargs:** every method mirrors `Cache` exactly, including the
-keyword-only `tenant_id` (multi-tenant isolation) and `plan` (plan tier on the
-emitted `CacheEvent`), plus `metadata` on `aset`/`set` — all default `None`
-(v0.8.1):
+**Partition & per-call kwargs:** every method — async **and** sync passthrough —
+mirrors `Cache` exactly. Keyword-only, all default `None`: `tenant_id`
+(multi-tenant isolation) and `plan` (plan tier on the emitted `CacheEvent`) on
+every method, `metadata` on `aset`/`set`, and the per-call `threshold` on
+`aget`/`acached_call` and their passthroughs (`tenant_id`/`plan`/`metadata`
+parity v0.8.1; passthrough `threshold` parity v0.8.2):
 
 ```python
-resp, sim, depth = await cache.aget("...", tenant_id="acme", plan="pro")
+resp, sim, depth = await cache.aget("...", tenant_id="acme", plan="pro", threshold=0.9)
 await cache.aset("...", "...", tenant_id="acme", plan="pro", metadata={"src": "kb"})
 ```
 
@@ -887,7 +889,7 @@ No network calls are made unless you explicitly configure `embedding_model="open
     ├── test_core.py                    —  41 tests: cache.get/set, TTL, stats (incl. raw-get/set), personalization, tenant_id, CacheEvent.plan (v0.5.6)
     ├── test_integrations_langchain.py  —  27 tests: SulciCache LangChain adapter
     ├── test_integrations_llamaindex.py —  29 tests: SulciCacheLLM LlamaIndex wrapper
-    ├── test_async_cache.py             —  25 tests: AsyncCache non-blocking wrapper       (v0.3.7)
+    ├── test_async_cache.py             —  37 tests: AsyncCache wrapper + partition/threshold parity (v0.3.7+)
     ├── test_qdrant_tenant_isolation.py —  11 tests: tenant_id partition isolation         (v0.4.0)
     ├── test_sessions.py                —  24 tests: SessionStore protocol + tenant isol.  (v0.5.0)
     ├── test_sinks.py                   —  20 tests: EventSink protocol + privacy allowlist (v0.5.0; +plan scrub tests v0.5.6)
@@ -907,7 +909,7 @@ Plus: sulci/tests/compat/ — SessionStore + EventSink conformance suites (v0.5.
 ## Running Tests
 
 ```bash
-# full suite — 385 tests total (skipped backend tests if optional deps not installed)
+# full suite — 588 tests total (skipped backend tests if optional deps not installed)
 python -m pytest tests/ -v
 
 # by file
@@ -918,7 +920,7 @@ python -m pytest tests/test_connect.py -v                    # 40 tests — sulc
 python -m pytest tests/test_cloud_backend.py -v              # 28 tests — SulciCloudBackend
 python -m pytest tests/test_integrations_langchain.py -v     # 27 tests — LangChain integration
 python -m pytest tests/test_integrations_llamaindex.py -v    # 29 tests — LlamaIndex integration
-python -m pytest tests/test_async_cache.py -v                # 25 tests — AsyncCache wrapper
+python -m pytest tests/test_async_cache.py -v                # 37 tests — AsyncCache wrapper
 
 # single backend only
 python -m pytest tests/test_backends.py -v -k sqlite
