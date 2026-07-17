@@ -146,7 +146,7 @@ tests/test_cloud_backend.py           — 45 tests  (SulciCloudBackend transport
 tests/test_integrations_langchain.py  — 27 tests  (SulciCache LangChain adapter)     (v0.3.3)
 tests/test_integrations_llamaindex.py — 29 tests  (SulciCacheLLM LlamaIndex wrapper) (v0.3.6)
                                                    requires llama-index-core
-tests/test_async_cache.py             — 25 tests  (AsyncCache non-blocking wrapper)  (v0.3.7)
+tests/test_async_cache.py             — 37 tests  (AsyncCache wrapper + partition/threshold parity)  (v0.3.7+)
 tests/test_qdrant_tenant_isolation.py — 11 tests  (tenant_id partition isolation)    (v0.4.0)
 tests/test_sessions.py                — 24 tests  (SessionStore protocol)            (v0.5.0)
 tests/test_sinks.py                   — 20 tests  (EventSink + plan scrub)           (v0.5.0/v0.5.6)
@@ -1028,7 +1028,7 @@ tests/test_integrations_llamaindex.py::TestStats::test_repr_contains_hit_rate PA
     ├── test_core.py                    — 35 tests: cache.get/set, TTL, stats incl. raw-get/set, personalization
     ├── test_integrations_langchain.py  — 27 tests: SulciCache LangChain adapter        (v0.3.3)
     ├── test_integrations_llamaindex.py — 29 tests: SulciCacheLLM LlamaIndex wrapper     (v0.3.5)
-    ├── test_async_cache.py             — 25 tests: AsyncCache non-blocking wrapper       (v0.3.7)
+    ├── test_async_cache.py             — 37 tests: AsyncCache wrapper + partition/threshold parity (v0.3.7+)
     ├── test_qdrant_tenant_isolation.py — 11 tests: tenant_id partition isolation         (v0.4.0)
     ├── test_sessions.py                — 24 tests: SessionStore protocol + tenant isol.  (v0.5.0)
     ├── test_sinks.py                   — 15 tests: EventSink protocol + privacy allowlist (v0.5.0)
