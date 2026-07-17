@@ -167,6 +167,10 @@ async def main() -> None:
     resp, _, _ = cache.get("edge query", tenant_id="acme", plan="pro")
     _check("sync passthrough accepts tenant_id + plan", resp is not None)
 
+    # v0.8.2 — per-call threshold now flows through the passthrough get/cached_call.
+    resp, _, _ = cache.get("edge query", threshold=0.10)
+    _check("sync passthrough get honors per-call threshold", resp is not None)
+
     # ── Done ──────────────────────────────────────────────────────────────────
     print()
     print("=" * 50)

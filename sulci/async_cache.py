@@ -31,9 +31,11 @@ arguments, same return values. This includes the partition kwargs
 ``aset`` — all keyword-only, threaded straight through to the wrapped
 sync call (v0.8.1, closing the parity gap noted in the 0.8.0 CHANGELOG).
 
-Sync passthrough methods (get, set, stats, clear) are also available
-so AsyncCache can be used in mixed sync/async codebases without
-switching types.
+Sync passthrough methods (get, set, cached_call, stats, clear) are also
+available so AsyncCache can be used in mixed sync/async codebases without
+switching types. As of v0.8.2 the passthrough ``get`` / ``cached_call``
+also accept the per-call ``threshold`` (v0.8.0), so the passthrough surface
+is now a 100% mirror of ``Cache`` too — not just the ``a``-prefixed methods.
 
 Pattern: asyncio.to_thread()
 ----------------------------
@@ -266,12 +268,15 @@ class AsyncCache:
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
         *,
+        threshold:  Optional[float] = None,
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
     ) -> tuple:
-        """Sync passthrough — cache.get(). tenant_id/plan mirror Cache.get (v0.8.1)."""
+        """Sync passthrough — cache.get(). threshold (v0.8.2) + tenant_id/plan
+        (v0.8.1) mirror Cache.get."""
         return self._cache.get(
             query,
+            threshold  = threshold,
             tenant_id  = tenant_id,
             user_id    = user_id,
             session_id = session_id,
@@ -307,12 +312,15 @@ class AsyncCache:
         user_id:       Optional[str] = None,
         cost_per_call: float         = 0.005,
         *,
+        threshold:     Optional[float] = None,
         tenant_id:     Optional[str] = None,
         plan:          Optional[str] = None,
     ) -> dict:
-        """Sync passthrough — cache.cached_call(). tenant_id/plan mirror Cache.cached_call (v0.8.1)."""
+        """Sync passthrough — cache.cached_call(). threshold (v0.8.2) +
+        tenant_id/plan (v0.8.1) mirror Cache.cached_call."""
         return self._cache.cached_call(
             query, llm_fn,
+            threshold     = threshold,
             tenant_id     = tenant_id,
             session_id    = session_id,
             user_id       = user_id,

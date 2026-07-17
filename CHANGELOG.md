@@ -12,6 +12,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [0.8.2] — 2026-07-16 — AsyncCache passthrough `threshold` parity
+
+### Fixed
+
+- **The sync passthrough `get` / `cached_call` on `AsyncCache` now forward the
+  per-call `threshold`** (v0.8.0's #34 kwarg). v0.8.0 added `threshold` to
+  `Cache.get`/`cached_call` and to the async `aget`/`acached_call`; v0.8.1
+  brought `tenant_id`/`plan`/`metadata` to the sync passthroughs — but those
+  passthroughs still dropped `threshold`, so `AsyncCache(...).get(q,
+  threshold=0.9)` silently ignored it (used the instance threshold). It is now
+  keyword-only, default `None`, forwarded straight through — additive and
+  back-compat. `Cache.set` has no `threshold`, so the `set` passthrough
+  deliberately does not grow one; the mirror is faithful, not a superset.
+
+  With this, the **entire** `AsyncCache` surface — the `a`-prefixed methods and
+  the sync passthroughs alike — is a 100% mirror of `Cache`'s forwardable
+  kwargs (`threshold`, `tenant_id`, `plan`, `metadata`).
+
+### Tests
+
+- `TestAsyncSyncParity` gains `test_sync_passthrough_mirrors_threshold` and its
+  `test_full_mirror_of_sync_cache_kwargs` guard now includes `threshold` and
+  checks **both** the async and sync-passthrough surfaces against `Cache`, so
+  neither can silently drop a forwardable kwarg again.
+  `TestSyncPassthrough` gains a behavioral case proving a permissive per-call
+  `threshold` through the passthrough `get` flips a near-miss paraphrase into a
+  hit. `smoke_test_async.py` Step 10 gains a passthrough-threshold check.
+
+### Notes
+
+- **Library-only**, same as 0.8.1: the gateway calls the sync `Cache`, never
+  `AsyncCache`. No coordinated `sulci-gateway` release, no `GATEWAY_VERSION`
+  bump (ADR 0013 axis independence).
+
+---
+
 ## [0.8.1] — 2026-07-16 — AsyncCache partition-kwarg parity (`tenant_id` + `plan`)
 
 ### Fixed

@@ -4,7 +4,7 @@
 """
 tests/test_async_cache.py
 =========================
-Test suite for sulci.AsyncCache — 35 tests, zero API keys required.
+Test suite for sulci.AsyncCache — 37 tests, zero API keys required.
 
 All tests use the SQLite backend (in-memory temp dir) and the MiniLM
 embedding model.  No network calls are made. The Qdrant tenant-isolation
@@ -19,15 +19,17 @@ TestAcachedCall         ( 4) — hit, miss, dict shape, cost_per_call
 TestContextMethods      ( 4) — aget_context, aclear_context, acontext_summary,
                                session isolation
 TestStats               ( 3) — astats dict shape, aclear resets stats, repr
-TestSyncPassthrough     ( 2) — sync get/set still work on AsyncCache instance
+TestSyncPassthrough     ( 3) — sync get/set work on AsyncCache; per-call
+                               threshold honored through passthrough get (v0.8.2)
 TestAsyncPartitionKwargs( 5) — tenant_id/plan/metadata forwarded onto the
                                emitted CacheEvent through aget/aset/acached_call
                                (v0.8.1, sulci-oss #108); back-compat None
 TestAsyncTenantIsolation( 2) — hard cross-tenant isolation through aget on
                                Qdrant (skips without qdrant-client)
-TestAsyncSyncParity     ( 3) — signature guard: async + sync-passthrough
-                               methods accept the same partition kwargs as
-                               their sync Cache counterparts (v0.8.1)
+TestAsyncSyncParity     ( 4) — signature guard: async + sync-passthrough
+                               methods accept the same forwardable kwargs as
+                               their sync Cache counterparts, incl. the per-call
+                               threshold (v0.8.1 partition kwargs, v0.8.2 threshold)
 """
 
 import os
@@ -296,6 +298,23 @@ class TestSyncPassthrough:
         assert isinstance(s, dict)
         assert "hits" in s
 
+    def test_sync_passthrough_get_honors_per_call_threshold(self, tmp_cache):
+        """v0.8.2: a per-call threshold on the sync passthrough get reaches the
+        backend. A near-miss paraphrase that misses at the strict instance
+        threshold (0.85) must hit when the passthrough is called with a
+        permissive threshold."""
+        tmp_cache.set("How do I deploy to AWS?", "Use the deploy CLI.")
+        # Strict instance threshold → paraphrase misses.
+        strict_resp, _, _ = tmp_cache.get("What's the process for deploying on AWS?")
+        # Permissive per-call threshold via the passthrough → same paraphrase hits.
+        loose_resp, loose_sim, _ = tmp_cache.get(
+            "What's the process for deploying on AWS?", threshold=0.10
+        )
+        assert loose_resp == "Use the deploy CLI."
+        assert loose_sim >= 0.10
+        # And the strict call did not spuriously hit at a lower bar.
+        assert strict_resp is None or loose_sim >= 0.85
+
 
 # ── TestAsyncPartitionKwargs ─────────────────────────────────────────────────
 # v0.8.1 — sulci-oss #108: AsyncCache parity for tenant_id + plan (+ metadata).
@@ -463,18 +482,42 @@ class TestAsyncSyncParity:
                 assert kw in sig.parameters, f"AsyncCache.{method_name} (sync) missing {kw}"
                 assert sig.parameters[kw].kind == inspect.Parameter.KEYWORD_ONLY
 
-    def test_async_partition_kwargs_match_sync_cache(self):
-        """Every partition kwarg the sync Cache method exposes must also be
-        accepted by its a-prefixed async twin. This is the introspective form
-        of "AsyncCache mirrors every Cache method"."""
+    def test_sync_passthrough_mirrors_threshold(self):
+        """v0.8.2: the get / cached_call passthroughs forward the per-call
+        threshold (added to their async twins in v0.8.0). Cache.set has no
+        threshold, so the set passthrough must NOT grow one — a faithful
+        mirror, not a superset."""
+        import inspect
+        for method_name in ("get", "cached_call"):
+            p = inspect.signature(getattr(AsyncCache, method_name)).parameters
+            assert "threshold" in p, f"AsyncCache.{method_name} (sync) missing threshold"
+            assert p["threshold"].kind == inspect.Parameter.KEYWORD_ONLY
+            assert p["threshold"].default is None
+        assert "threshold" not in inspect.signature(AsyncCache.set).parameters, \
+            "AsyncCache.set must not gain threshold (Cache.set has none)"
+
+    def test_full_mirror_of_sync_cache_kwargs(self):
+        """Every forwardable kwarg the sync Cache method exposes —
+        {threshold, tenant_id, plan, metadata} — must be accepted by BOTH its
+        a-prefixed async twin AND its sync passthrough on AsyncCache. This is
+        the introspective form of "AsyncCache mirrors every Cache method",
+        with threshold (v0.8.0 async / v0.8.2 passthrough) included so neither
+        surface can silently drift from Cache again."""
         import inspect
         from sulci.core import Cache
-        partition = {"tenant_id", "plan", "metadata"}
-        pairs = {"aget": "get", "aset": "set", "acached_call": "cached_call"}
-        for async_name, sync_name in pairs.items():
-            sync_p = set(inspect.signature(getattr(Cache, sync_name)).parameters) & partition
-            async_p = set(inspect.signature(getattr(AsyncCache, async_name)).parameters) & partition
-            missing = sync_p - async_p
-            assert not missing, (
-                f"AsyncCache.{async_name} is missing {missing} that Cache.{sync_name} accepts"
-            )
+        mirrored = {"threshold", "tenant_id", "plan", "metadata"}
+        # async twin -> (sync passthrough, sync Cache source)
+        pairs = {
+            "aget":         ("get",         "get"),
+            "aset":         ("set",         "set"),
+            "acached_call": ("cached_call", "cached_call"),
+        }
+        for async_name, (passthrough_name, sync_name) in pairs.items():
+            sync_p = set(inspect.signature(getattr(Cache, sync_name)).parameters) & mirrored
+            for surface in (async_name, passthrough_name):
+                have = set(inspect.signature(getattr(AsyncCache, surface)).parameters) & mirrored
+                missing = sync_p - have
+                assert not missing, (
+                    f"AsyncCache.{surface} is missing {sorted(missing)} that "
+                    f"Cache.{sync_name} accepts"
+                )
