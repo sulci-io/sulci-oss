@@ -428,18 +428,22 @@ Run it a second time with the same (or similar) question — `source` switches t
 
 ```python
 cache = Cache(
-    backend         = "sqlite",   # sqlite | chroma | faiss | qdrant | redis | milvus | sulci
-    threshold       = 0.85,       # cosine similarity cutoff (0–1)
-    embedding_model = "minilm",   # minilm | openai
-    ttl_seconds     = None,       # None = no expiry
-    personalized    = False,      # partition cache per user_id
-    db_path         = "./sulci",  # on-disk path for sqlite / faiss
-    context_window  = 0,          # turns to remember; 0 = stateless
-    query_weight    = 0.70,       # α in blending formula
-    context_decay   = 0.50,       # per-turn decay weight
-    session_ttl     = 3600,       # session expiry in seconds
-    api_key         = None,       # required when backend="sulci"
-    telemetry       = True,       # set False to disable per-instance
+    backend         = "chroma",     # chroma | sqlite | faiss | qdrant | redis | milvus | sulci
+    threshold       = 0.85,         # cosine similarity cutoff (0–1)
+    embedding_model = "minilm",     # minilm | mpnet | bge | openai
+    ttl_seconds     = 86400,        # 24h. None = no expiry
+    personalized    = False,        # partition cache per user_id
+    db_path         = "./sulci_db", # on-disk path for sqlite / faiss
+    context_window  = 0,            # turns to remember; 0 = stateless
+    query_weight    = 0.70,         # α in blending formula
+    context_decay   = 0.50,         # per-turn decay weight
+    session_ttl     = 3600,         # session expiry in seconds
+    telemetry       = True,         # set False to disable per-instance
+    api_key         = None,         # required when backend="sulci"; also SULCI_API_KEY
+    gateway_url     = "",           # cloud gateway override; also SULCI_GATEWAY (v0.7.4)
+    session_store   = None,         # custom SessionStore implementation
+    event_sink      = None,         # custom EventSink implementation
+    cost_per_call   = 0.005,        # $ per LLM call, for saved-cost stats
 )
 ```
 
@@ -447,9 +451,9 @@ cache = Cache(
 
 | Method                                                                                 | Returns                   | Description                                                        |
 | -------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------ |
-| `cache.get(query, *, tenant_id=None, user_id=None, session_id=None, plan=None)`                   | `(str\|None, float, int)` | response, similarity, context_depth (tenant_id added in v0.4.0; plan added in v0.5.6) |
+| `cache.get(query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None)`                   | `(str\|None, float, int)` | response, similarity, context_depth (tenant_id added in v0.4.0; plan added in v0.5.6) |
 | `cache.set(query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None)` | `None`                    | Store entry, advance context window (plan added in v0.5.6)                            |
-| `cache.cached_call(query, llm_fn, *, tenant_id=None, user_id=None, session_id=None, cost_per_call=0.005, plan=None)` | `dict`        | response, source, similarity, latency_ms, cache_hit, context_depth (plan added in v0.5.6) |
+| `cache.cached_call(query, llm_fn, *, threshold=None, tenant_id=None, user_id=None, session_id=None, cost_per_call=None, plan=None)` | `dict`        | response, source, similarity, latency_ms, cache_hit, context_depth (plan added in v0.5.6) |
 | `cache.get_context(session_id)`                                                        | `ContextWindow`           | Return session's context window                                    |
 | `cache.clear_context(session_id)`                                                      | `None`                    | Reset session history                                              |
 | `cache.context_summary(session_id=None)`                                               | `dict`                    | Snapshot of one or all sessions                                    |
