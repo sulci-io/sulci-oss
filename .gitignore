@@ -54,3 +54,6 @@ sulci_milvus.db
 # Distribution
 *.tar.gz
 *.zip
+
+node_modules/
+package-lock.json
