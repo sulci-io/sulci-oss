@@ -671,9 +671,12 @@ class TestDeviceCodeFlow:
         """connect(prompt=True) with no api_key, no SULCI_API_KEY, no config →
         invokes run_device_code_flow and uses its result.
 
-        Note: prompt=True must be explicit in v0.5.3 (the default is False
-        for safety while OSS-Connect's gateway+dashboard chain ships).
-        v0.6.0 will flip the default to True.
+        Note: prompt=True must be explicit. The default is False and stays
+        False — originally for safety while OSS-Connect's gateway+dashboard
+        chain shipped, and since 2026-07-06 as a sustained decision in its
+        own right (see sulci.connect's docstring). The v0.6.0 flip this
+        docstring used to promise is withdrawn, so this test asserting an
+        *explicit* prompt=True is the permanent shape, not a temporary one.
         """
         import sulci
         with patch.dict(os.environ, {}, clear=True), \

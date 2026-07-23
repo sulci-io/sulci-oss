@@ -601,15 +601,22 @@ sulci.connect(prompt=True)
 #   On user-deny / 15-min timeout: raises RuntimeError
 ```
 
-> **`prompt=True` is dangerous in v0.5.3.** The SDK code is in place, but
-> the gateway endpoints (`/v1/oss-connect/{device-code,authorize,token}`)
-> and the dashboard `/oss-connect` page need to be deployed end-to-end
-> for the flow to complete. **Setting `prompt=True` against an
-> environment that hasn't announced OSS-Connect availability is user
-> error** — calls will either 404 immediately or block for 15 minutes
-> waiting for an authorization that can't happen. The Sulci team's
-> v0.6.0 release announcement will mark when the full chain is live;
-> v0.6.0 will also flip the `prompt` default to `True`.
+> **`prompt=True` against production is fine as of the 2026-05-08 cutover.**
+> The full chain — gateway `/v1/oss-connect/{device-code,authorize,token}`
+> plus the dashboard `/oss-connect` page — has been live end-to-end since
+> then. The v0.5.3-era warning that this block used to carry ("dangerous",
+> "wait for the v0.6.0 announcement") described a chain that had not
+> deployed yet, and no longer applies to `api.sulci.io`.
+>
+> **It still applies to any environment that has not deployed it** — a
+> local docker-compose gateway without the OSS-Connect routes, or a
+> staging stack pointed at by `SULCI_GATEWAY`. There, `prompt=True` on a
+> missing key either 404s immediately or blocks for 15 minutes waiting for
+> an authorization that cannot happen.
+>
+> **The `prompt` default stays `False` permanently.** v0.6.0 was once going
+> to flip it; that was decided against on 2026-07-06 — see the reasoning in
+> `sulci.connect`'s docstring. Do not expect the flip, and do not re-file it.
 
 For local dev against a docker-compose gateway, override the gateway URL:
 
