@@ -4,6 +4,50 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 
 ---
 
+## Current state — measured 2026-07-22
+
+| Fact | Value | Re-measure |
+|---|---|---|
+| Version | **0.8.2** (2026-07-16) | `grep '^version' pyproject.toml` |
+| Public methods on `Cache` | **8** | see [`docs/API-SURFACE.md`](docs/API-SURFACE.md) |
+| Default backend | `"chroma"` | ditto — **not** sqlite |
+| Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
+| Default `db_path` | `"./sulci_db"` | ditto |
+| Backends | 6 free + 1 managed | |
+
+[`docs/API-SURFACE.md`](docs/API-SURFACE.md) carries the AST command that
+regenerates the whole surface. **If a document anywhere disagrees with that
+command's output, the output wins.** Four of these defaults were documented
+wrongly for months — two of them behaviourally, so a reader believed the default
+backend was SQLite and that entries never expire.
+
+---
+
+## Shell and tooling gotchas
+
+These are not hypothetical; each has cost real debugging time.
+
+- **zsh needs quoted globs.** `pip install "sulci[sqlite]"` fails without the
+  quotes, because zsh treats `[...]` as a glob. Same reason
+  `grep -r --include=*.jsx` fails with "no matches found" — write
+  `--include='*.jsx'`.
+- **`find` may be aliased to `fd`.** If `find src -type f` fails with a `--type`
+  error, that is the alias. Use `\find`, and likewise `\cat` / `\ls` if `bat` /
+  `eza` are aliased.
+- **Bare `pip` is not on `PATH` under macOS Command Line Tools Python.** Use
+  `python3 -m pip`.
+- **After a version bump, an editable install still reports the old version.**
+  `importlib.metadata` reads cached metadata; run `pip install -e . --no-deps` to
+  refresh it. Otherwise `sulci.__version__` lies to you and you will chase it.
+- **If your prompt's version segments suddenly go blank, that is `$PATH`** —
+  clobbered by an `export PATH="…"` that assigned rather than prepended, dropping
+  Homebrew. Open a new tab rather than patching the current one.
+- **macOS Apple Silicon test flakiness** is an MPS deadlock, not a real failure.
+  Run `scripts/run_tests_per_file.py`, which uses a fresh subprocess per file.
+- **`pytest: command not found`** → `python -m pytest tests/ -v`.
+
+---
+
 ## Requirements
 
 - Python **3.9, 3.10, 3.11, or 3.12** (all four are tested in CI)

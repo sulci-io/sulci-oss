@@ -8,7 +8,63 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-*Nothing yet.*
+### Documentation refresh (2026-07-22)
+
+No code, no behaviour — documentation only, from the cross-repo sweep run on the
+day `www.sulci.io` cut over to the 2.0 site.
+
+**New: `docs/API-SURFACE.md`** — the measured public surface of `Cache` and
+`AsyncCache`, AST-parsed out of `sulci/core.py` and `sulci/async_cache.py` at
+0.8.2, **with the command that regenerates it at the top of the file**. It exists
+because six documents across three repos have carried a wrong description of this
+API at some point and the wrongness survived for months each time: four
+constructor defaults stated wrongly (two of them behavioural), `metadata`
+attributed to a method that has never had it, and a method attributed to `Cache`
+that has never been on `Cache`. **Link to that file rather than restating
+signatures elsewhere.** PR #114 fixed the README; this makes the fix durable.
+
+**`README.md` corrections:**
+
+- **The `+20.8pp` context-aware claim is now qualified.** It is measured on
+  synthetic TF-IDF embeddings; on the shipped MiniLM embedder the same 800-pair
+  corpus gives a peak Δ of roughly **+4.0pp** at τ=0.65 — about five times
+  smaller, still a real gain, not the same number. Both are now stated with their
+  basis attached, alongside the agent-workload result (~60–75% on real MiniLM),
+  which is the headline figure and *is* measured on the shipped embedder.
+- **The `AsyncCache` "mirrors `Cache` exactly" line is now accurate.** The mirror
+  is of *which* kwargs are forwarded, not *how* they are passed: on
+  `aget`/`acached_call`, `threshold` — with `user_id`, `session_id`,
+  `cost_per_call` — is positional-or-keyword, whereas `Cache.get` is keyword-only
+  after `query`. So `await cache.aget(q, uid, sid, 0.9)` is legal and
+  `cache.get(q, uid, sid, 0.9)` is a `TypeError`. Reading "100% mirror" as full
+  signature parity would mislead.
+- **`delete_user` is now stated plainly as not being a `Cache` method.** It is on
+  `SulciCloudBackend` only (`sulci/backends/cloud.py:233`); `Cache` has no base
+  class, no `__getattr__`, does not re-export it, and `self.backend` is the
+  backend **string** while the instance is the private `self._backend` — so
+  `cache.delete_user(...)` raises `AttributeError`. It is also absent from the
+  `Backend` protocol, so the six self-hosted backends have no per-user delete to
+  proxy to, while `personalized=True` is documented as partitioning by `user_id`.
+  Portable erasure is `cache.clear()`; per-user erasure is
+  `DELETE /v1/cache/user/{id}` on the managed tier only.
+
+  This one had propagated to **22 files**, including a published privacy policy
+  that asserted it as a GDPR right-to-erasure mechanism. The `[0.6.2]` entry
+  below is titled *"GDPR-adjacent fix: `cache.clear()` and `cache.delete_user()`
+  now actually delete"* and calls the old behaviour *"a success-shaped no-op for
+  a GDPR-relevant operation"* — that fix made the backend method really delete,
+  and nobody noticed the documented call site was never reachable. The no-op
+  became an exception. Those past-tense release notes are accurate as history and
+  are left alone; the forward-facing docs are what changed.
+
+  **Whether to add a guarded `Cache.delete_user()` proxy, add `delete_user` to
+  the `Backend` protocol, or keep per-user deletion managed-tier-only and say so
+  everywhere, is an open design decision** — see `docs/API-SURFACE.md`.
+
+**`LOCAL_SETUP.md`** — added a measured current-state block and the shell and
+tooling gotchas that cost real time (zsh glob quoting, `find` aliased to `fd`,
+`pip` absent from `PATH` under macOS Command Line Tools Python, and the editable
+install reporting a pre-bump version until `pip install -e . --no-deps`).
 
 ---
 

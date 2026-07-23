@@ -28,7 +28,19 @@ Sulci Cache is a drop-in Python library that caches LLM responses by **semantic 
 - Overall hit rate: **85.9%**
 - Hit latency p50: **0.74ms** (vs ~1,840ms for a live LLM call)
 - Cost saved on the 5,000-query benchmark: **$21.47** (4,294 hits × $0.005)
-- Context-aware mode: **+20.8pp resolution accuracy** over stateless
+
+**Context-aware mode** raises follow-up resolution accuracy from 56.8% to 77.6%
+on the 800-pair context corpus at `context_window=4` — **+20.8pp**. Read the
+qualifier: **that figure is measured on synthetic TF-IDF embeddings.** On the
+shipped MiniLM embedder the same corpus gives a peak Δ of about **+4.0pp** at
+τ=0.65 — roughly five times smaller, and still a real gain, but not the same
+number. Quote the +20.8pp figure only where the TF-IDF basis is stated alongside
+it. See `benchmark/README.md` for both series and the reproduction commands.
+
+**Agent workloads** are the headline result and are measured on real MiniLM:
+`benchmark/run.py --agent` reports **~60–75%** aggregate per-session hit rate on
+a 45% structural / 35% semi-structural / 20% novel dispatch distribution, against
+a ~95% TF-IDF upper bound.
 
 ---
 
@@ -193,7 +205,7 @@ cache = AsyncCache(
 available — `AsyncCache` works in mixed sync/async codebases without switching types.
 
 **Partition & per-call kwargs:** every method — async **and** sync passthrough —
-mirrors `Cache` exactly. Keyword-only, all default `None`: `tenant_id`
+forwards the same set of kwargs `Cache` accepts. Keyword-only, all default `None`: `tenant_id`
 (multi-tenant isolation) and `plan` (plan tier on the emitted `CacheEvent`) on
 every method, `metadata` on `aset`/`set`, and the per-call `threshold` on
 `aget`/`acached_call` and their passthroughs (`tenant_id`/`plan`/`metadata`
@@ -203,6 +215,16 @@ parity v0.8.1; passthrough `threshold` parity v0.8.2):
 resp, sim, depth = await cache.aget("...", tenant_id="acme", plan="pro", threshold=0.9)
 await cache.aset("...", "...", tenant_id="acme", plan="pro", metadata={"src": "kb"})
 ```
+
+> **The mirror is of *which* kwargs are forwarded, not of *how* they are passed.**
+> On `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,
+> `cost_per_call` — is positional-or-keyword, whereas `Cache.get` makes everything
+> after `query` keyword-only. So `await cache.aget(q, uid, sid, 0.9)` is legal
+> while `cache.get(q, uid, sid, 0.9)` is a `TypeError`. Not a bug, but if you read
+> "100% mirror" as full signature parity you will be surprised.
+> `set` deliberately has no `threshold`, because `Cache.set` has none — the mirror
+> is faithful, not a superset. Full measured surface:
+> [`docs/API-SURFACE.md`](docs/API-SURFACE.md).
 
 ---
 ## Sulci Cloud — zero infrastructure option
@@ -461,6 +483,20 @@ cache = Cache(
 | `cache.clear()`                                                                        | `None`                    | Evict all entries, reset stats and sessions                        |
 
 > **Important:** `cache.get()` returns a **3-tuple** `(response, similarity, context_depth)` — not a 2-tuple like v0.1. Always unpack all three values.
+
+**That is the whole public surface — eight methods, not nine.** The constructor
+defaults and method signatures above were AST-parsed out of `sulci/core.py` at
+0.8.2, not written from memory; the command that produced them, and the four
+defaults that were previously documented wrongly, are in
+[`docs/API-SURFACE.md`](docs/API-SURFACE.md). Re-run it before trusting any
+restatement of this table found elsewhere.
+
+**`delete_user` is not on `Cache`.** It is a method on `SulciCloudBackend`
+(`sulci/backends/cloud.py:233`), reached through the backend or by calling
+`DELETE /v1/cache/user/{id}` directly. `Cache` does not proxy it — `cache.delete_user(...)`
+raises `AttributeError` — and the six self-hosted backends do not implement it,
+because it is not in the `Backend` protocol. Whole-cache erasure via
+`cache.clear()` works on every backend and is the portable path.
 
 ### v0.5.0 additions
 
