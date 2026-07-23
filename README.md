@@ -335,10 +335,15 @@ Step 3 (config persistence) ships in **v0.5.3**. After your first successful
 `~/.sulci/config` (mode 0600) and subsequent `sulci.connect()` calls with
 no arguments will pick it up automatically.
 
-Step 4 (device-code flow) ships **latent** in v0.5.3. The SDK code is in
-place, but the gateway endpoints and dashboard page need to deploy
-end-to-end before it's usable. The `prompt` parameter defaults to `False`
-in v0.5.3+:
+Step 4 (device-code flow) shipped **latent** in v0.5.3 — the SDK code was in
+place but the gateway endpoints and dashboard page had not deployed. **That
+is no longer the case: the full chain (SDK + gateway `/v1/oss-connect/*` +
+dashboard `/oss-connect`) has been live end-to-end since 2026-05-08.**
+
+`prompt` nonetheless still defaults to `False`, and as of 2026-07-06 that is
+a sustained decision rather than a stale promise — see
+`sulci.connect`'s docstring (`sulci/__init__.py`) for the three reasons.
+Step 4 is opt-in per call:
 
 ```python
 # v0.5.3+ default — safe everywhere:
@@ -347,21 +352,29 @@ sulci.connect()
 # - Step 4 is skipped (prompt=False default)
 # - If no key found, connect() returns silently (no telemetry enabled)
 
-# Once your environment has OSS-Connect end-to-end deployed
-# (gateway + dashboard), opt in:
+# Opt in to the browser flow (live since 2026-05-08):
 sulci.connect(prompt=True)
 # - First-run: prints "Visit https://dashboard.sulci.io/oss-connect and enter code: WXYZ-2345"
 # - User authorizes via browser → SDK gets api_key and persists to ~/.sulci/config
 # - Subsequent runs: step 3 short-circuits, no browser needed
 ```
 
-**A future release** will flip the `prompt` default to `True` once the full
-OSS-Connect chain (gateway endpoints + dashboard page) is announced as
-publicly available. v0.6.0 was originally pencilled in for this flip; it
-shipped (2026-05-11) focused on the cloud transport rewrite instead, so
-`prompt` is still `False`-by-default in v0.6.x and v0.7.0. **Setting
-`prompt=True` against an environment that hasn't announced OSS-Connect
-availability is user error** — wait for the release announcement.
+**`prompt=False` is the permanent default.** v0.6.0 was once pencilled in to
+flip it; v0.6.0 shipped (2026-05-11) focused on the cloud transport rewrite
+instead, and the flip was subsequently decided against outright. The reasoning
+is recorded in `sulci.connect`'s docstring and dated 2026-07-06:
+
+1. A non-interactive default is safe for library callers with no tty or
+   browser — LangChain / LlamaIndex agents, FastAPI handlers, LangGraph
+   nodes, CI runners. `prompt=True` at import time would block those on a
+   15-minute device-code timeout with no visible cause.
+2. v0.7.0's `Cache()` auto-connect already covers the ergonomic path:
+   passing `api_key=` to the constructor attaches telemetry, with no
+   blocking browser prompt as an import-time side effect.
+3. Explicit `prompt=True` remains first-class — one keyword argument, opt
+   in per call on an interactive machine.
+
+Treat this as settled. Do not re-file it as pending work.
 
 ---
 
@@ -552,27 +565,28 @@ export SULCI_QUIET=1   # silences the nudge globally
 
 ### v0.5.3 additions
 
-OSS-Connect device-code SDK client (D12). The flow ships **latent** —
-SDK code is in place, but `prompt` defaults to `False` because the
-gateway endpoints and dashboard page need to deploy end-to-end before
-the flow is usable. **A future release will flip `prompt` to `True` once
-the full chain ships.** Setting `prompt=True` against an environment that
-hasn't announced OSS-Connect availability is user error.
+OSS-Connect device-code SDK client (D12). At v0.5.3 the flow shipped
+**latent** — SDK code was in place, but `prompt` defaulted to `False`
+because the gateway endpoints and dashboard page had not yet deployed
+end-to-end.
 
-> **2026-05-11 note:** v0.6.0 was originally pencilled in for the
-> `prompt`-default flip. v0.6.0 shipped focused on the cloud-transport
-> rewrite instead (umbrella sulci-oss #63 — see the v0.6.0 additions
-> section above); the OSS-Connect prompt flip remains deferred to a
-> future release with no committed version target yet.
+> **2026-07-06 note, superseding the two earlier ones.** The full chain
+> (SDK + gateway D4/D4.5/D5 + dashboard `/oss-connect`) went live at the
+> 2026-05-08 cutover and has been live since. `prompt` still defaults to
+> `False`, but it is no longer waiting on anything: the default was made
+> **permanent** on 2026-07-06 for the three reasons recorded in
+> `sulci.connect`'s docstring, and summarised in the OSS-Connect section
+> above. Earlier editions of this file promised a flip in "a future
+> release" and, before that, in v0.6.0. **Both promises are withdrawn.**
 
 ```python
 import sulci
 
-# v0.5.3 default — completely safe (still the default in v0.6.x):
+# The default — safe everywhere, and permanent:
 sulci.connect(api_key="sk-sulci-...")     # the v0.5.x flow, unchanged
 sulci.connect()                            # falls through args/env/config; no browser
 
-# After the Sulci team announces OSS-Connect availability:
+# Opt in per call to the browser flow:
 sulci.connect(prompt=True)                 # browser-based onboarding
 ```
 
@@ -580,7 +594,7 @@ What's new at the SDK level:
 
 - **`sulci.oss_connect`** — RFC 8628 device-code flow client. Lazy-imported only on the no-key-found path so `import sulci` cost is unchanged for users who never trigger it.
 - **Four-step `sulci.connect()` resolution** — `arg → env → ~/.sulci/config → device-code flow`. The third step (config-persisted key) is new in v0.5.3 — your first successful `sulci.connect(api_key=...)` persists the key, and subsequent `sulci.connect()` calls with no arguments pick it up automatically.
-- **`prompt: bool = False`** — keyword parameter. Default flip to `True` deferred to a future release (was originally targeted at v0.6.0; v0.6.0 shipped cloud-transport instead).
+- **`prompt: bool = False`** — keyword parameter. A flip to `True` was targeted at v0.6.0, then deferred; on 2026-07-06 it was decided against and `False` became the permanent default. Opt in per call instead.
 - **`SULCI_GATEWAY` env var** — overrides the gateway base URL (default `https://api.sulci.io`). Used for staging / local-dev. **In v0.5.5+ a single value drives both telemetry POSTs and the device-code client.** In v0.5.0-v0.5.4 this env var only redirected the device-code flow; telemetry stayed pinned to `api.sulci.io` regardless. See the v0.5.5 additions section below.
 
 ### v0.5.4 additions
