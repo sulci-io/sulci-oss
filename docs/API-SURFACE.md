@@ -1,6 +1,6 @@
 # Sulci — the measured public API surface
 
-**Measured:** 2026-07-22 against `sulci` **0.8.2**
+**Measured:** 2026-07-24 against `sulci` **0.8.3**
 **Method:** AST parse of `sulci/core.py` and `sulci/async_cache.py`. Not memory, not the README.
 
 ---
@@ -293,5 +293,5 @@ PR #114.
 
 ---
 
-*Measured 2026-07-22 at `sulci` 0.8.2. Re-run the command at the top before
+*Measured 2026-07-24 at `sulci` 0.8.3. Re-run the command at the top before
 trusting any line of this.*

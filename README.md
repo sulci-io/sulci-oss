@@ -499,7 +499,7 @@ cache = Cache(
 
 **That is the whole public surface — eight methods, not nine.** The constructor
 defaults and method signatures above were AST-parsed out of `sulci/core.py` at
-0.8.2, not written from memory; the command that produced them, and the four
+0.8.3, not written from memory; the command that produced them, and the four
 defaults that were previously documented wrongly, are in
 [`docs/API-SURFACE.md`](docs/API-SURFACE.md). Re-run it before trusting any
 restatement of this table found elsewhere.

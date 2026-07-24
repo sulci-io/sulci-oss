@@ -8,6 +8,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.3] — 2026-07-24 — AsyncCache `cost_per_call` default parity + docs-only CI gate
+
 ### Fixed: `AsyncCache(cost_per_call=…)` was overridden on every call (2026-07-24)
 
 **Behavioural.** `AsyncCache.acached_call` and the sync `cached_call`

@@ -8,7 +8,7 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 
 | Fact | Value | Re-measure |
 |---|---|---|
-| Version | **0.8.2** (2026-07-16) | `grep '^version' pyproject.toml` |
+| Version | **0.8.3** (2026-07-24) | `grep '^version' pyproject.toml` |
 | Public methods on `Cache` | **8** | see [`docs/API-SURFACE.md`](docs/API-SURFACE.md) |
 | Default backend | `"chroma"` | ditto — **not** sqlite |
 | Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
