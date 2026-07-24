@@ -1,13 +1,93 @@
 name: Tests
 
 on:
+  # Post-merge validation. `paths-ignore` is safe on `push` because a push to
+  # main is never a required status check on a pull request — nothing can be
+  # left pending by a run that does not start.
   push:
     branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "NOTICE"
+      - ".gitignore"
+  # DELIBERATELY UNFILTERED. This repo HAS a base branch policy — #116 was
+  # refused and needed `--admin` — so a `paths-ignore` here could leave a
+  # required check pending forever on a docs-only PR. (sulci-platform is the
+  # opposite case: `gh api .../branches/main/protection` 403s there, so
+  # narrowing its triggers is free. Do not generalise either way; check the
+  # repo.)
+  #
+  # The saving is taken in the jobs instead. A job skipped by an `if:`
+  # condition reports a conclusion, and GitHub treats a skipped required check
+  # as satisfied; a workflow filtered out by `paths-ignore` reports nothing at
+  # all. Same runner minutes saved, no starved check.
   pull_request:
     branches: [main]
 
 jobs:
+  # ── Gate ──────────────────────────────────────────────────────────────
+  # Why this exists: the matrix below is 3 OS x 4 Python = 12 jobs, and it ran
+  # in full on every documentation-only PR. Measured on #116 — three markdown
+  # files — that was roughly 2 hours of runner time. Windows 3.12 alone took
+  # 17m17s; the three Windows jobs came to ~38m against ~18m for all four
+  # Ubuntu.
+  #
+  # Only tests.yml has this gap. benchmark.yml already carries a positive
+  # `paths: ["benchmark/**"]`, which is stricter, and publish.yml triggers on
+  # `tags: ["v*"]`, where paths filters do not apply at all. "None of the three
+  # workflows filters" was literally true and misleading.
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0 # need both endpoints of the PR range to diff them
+
+      - id: filter
+        shell: bash
+        run: |
+          # Anything that is not a push event and not a pull_request event
+          # (workflow_dispatch, a re-run) runs the suite. Fail toward testing.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "not a pull_request event — running the suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          base='${{ github.event.pull_request.base.sha }}'
+          head='${{ github.event.pull_request.head.sha }}'
+          git fetch --no-tags origin "$base" >/dev/null 2>&1 || true
+
+          if ! changed="$(git diff --name-only "$base" "$head" 2>/dev/null)"; then
+            echo "could not diff $base..$head — running the suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "── changed files ──"
+          printf '%s\n' "$changed"
+          echo "───────────────────"
+
+          # DOCS_ONLY is the same list as the push trigger's paths-ignore.
+          # Keep them in step: this one gates PRs, that one gates main.
+          DOCS_ONLY='(\.md$|^docs/|^LICENSE$|^NOTICE$|^\.gitignore$)'
+
+          if printf '%s\n' "$changed" | grep -qvE "$DOCS_ONLY"; then
+            echo "code changed — running the suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "documentation only — skipping the 12-job matrix"
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
