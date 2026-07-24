@@ -85,10 +85,47 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # ── Matrix ────────────────────────────────────────────────────────────
+  # NOTE THE ABSENCE OF A JOB-LEVEL `if:`. That was the obvious way to write
+  # this and it does not work here. Measured on PR #118, a docs-only probe:
+  # with `if: needs.changes.outputs.code == 'true'` on the JOB, GitHub does not
+  # expand the matrix before evaluating the condition. It emits ONE check run
+  # named `test`, conclusion `skipped` — not twelve named
+  # `test (ubuntu-latest, 3.9)` and so on.
+  #
+  # The ruleset `protect-main` (id 17006725) requires those twelve names
+  # individually. A context that never reports is not "skipped and therefore
+  # satisfied"; it is permanently Expected, and the PR is blocked forever. The
+  # collapsed `test` check does not match any required context either.
+  #
+  # So the job always runs and every STEP carries the condition instead. A job
+  # whose steps all skip still completes `success` under its real matrix name,
+  # which is what the ruleset needs. Cost is runner start-up only — no
+  # checkout, no pip, no HuggingFace fetch — roughly 15-30s per job against the
+  # 3-18 minutes each takes with steps enabled.
+  #
+  # Consequence worth stating plainly: on a docs-only PR these twelve checks go
+  # green having tested nothing. That is not a hole so long as the `changes`
+  # gate is honest about what counts as documentation. DOCS_ONLY above is the
+  # entire safety argument — widen it carelessly and green stops meaning
+  # anything. Its log line says which files it saw and which branch it took.
   test:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ${{ matrix.os }}
+    # When the steps are all skipped there is nothing OS-specific left to do,
+    # so a skipped run does not need the OS it names. GitHub derives the check
+    # name from the MATRIX values, not from runs-on, so every job still reports
+    # as `test (macos-latest, 3.11)` and friends while actually starting a
+    # Linux runner.
+    #
+    # This is purely a billing decision and it is a large one: macOS bills at
+    # 10x and Windows at 2x, so twelve runners starting and stopping for
+    # nothing costs ~35 billable minutes at their real OS versus ~4 on Linux.
+    # Four idle macOS starts alone are ~30 of that 35.
+    #
+    # Read it as: `code == 'true' ? matrix.os : 'ubuntu-latest'`. GitHub has no
+    # ternary, so `&&`/`||` is the idiom — safe here because matrix.os is
+    # always a non-empty string and can never be falsy.
+    runs-on: ${{ needs.changes.outputs.code == 'true' && matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -97,13 +134,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
 
       - uses: actions/setup-python@v6
+        if: needs.changes.outputs.code == 'true'
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Install Redis (Linux only)
-        if: runner.os == 'Linux'
+        if: needs.changes.outputs.code == 'true' && runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y redis-server
@@ -111,15 +150,18 @@ jobs:
           redis-cli ping
 
       - name: Install
+        if: needs.changes.outputs.code == 'true'
         run: pip install ".[sqlite,redis]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
       - name: Cache HuggingFace models
+        if: needs.changes.outputs.code == 'true'
         uses: actions/cache@v5
         with:
           path: ~/.cache/huggingface
           key: hf-minilm-${{ runner.os }}-py${{ matrix.python-version }}
 
       - name: Pre-fetch MiniLM (retry through HF 429s)
+        if: needs.changes.outputs.code == 'true'
         shell: bash
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -139,28 +181,37 @@ jobs:
           echo "::warning::MiniLM pre-fetch failed after 5 attempts; tests may flake"
 
       - name: Test Qdrant tenant isolation
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_qdrant_tenant_isolation.py -v --tb=short
 
       - name: Conformance suite
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/compat/ sulci/tests/compat/ -v --tb=short
 
       - name: Test core
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_core.py -v --tb=short --cov=sulci --cov-report=term-missing
 
       - name: Test flow contracts
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/integration/flows/ -v --tb=short
 
       - name: Test context
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_context.py -v --tb=short
 
       - name: Test sessions
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_sessions.py -v --tb=short
 
       - name: Test sinks
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_sinks.py -v --tb=short
 
       - name: Backend tests (skip missing deps)
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_backends.py -v --tb=short
 
       - name: Test AsyncCache
+        if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_async_cache.py -v --tb=short

@@ -38,6 +38,21 @@ policy** (#116 was refused and needed `--admin`):
 The gate fails toward running the suite in every ambiguous case: a non-PR event,
 a diff that cannot be computed, or an empty file list all set `code=true`.
 
+**The condition is on every STEP, not on the job.** A job-level `if:` was the
+obvious way to write this and it does not work: measured on PR #118, a
+docs-only probe, GitHub does not expand the matrix before evaluating a
+job-level condition. It emitted **one** check run named `test`, conclusion
+`skipped` — not twelve named `test (ubuntu-latest, 3.9)` and so on. The
+ruleset requires those twelve individually, and a context that never reports
+is not "skipped and therefore satisfied", it is permanently Expected. The PR
+would have been blocked forever. Guarding each step instead lets the job
+complete `success` under its real matrix name, at the cost of runner start-up
+only (~15-30s against the 3-18 minutes each job takes with steps enabled).
+
+Consequence stated plainly: on a docs-only PR those twelve checks go green
+having tested nothing. `DOCS_ONLY` in the `changes` job is the entire safety
+argument — widen it carelessly and green stops meaning anything.
+
 **Do not generalise the trigger shape across repos.** `sulci-platform` is the
 opposite case — `gh api .../branches/main/protection` returns 403 there, so
 narrowing its triggers outright is free. An earlier read generalised that 403 to
