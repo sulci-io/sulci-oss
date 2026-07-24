@@ -8,6 +8,42 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### CI: docs-only PRs no longer run the 12-job matrix (2026-07-24)
+
+No library changes, no behaviour — workflow only.
+
+**`.github/workflows/tests.yml`** — the matrix is 3 OS x 4 Python = 12 jobs and
+it ran in full on every documentation-only PR. Measured on #116, which touched
+three markdown files: roughly **2 hours** of runner time. Windows 3.12 alone was
+17m17s; the three Windows jobs came to ~38m against ~18m for all four Ubuntu.
+
+This is the only workflow with the gap. `benchmark.yml` already carries a
+positive `paths: ["benchmark/**"]`, which is stricter, and `publish.yml`
+triggers on `tags: ["v*"]`, where path filters do not apply at all — so "none of
+the three workflows filters" was literally true and misleading.
+
+The fix is deliberately asymmetric, because **this repo has a base branch
+policy** (#116 was refused and needed `--admin`):
+
+- **`push`** gains `paths-ignore`. Safe unconditionally — a push to `main` is
+  never a required status check on a pull request, so nothing can be left
+  pending by a run that does not start.
+- **`pull_request`** stays *unfiltered*. A `paths-ignore` here would leave a
+  required check permanently pending on a docs-only PR. Instead a new ~15s
+  `changes` job diffs `base.sha..head.sha` and the matrix keys off it with an
+  `if:`. A job skipped by a conditional reports a conclusion, and GitHub treats
+  a skipped required check as satisfied; a workflow filtered out by
+  `paths-ignore` reports nothing at all. Same minutes saved, no starved check.
+
+The gate fails toward running the suite in every ambiguous case: a non-PR event,
+a diff that cannot be computed, or an empty file list all set `code=true`.
+
+**Do not generalise the trigger shape across repos.** `sulci-platform` is the
+opposite case — `gh api .../branches/main/protection` returns 403 there, so
+narrowing its triggers outright is free. An earlier read generalised that 403 to
+this repo and was wrong.
+
+
 ### Documentation refresh (2026-07-22)
 
 No code, no behaviour — documentation only, from the cross-repo sweep run on the
