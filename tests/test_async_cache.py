@@ -4,7 +4,7 @@
 """
 tests/test_async_cache.py
 =========================
-Test suite for sulci.AsyncCache — 37 tests, zero API keys required.
+Test suite for sulci.AsyncCache — 40 tests, zero API keys required.
 
 All tests use the SQLite backend (in-memory temp dir) and the MiniLM
 embedding model.  No network calls are made. The Qdrant tenant-isolation
@@ -15,21 +15,24 @@ Test classes
 TestConstruction        ( 4) — constructor passthrough, repr, invalid backend
 TestAget                ( 5) — hit, miss, session_id, user_id, 3-tuple return
 TestAset                ( 3) — stores entry, advances context window, session_id
-TestAcachedCall         ( 4) — hit, miss, dict shape, cost_per_call
+TestAcachedCall         ( 5) — hit, miss, dict shape, per-call cost_per_call,
+                               instance cost_per_call honoured (v0.8.3)
 TestContextMethods      ( 4) — aget_context, aclear_context, acontext_summary,
                                session isolation
 TestStats               ( 3) — astats dict shape, aclear resets stats, repr
-TestSyncPassthrough     ( 3) — sync get/set work on AsyncCache; per-call
-                               threshold honored through passthrough get (v0.8.2)
+TestSyncPassthrough     ( 4) — sync get/set work on AsyncCache; per-call
+                               threshold honored through passthrough get (v0.8.2);
+                               instance cost_per_call honoured (v0.8.3)
 TestAsyncPartitionKwargs( 5) — tenant_id/plan/metadata forwarded onto the
                                emitted CacheEvent through aget/aset/acached_call
                                (v0.8.1, sulci-oss #108); back-compat None
 TestAsyncTenantIsolation( 2) — hard cross-tenant isolation through aget on
                                Qdrant (skips without qdrant-client)
-TestAsyncSyncParity     ( 4) — signature guard: async + sync-passthrough
+TestAsyncSyncParity     ( 5) — signature guard: async + sync-passthrough
                                methods accept the same forwardable kwargs as
                                their sync Cache counterparts, incl. the per-call
-                               threshold (v0.8.1 partition kwargs, v0.8.2 threshold)
+                               threshold (v0.8.1 partition kwargs, v0.8.2 threshold),
+                               and now with the same DEFAULTS (v0.8.3)
 """
 
 import os
@@ -205,13 +208,50 @@ class TestAcachedCall:
 
     @pytest.mark.asyncio
     async def test_cost_per_call_tracked(self, tmp_cache):
-        await tmp_cache.acached_call(
-            "What is Milvus?",
-            lambda q: "Milvus is a vector database.",
-            cost_per_call=0.01,
-        )
+        """An explicit per-call override lands in saved_cost exactly.
+
+        This used to assert `saved_cost >= 0.0` against a call that MISSED —
+        saved_cost only accrues on hits, so the value being asserted was 0.0
+        and the assertion could not fail. It passed identically before and
+        after the v0.8.3 fix below, which is how a wrong default survived in
+        the file that was supposed to be guarding it. Seed first, then assert
+        the number.
+        """
+        q, a = "What is Milvus?", "Milvus is a vector database."
+        await tmp_cache.aset(q, a)
+        await tmp_cache.acached_call(q, lambda _q: a, cost_per_call=0.01)
         s = await tmp_cache.astats()
-        assert s["saved_cost"] >= 0.0
+        assert s["saved_cost"] == pytest.approx(0.01)
+
+    @pytest.mark.asyncio
+    async def test_instance_cost_per_call_used_when_not_overridden(self, tmp_path):
+        """v0.8.3 — omitting cost_per_call uses the CONSTRUCTOR value.
+
+        `acached_call` declared `cost_per_call: float = 0.005` and forwarded
+        it unconditionally, so this asserted 0.005 no matter what the instance
+        was built with. Two errors compounded into one plausible number:
+        `Cache.get()` credits the instance value (core.py #88), then
+        `cached_call` applies the per-call delta at core.py:828 — which fired
+        precisely because the wrapper had passed an "explicit" 0.005 that
+        differed from the instance's 0.02 — and subtracted 0.015 back out.
+        The result was not noise, it was exactly 0.005: the default masquerading
+        as a measurement.
+        """
+        cache = AsyncCache(
+            backend       = "sqlite",
+            db_path       = str(tmp_path / "cost_default"),
+            threshold     = 0.85,
+            cost_per_call = 0.02,
+        )
+        q, a = "What is semantic caching?", "Caching by meaning, not by string."
+        await cache.aset(q, a)
+        result = await cache.acached_call(q, lambda _q: a)
+        assert result["cache_hit"] is True, "seeded query must hit for cost to accrue"
+        s = await cache.astats()
+        assert s["saved_cost"] == pytest.approx(0.02), (
+            "AsyncCache(cost_per_call=0.02) must credit 0.02 per hit, not the "
+            "0.005 that acached_call used to hardcode as its own default"
+        )
 
 
 # ── TestContextMethods ───────────────────────────────────────────────────────
@@ -314,6 +354,22 @@ class TestSyncPassthrough:
         assert loose_sim >= 0.10
         # And the strict call did not spuriously hit at a lower bar.
         assert strict_resp is None or loose_sim >= 0.85
+
+    def test_sync_cached_call_uses_instance_cost_per_call(self, tmp_path):
+        """v0.8.3 — the passthrough carried the same hardcoded 0.005 default as
+        its async twin. Both surfaces are fixed, so both are pinned: a fix
+        applied to one of a pair is how the pair drifts."""
+        cache = AsyncCache(
+            backend       = "sqlite",
+            db_path       = str(tmp_path / "cost_default_sync"),
+            threshold     = 0.85,
+            cost_per_call = 0.02,
+        )
+        q, a = "What is HNSW?", "A graph-based ANN index."
+        cache.set(q, a)
+        result = cache.cached_call(q, lambda _q: a)
+        assert result["cache_hit"] is True
+        assert cache.stats()["saved_cost"] == pytest.approx(0.02)
 
 
 # ── TestAsyncPartitionKwargs ─────────────────────────────────────────────────
@@ -496,16 +552,48 @@ class TestAsyncSyncParity:
         assert "threshold" not in inspect.signature(AsyncCache.set).parameters, \
             "AsyncCache.set must not gain threshold (Cache.set has none)"
 
-    def test_full_mirror_of_sync_cache_kwargs(self):
-        """Every forwardable kwarg the sync Cache method exposes —
-        {threshold, tenant_id, plan, metadata} — must be accepted by BOTH its
-        a-prefixed async twin AND its sync passthrough on AsyncCache. This is
-        the introspective form of "AsyncCache mirrors every Cache method",
-        with threshold (v0.8.0 async / v0.8.2 passthrough) included so neither
-        surface can silently drift from Cache again."""
+    def test_cost_per_call_defaults_mirror_cache(self):
+        """v0.8.3 — cost_per_call must default to None on both AsyncCache
+        surfaces, as it does on Cache.cached_call.
+
+        None is not cosmetic here: it is the sentinel core.py reads as "use
+        the value this Cache was constructed with". Any concrete default in
+        the wrapper is an unconditional override of a constructor argument,
+        which is what `float = 0.005` was. The general guard below now
+        compares defaults across the whole mirrored set; this test names the
+        one that was wrong so a future reader finds it by grep.
+        """
         import inspect
         from sulci.core import Cache
-        mirrored = {"threshold", "tenant_id", "plan", "metadata"}
+        assert inspect.signature(Cache.cached_call).parameters[
+            "cost_per_call"].default is None
+        for surface in ("acached_call", "cached_call"):
+            p = inspect.signature(getattr(AsyncCache, surface)).parameters
+            assert "cost_per_call" in p, f"AsyncCache.{surface} missing cost_per_call"
+            assert p["cost_per_call"].default is None, (
+                f"AsyncCache.{surface}.cost_per_call defaults to "
+                f"{p['cost_per_call'].default!r}; a concrete default here "
+                f"overrides AsyncCache(cost_per_call=…) on every call"
+            )
+
+    def test_full_mirror_of_sync_cache_kwargs(self):
+        """Every forwardable kwarg the sync Cache method exposes —
+        {threshold, tenant_id, plan, metadata, cost_per_call} — must be
+        accepted by BOTH its a-prefixed async twin AND its sync passthrough on
+        AsyncCache, WITH THE SAME DEFAULT. This is the introspective form of
+        "AsyncCache mirrors every Cache method".
+
+        The default check is v0.8.3 and is the half that was missing. Presence
+        alone passed green while `cost_per_call` defaulted to 0.005 on the
+        wrapper and None on Cache — a mirror of which kwargs exist, not of what
+        they do. Note the third axis, HOW they are passed, is deliberately NOT
+        asserted: the async twins take several of these positional-or-keyword
+        where Cache is keyword-only, which is documented in docs/API-SURFACE.md
+        rather than fixed.
+        """
+        import inspect
+        from sulci.core import Cache
+        mirrored = {"threshold", "tenant_id", "plan", "metadata", "cost_per_call"}
         # async twin -> (sync passthrough, sync Cache source)
         pairs = {
             "aget":         ("get",         "get"),
@@ -513,11 +601,20 @@ class TestAsyncSyncParity:
             "acached_call": ("cached_call", "cached_call"),
         }
         for async_name, (passthrough_name, sync_name) in pairs.items():
-            sync_p = set(inspect.signature(getattr(Cache, sync_name)).parameters) & mirrored
+            sync_sig = inspect.signature(getattr(Cache, sync_name)).parameters
+            sync_p = set(sync_sig) & mirrored
             for surface in (async_name, passthrough_name):
-                have = set(inspect.signature(getattr(AsyncCache, surface)).parameters) & mirrored
+                surface_sig = inspect.signature(getattr(AsyncCache, surface)).parameters
+                have = set(surface_sig) & mirrored
                 missing = sync_p - have
                 assert not missing, (
                     f"AsyncCache.{surface} is missing {sorted(missing)} that "
                     f"Cache.{sync_name} accepts"
                 )
+                for kw in sorted(sync_p):
+                    assert surface_sig[kw].default == sync_sig[kw].default, (
+                        f"AsyncCache.{surface}.{kw} defaults to "
+                        f"{surface_sig[kw].default!r} but Cache.{sync_name}.{kw} "
+                        f"defaults to {sync_sig[kw].default!r} — a forwarded kwarg "
+                        f"with a different default is an unconditional override"
+                    )
