@@ -160,9 +160,35 @@ pip install -e . --no-deps
 # 4. Run the full pre-PR check before tagging.
 make checkin
 
-# 5. Open a PR. After review and CI green, merge to main using a merge
-#    commit (NOT squash) so individual sub-phase commits are preserved
-#    in the main branch history.
+# 5. Open a PR. After CI green, merge to main using a merge commit
+#    (NOT squash) so individual sub-phase commits are preserved in the
+#    main branch history.
+#
+#    On a solo repo that merge needs --admin, and that is the normal
+#    path, not an exception:
+#
+#      gh pr merge <N> --merge --admin
+#
+#    main is protected by the ruleset `protect-main` (id 17006725),
+#    which sets required_approving_review_count: 1. GitHub does not
+#    permit self-approval, so with one maintainer every PR sits at
+#    REVIEW_REQUIRED / BLOCKED permanently and admin bypass is the only
+#    merge path. The review requirement is retained deliberately, for
+#    when contributors arrive — do not re-derive it as a bug and do not
+#    turn it off. Once a second maintainer exists, drop --admin and
+#    delete this note.
+#
+#    Rulesets are invisible to the classic-protection API:
+#    `gh api repos/sulci-io/sulci-oss/branches/main/protection` returns
+#    404 "Branch not protected" while the ruleset is active. Read it
+#    with /rules/branches/main or /rulesets/17006725 instead.
+#
+#    The twelve required contexts are the matrix job names
+#    (`test (ubuntu-latest, 3.9)` and so on). tests.yml guards every
+#    STEP rather than the job, deliberately: a job-level `if:` is
+#    evaluated before the matrix expands, so it emits ONE collapsed
+#    check named `test` instead of twelve, and a required context that
+#    never reports leaves the PR Expected forever.
 
 # 6. After merge, tag main and push.
 git checkout main
@@ -171,7 +197,21 @@ git tag -a vX.Y.Z -m "Release vX.Y.Z"
 git push origin vX.Y.Z
 
 # 7. The publish.yml workflow triggers on the tag push and publishes
-#    to PyPI automatically (requires PYPI_TOKEN secret).
+#    to PyPI automatically. There is NO PYPI_TOKEN to configure: since
+#    v0.7.3 (2026-06-05) the release path is credential-free, using
+#    PyPI Trusted Publishing over OIDC — publish.yml requests
+#    `id-token: write` under `environment: pypi` and hands off to
+#    pypa/gh-action-pypi-publish with no username or password. PEP 740
+#    attestations are generated automatically. The old long-lived token
+#    was deleted from repo secrets AND revoked on PyPI; see
+#    docs/OSS_BOUNDARY_POLICY.md. If a release fails to authenticate,
+#    the fault is in the Trusted Publisher config on PyPI or in the
+#    `environment:` name — never a missing secret.
+#
+#    A `v*` tag is the only publish trigger, and creating one is itself
+#    restricted by the `protect-release-tags` ruleset (bypass:
+#    repository admin only), so write access alone cannot ship a
+#    release.
 
 # 8. After publish completes, create a GitHub Release linked to the tag
 #    using the matching CHANGELOG entry as the release notes:
