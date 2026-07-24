@@ -8,6 +8,49 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed: `AsyncCache(cost_per_call=…)` was overridden on every call (2026-07-24)
+
+**Behavioural.** `AsyncCache.acached_call` and the sync `cached_call`
+passthrough both declared `cost_per_call: float = 0.005` and forwarded it
+unconditionally to `Cache.cached_call`, whose own default is `None` — the
+sentinel meaning *"use the value this Cache was constructed with"*. So an
+`AsyncCache` built with any other `cost_per_call` had it silently discarded.
+
+Measured on 0.8.2, `AsyncCache(cost_per_call=0.02)`, one seeded query, one hit:
+
+```
+Cache      cost_per_call=0.02   saved_cost=0.02     ← correct
+AsyncCache cost_per_call=0.02   saved_cost=0.005    ← acached_call
+AsyncCache cost_per_call=0.02   saved_cost=0.005    ← sync passthrough
+```
+
+The failure is worse than a wrong default because two errors compound into a
+plausible number. `Cache.get()` credits the instance value (`core.py`, #88);
+`cached_call` then applies a per-call *delta* at `core.py:828`, which fires
+only when an explicit override differs from the instance value — and the
+wrapper's hardcoded 0.005 always did. `0.005 + (0.005 − 0.02)` lands on
+exactly 0.005: the default masquerading as a measurement, for every hit, on
+both surfaces.
+
+- `acached_call` / `cached_call` — `cost_per_call: Optional[float] = None`.
+  Callers passing an explicit value are unaffected; callers who never set one
+  are unaffected (the instance default is also 0.005). Only the case that was
+  broken changes.
+- `tests/test_async_cache.py` — three new tests (40, was 37), and
+  `test_cost_per_call_tracked` strengthened. It asserted `saved_cost >= 0.0`
+  against a call that **missed**, and `saved_cost` only accrues on hits, so
+  the value under assertion was 0.0 and the test could not fail. It passed
+  identically before and after this fix.
+- `test_full_mirror_of_sync_cache_kwargs` now compares **defaults**, not just
+  presence. That is the guard that should have caught this: v0.8.1 and v0.8.2
+  closed the "which kwargs are forwarded" gap and nobody checked what they
+  forward *as*. `cost_per_call` was also absent from its mirrored set.
+
+The module docstring's "100% mirror" claim is now qualified in place. Mirror
+has three axes: **which** kwargs (guarded), **what they default to** (now
+guarded), and **how they are passed** — the last is deliberately not a mirror
+and is documented in `docs/API-SURFACE.md` rather than fixed.
+
 ### CI: docs-only PRs no longer run the 12-job matrix (2026-07-24)
 
 No library changes, no behaviour — workflow only.

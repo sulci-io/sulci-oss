@@ -37,6 +37,19 @@ switching types. As of v0.8.2 the passthrough ``get`` / ``cached_call``
 also accept the per-call ``threshold`` (v0.8.0), so the passthrough surface
 is now a 100% mirror of ``Cache`` too — not just the ``a``-prefixed methods.
 
+"Mirror" has three axes, and only two of them were ever checked. WHICH
+kwargs are forwarded: guarded by ``TestAsyncSyncParity`` since v0.8.1. HOW
+they are passed: deliberately NOT a mirror — ``aget`` and ``acached_call``
+take ``user_id`` / ``session_id`` / ``threshold`` / ``cost_per_call`` as
+positional-or-keyword where ``Cache`` makes everything after ``query``
+keyword-only, and that is documented rather than fixed (see
+docs/API-SURFACE.md). WHAT THEY DEFAULT TO: unchecked until now, and wrong.
+``acached_call`` and the ``cached_call`` passthrough both declared
+``cost_per_call: float = 0.005`` and forwarded it unconditionally, so
+``AsyncCache(cost_per_call=0.02)`` was silently overridden on every call —
+a constructor argument that appeared to work and did not. The defaults are
+now mirrored too, and the parity test compares them.
+
 Pattern: asyncio.to_thread()
 ----------------------------
 asyncio.to_thread() runs a sync callable in a thread-pool executor and
@@ -187,7 +200,7 @@ class AsyncCache:
         llm_fn:        Callable[[str], str],
         session_id:    Optional[str]   = None,
         user_id:       Optional[str]   = None,
-        cost_per_call: float           = 0.005,
+        cost_per_call: Optional[float] = None,
         threshold:     Optional[float] = None,
         *,
         tenant_id:     Optional[str]   = None,
@@ -201,6 +214,17 @@ class AsyncCache:
         threshold : float, optional
             Per-call minimum cosine similarity, overriding the instance value.
             ``None`` (default) uses the instance threshold. v0.8.0 (#34).
+        cost_per_call : float, optional
+            Estimated LLM cost per call, for ``stats()['saved_cost']``.
+            ``None`` (default) uses the instance value passed to the
+            constructor. This defaulted to a hardcoded ``0.005`` until
+            v0.8.3 and was forwarded unconditionally, so an ``AsyncCache``
+            constructed with any other ``cost_per_call`` had it silently
+            overridden on every call — and, because ``Cache.get()`` had
+            already credited the instance value, the per-call delta at
+            ``core.py:828`` then subtracted the difference, landing on
+            exactly the wrong number rather than on noise. Mirrors
+            ``Cache.cached_call``.
         tenant_id : str, optional
             Tenant identifier threaded through the underlying ``.get()`` and
             (on miss) ``.set()`` for partition isolation. Mirrors
@@ -310,14 +334,19 @@ class AsyncCache:
         llm_fn:        Callable[[str], str],
         session_id:    Optional[str] = None,
         user_id:       Optional[str] = None,
-        cost_per_call: float         = 0.005,
+        cost_per_call: Optional[float] = None,
         *,
         threshold:     Optional[float] = None,
         tenant_id:     Optional[str] = None,
         plan:          Optional[str] = None,
     ) -> dict:
         """Sync passthrough — cache.cached_call(). threshold (v0.8.2) +
-        tenant_id/plan (v0.8.1) mirror Cache.cached_call."""
+        tenant_id/plan (v0.8.1) mirror Cache.cached_call.
+
+        cost_per_call defaults to None (v0.8.3), meaning "use the value this
+        AsyncCache was constructed with", exactly as Cache.cached_call does.
+        It was a hardcoded 0.005 and was forwarded unconditionally — see the
+        module docstring."""
         return self._cache.cached_call(
             query, llm_fn,
             threshold     = threshold,

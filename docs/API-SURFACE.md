@@ -213,6 +213,49 @@ get (pos=['self','query'],  kwonly=['threshold','tenant_id','user_id','session_i
 `set` deliberately did **not** grow a `threshold` in 0.8.2, because `Cache.set`
 has none. The mirror is faithful, not a superset.
 
+### Three axes, and the third one was wrong until 2026-07-24
+
+"Mirror" can mean three different things and this file previously described two:
+
+| Axis | Status |
+|---|---|
+| **Which** kwargs are forwarded | Mirrored. Guarded by `TestAsyncSyncParity` since v0.8.1 |
+| **How** they are passed | **Not** mirrored, deliberately — positional-or-keyword on the async twins, keyword-only on `Cache`. Documented above, not fixed |
+| **What they default to** | Mirrored *as of this entry*. Was wrong, was unguarded |
+
+`acached_call` and the `cached_call` passthrough declared
+`cost_per_call: float = 0.005` while `Cache.cached_call` declares
+`Optional[float] = None` — where `None` is the sentinel for *"use the instance
+value"*. The wrapper therefore overrode `AsyncCache(cost_per_call=…)` on every
+single call, and the arithmetic hid it: `Cache.get()` credits the instance
+value, then `core.py:828` applies a delta because the forwarded 0.005 differs
+from the instance's value, and the two cancel to exactly 0.005. A wrong number
+that looks like a default is harder to spot than one that looks like noise.
+
+Measure the third axis the same way as the first:
+
+```bash
+cd ~/code/sulci-oss
+python3 - <<'PY'
+import inspect
+from sulci import AsyncCache
+from sulci.core import Cache
+for a, s in (("aget","get"), ("aset","set"), ("acached_call","cached_call")):
+    sp = inspect.signature(getattr(Cache, s)).parameters
+    for surface in (a, s):
+        ap = inspect.signature(getattr(AsyncCache, surface)).parameters
+        for kw in ("threshold","tenant_id","plan","metadata","cost_per_call"):
+            if kw in sp and kw in ap and ap[kw].default != sp[kw].default:
+                print(f"DRIFT AsyncCache.{surface}.{kw} = {ap[kw].default!r} "
+                      f"vs Cache.{s}.{kw} = {sp[kw].default!r}")
+print("done")
+PY
+```
+
+A forwarded kwarg whose default differs from its source is an unconditional
+override of whatever the constructor was given. There is no case where that is
+what you meant.
+
 ---
 
 ## Backends
