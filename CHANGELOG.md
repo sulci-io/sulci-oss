@@ -8,6 +8,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Docs: the telemetry allowlist is EIGHT fields, not nine (2026-07-25)
+
+`WIRE_FIELDS` has held exactly eight names since v0.5.2 — `event`, `backend`,
+`hits`, `misses`, `avg_latency_ms`, `sdk_version`, `python_version`,
+`fingerprint` — and `tests/test_telemetry.py` has asserted that exact set for
+just as long. The *number* written beside it said nine.
+
+Traced to `sulci-platform`'s ADR 0010, which printed the eight-field
+`TelemetryEvent` model under the heading "The 9-field allowlist" and closed
+with "That's it. Nine fields." It propagated to 80 occurrences across two
+repos, including this file's own v0.5.2 entry (corrected in place rather than
+left standing — a wrong field count in a privacy contract is not history, it
+is just wrong), `README.md`'s privacy-firewall paragraph (which said "nine"
+and then listed eight in the same sentence), and `sulci/__init__.py`'s module
+docstring.
+
+**No behaviour changed and no wire field moved.** What changed is that the
+count is now asserted: `test_wire_field_count_is_eight` sits beside the
+existing set-equality test, because a set assertion cannot see a wrong number
+in a docstring. `sulci-platform` carries the mirror
+(`test_allowlist_is_exactly_eight_fields`).
+
 ## [0.8.3] — 2026-07-24 — AsyncCache `cost_per_call` default parity + docs-only CI gate
 
 ### Fixed: `AsyncCache(cost_per_call=…)` was overridden on every call (2026-07-24)
@@ -1667,7 +1689,7 @@ Wave 2 (`sulci.connect()` device-code flow) follows in v0.6.0 once the gateway's
   - `get_machine_id()` generates a fresh `uuid4` on first call and persists it; same machine returns the same id forever after. Used as one input to the deployment fingerprint.
 - **`sulci.telemetry`** — helpers for the legacy `connect()` emit pipe (distinct from the v0.5.0 `sulci.sinks.telemetry.TelemetrySink`, which is the per-event `EventSink` implementation — see module docstring for the disambiguation).
   - `build_fingerprint(machine_id, backend, embedding_model, threshold, context_window)` — stable, anonymous, config-aware deployment hash. 24 hex chars (12-byte blake2b).
-  - `WIRE_FIELDS` — the exact 9-field allowlist accepted by the gateway `TelemetryEvent` schema. Imported into `_post()` as a final safety strip against any future flush() drift.
+  - `WIRE_FIELDS` — the exact 8-field allowlist accepted by the gateway `TelemetryEvent` schema. Imported into `_post()` as a final safety strip against any future flush() drift.
   - `coerce_to_wire(payload)` — strips non-allowlisted keys.
   - `python_version_str()` — version helper for the wire payload.
 - **`fingerprint` field in `/v1/telemetry` payloads.** Resolves the `analytics.py` comment at line 103: *"v0.5.1 sends None"*. Now sends a stable per-deployment hash so the dashboard's "Active deployments" tile dedupes correctly across restarts.

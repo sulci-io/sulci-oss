@@ -548,7 +548,7 @@ What's new at the wire level:
 
 - **Per-deployment fingerprint** — `blake2b(machine_id || backend || embedding_model || threshold || context_window)` truncated to 24 hex chars. The `machine_id` is a fresh `uuid4` generated once and persisted at `~/.sulci/config` (mode 0600). No PII, no MAC, no hostname. Switching backends produces a new fingerprint, which the dashboard treats as a new deployment.
 - **`cache.set` events** are now buffered and POSTed alongside `cache.get` events — gives the dashboard a write-vs-read picture of your cache.
-- **Privacy firewall is unchanged.** Wire payload is locked to nine allowlisted fields (`event`, `backend`, `hits`, `misses`, `avg_latency_ms`, `sdk_version`, `python_version`, `fingerprint`). The gateway uses `extra='forbid'` server-side as a hard rejection.
+- **Privacy firewall is unchanged.** Wire payload is locked to eight allowlisted fields — `event`, `backend`, `hits`, `misses`, `avg_latency_ms`, `sdk_version`, `python_version`, `fingerprint` — which is the whole list, so you can count it. (Through 2026-07-25 this sentence said *nine* and then listed eight; the list was always right.) The gateway uses `extra='forbid'` server-side as a hard rejection.
 
 New top-level modules:
 
