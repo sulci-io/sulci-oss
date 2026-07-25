@@ -29,7 +29,7 @@ What is sent (aggregate counts only — no query content, no user data):
     {event, backend, hits, misses, avg_latency_ms, sdk_version,
      python_version, fingerprint}
 
-The 9-field shape is locked by the gateway's TelemetryEvent schema
+The 8-field shape is locked by the gateway's TelemetryEvent schema
 (``extra='forbid'`` — anything else is rejected with HTTP 422 and the
 batch is silently dropped). See ``sulci.telemetry.WIRE_FIELDS``.
 

@@ -8,7 +8,7 @@ D13 coverage:
   - build_fingerprint() changes when any config bit changes
   - build_fingerprint() never includes raw machine_id in output
   - python_version_str() returns N.N.N
-  - WIRE_FIELDS matches the gateway TelemetryEvent schema (9 fields)
+  - WIRE_FIELDS matches the gateway TelemetryEvent schema (8 fields)
   - coerce_to_wire() strips non-allowlisted fields
   - _flush() includes fingerprint in payload (cache.get)
   - _flush() emits a separate POST for cache.set events
@@ -117,6 +117,20 @@ class TestWireContract:
             "sdk_version", "python_version", "fingerprint",
         }
         assert tel.WIRE_FIELDS == expected
+
+    def test_wire_field_count_is_eight(self):
+        """The count is a separate assertion from the set on purpose.
+
+        The set has been right since v0.5.2. The *number* beside it was
+        written as "nine" in ADR 0010 on 2026-04-30 and copied into this
+        file's own module docstring, sulci's README, the gateway
+        docstrings, the privacy runbook, three book chapters and three
+        diagrams — 80 occurrences across two repos, none of which the
+        set-equality test above could see. Corrected 2026-07-25. If this
+        assertion fails, update every prose mention in lockstep; grep
+        both repos for "8-field".
+        """
+        assert len(tel.WIRE_FIELDS) == 8
 
     def test_coerce_strips_non_allowlisted(self):
         payload = {
