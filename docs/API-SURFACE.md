@@ -24,30 +24,19 @@ here instead — or if you must restate it, paste the command alongside.**
 
 ---
 
-## Regenerate this file
+## Check this file
 
-```bash
-cd ~/code/sulci-oss
-python3 - <<'PY'
-import ast
-for f in ("sulci/core.py", "sulci/async_cache.py"):
-    tree = ast.parse(open(f).read())
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ClassDef):
-            print(f"\n### {f} :: class {node.name}")
-            for m in node.body:
-                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    if m.name.startswith("_") and m.name != "__init__":
-                        continue
-                    a = m.args
-                    print(f"  {m.name}("
-                          f"pos={[x.arg for x in a.args]}, "
-                          f"kwonly={[x.arg for x in a.kwonlyargs]})")
-PY
-grep -n '^version' pyproject.toml
-```
+    python3 scripts/check_api_surface.py          # exit 1 on drift
+    python3 scripts/check_api_surface.py --show   # the measured surface
 
-If the output disagrees with anything below, **the output wins** — update this
+Runs in CI on every PR, inside the `changes` job -- so it runs on docs-only PRs
+too, where the test matrix is skipped and nothing else would read this file.
+
+It checks the public method set, every keyword-only parameter, every
+`Cache.__init__` default, and the version in the header above. It does not
+check prose: a checker that fires on wording gets deleted within a week.
+
+If the check disagrees with anything below, **the output wins** -- update this
 file and date it, then grep the estate for whatever else restated the old value.
 
 ---
