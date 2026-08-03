@@ -85,6 +85,13 @@ jobs:
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Runs on BOTH sides of the docs-only gate, deliberately. A code-only PR
+      # moves core.py and leaves the doc behind; a docs-only PR edits the doc
+      # and the 12-job matrix is skipped entirely, so nothing else would read
+      # it. ~1s: two ast.parse calls and a regex over one markdown file.
+      - name: API surface matches the docs
+        run: python3 scripts/check_api_surface.py
+
   # ── Matrix ────────────────────────────────────────────────────────────
   # NOTE THE ABSENCE OF A JOB-LEVEL `if:`. That was the obvious way to write
   # this and it does not work here. Measured on PR #118, a docs-only probe:

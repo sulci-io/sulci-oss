@@ -184,3 +184,9 @@ checkin-fast: smoke-fast test-per-file examples benchmark-verify
         test test-async test-integrations test-all test-cov \
         test-per-file test-per-file-fast examples verify-integration-examples \
         benchmark-verify benchmark-agent checkin checkin-fast verify
+
+check-api:
+	@python3 scripts/check_api_surface.py
+
+show-api:
+	@python3 scripts/check_api_surface.py --show
