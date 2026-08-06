@@ -91,6 +91,11 @@ parser.add_argument("--context",        action="store_true",
                     help="Run context-aware benchmark")
 parser.add_argument("--context-window",    type=int,   default=4,
                     help="Turns to remember per session (default: 4)")
+parser.add_argument("--query-weight",     type=float, default=0.70,
+                    help="Blend ratio for context-aware lookup. 0.70 (default) "
+                         "favours vocabulary amplification; lower values favour "
+                         "reference resolution -- resolving 'how do I fix it' "
+                         "from the previous turn.")
 parser.add_argument("--context-threshold", type=float, default=0.58,
                     help="Similarity threshold for context benchmark (default: 0.58)")
 parser.add_argument("--agent",          action="store_true",
@@ -250,7 +255,8 @@ class _BuiltinCache:
 class _SulciWrapper:
     """Thin wrapper around sulci.Cache to match the built-in interface."""
 
-    def __init__(self, threshold: float, db_path: str, context_window: int = 0):
+    def __init__(self, threshold: float, db_path: str, context_window: int = 0,
+                 query_weight: float = 0.70):
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         try:
             from sulci import Cache
@@ -263,7 +269,7 @@ class _SulciWrapper:
             db_path        = db_path,
             ttl_seconds    = None,
             context_window = context_window,
-            query_weight   = 0.70,
+            query_weight   = query_weight,
             context_decay  = 0.50,
         )
         self.threshold      = threshold
@@ -482,7 +488,8 @@ class _ContextWindow:
 class _BuiltinContextCache(_BuiltinCache):
     """LSH-accelerated cache with per-session context blending."""
 
-    def __init__(self, threshold: float = 0.85, context_window: int = 4):
+    def __init__(self, threshold: float = 0.85, context_window: int = 4,
+                 query_weight: float = 0.70):
         super().__init__(threshold)
         self.context_window = context_window
         self._sessions: dict[str, _ContextWindow] = {}
@@ -491,7 +498,7 @@ class _BuiltinContextCache(_BuiltinCache):
         if session_id not in self._sessions:
             self._sessions[session_id] = _ContextWindow(
                 max_turns    = self.context_window,
-                query_weight = 0.70,
+                query_weight = query_weight,
                 decay        = 0.50,
             )
         return self._sessions[session_id]
@@ -958,7 +965,8 @@ def build_context_corpus(n_followups: int = 5) -> list:
 
 
 def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
-                      context_window: int = 4) -> dict:
+                      context_window: int = 4,
+                      query_weight: float = 0.70) -> dict:
     """
     Run the context-aware benchmark.
 
@@ -988,11 +996,15 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
     if use_sulci:
         db_sl  = os.path.join(args.out, "ctx_bench_stateless_db")
         db_ctx = os.path.join(args.out, "ctx_bench_context_db")
-        cache_stateless = _SulciWrapper(ctx_threshold, db_sl, context_window=0)
-        cache_context   = _SulciWrapper(ctx_threshold, db_ctx, context_window=context_window)
+        cache_stateless = _SulciWrapper(ctx_threshold, db_sl, context_window=0,
+                                        query_weight=query_weight)
+        cache_context   = _SulciWrapper(ctx_threshold, db_ctx, context_window=context_window,
+                                        query_weight=query_weight)
     else:
-        cache_stateless = _BuiltinContextCache(ctx_threshold, context_window=0)
-        cache_context   = _BuiltinContextCache(ctx_threshold, context_window=context_window)
+        cache_stateless = _BuiltinContextCache(ctx_threshold, context_window=0,
+                                               query_weight=query_weight)
+        cache_context   = _BuiltinContextCache(ctx_threshold, context_window=context_window,
+                                               query_weight=query_weight)
 
     # ── Warm both caches ─────────────────────────────────────────────────────
     # Each session stores two cache entries:
@@ -2389,7 +2401,8 @@ def main():
         ctx_data = run_context_bench(
             n_followups    = 8,
             use_sulci      = args.use_sulci,
-            context_window = args.context_window,
+            context_window=args.context_window,
+                                query_weight=args.query_weight,
         )
         save_json(ctx_data["summary"], "context_summary.json")
         save_csv(ctx_data["summary"]["domain_breakdown"], "context_accuracy.csv")
