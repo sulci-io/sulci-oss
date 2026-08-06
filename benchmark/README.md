@@ -113,14 +113,30 @@ steady-state hit rate.
 
 **Engine choice matters significantly:**
 
-| Mode | Aggregate hit rate | Warm-session hit rate | Notes |
-|---|---|---|---|
-| TF-IDF (default) | ~95% | ~98% | Upper bound. CI baseline. Saturates quickly because TF-IDF token overlap is more permissive than MiniLM cosine at threshold 0.85. |
-| Real MiniLM (`--use-sulci`) | ~60-75% | ~75-85% | Conservative. **This is the number to cite externally.** |
-| Real Claude (`--use-claude`) | as above | as above | Adds real-LLM latency + cost-saved numbers; doesn't change hit rates. |
+| Mode | Aggregate | Cold session | Warm session | Notes |
+|---|---|---|---|---|
+| TF-IDF (default) | 95.0% | 43% | 97.9% | CI baseline, `baseline.json`. |
+| Real MiniLM (`--use-sulci`) | **95.0%** | **27%** | **99.4%** | MEASURED 2026-08-04. |
+| Real Claude (`--use-claude`) | as above | as above | as above | Adds real-LLM latency and cost-saved numbers; does not change hit rates. |
 
-The TF-IDF mode is regression-gated via `make benchmark-agent`; the
-real-MiniLM mode is the headline number for blog posts and whitepapers.
+⚠️ **This table previously said real MiniLM gives "~60-75% aggregate" and
+called it "the number to cite externally". That was never measured.** Run on
+2026-08-04 it gives 95.0% — the same as the TF-IDF baseline it was described as
+being conservative against. That one line is where the 60-75% figure in the
+site hero, the SI pitch deck and the email signature came from.
+
+The "upper bound" framing went with it: both engines score ~95% here, so TF-IDF
+is not an upper bound on the agent workload.
+
+⚠️ **The agent aggregate is not a good external number in either engine.** The
+`novel` category — dispatches the generator labels as new work — hits 92.6% on
+MiniLM, because `max_unique_combinations ≈ 150` across 2,025 dispatches means
+each "novel" prompt recurs about thirteen times. The aggregate largely measures
+template reuse.
+
+**The cold→warm progression is the real result**: 27% → 99.4%. An agent loop
+re-asking the same things converges fast, and that is structurally true rather
+than an artifact of the generator.
 
 ---
 
@@ -188,6 +204,8 @@ Embedding engine:
   --use-sulci           Use sulci.Cache + MiniLM instead of built-in TF-IDF
   --fresh               Delete existing benchmark DBs before running
                         (prevents stale-cache hit rate inflation with --use-sulci)
+  --seed N              Corpus RNG seed (default 42). Varies which groups are
+                        held out, so a result can be checked across draws.
 
 Claude API:
   --use-claude          Call Claude on misses + verify hits against live responses
@@ -203,6 +221,43 @@ Context benchmark:
 
 ---
 
+## Discrimination metrics — MEASURED 2026-08-04
+
+`summary.json` reports three numbers instead of one hit rate. A single hit rate
+cannot distinguish a good cache from one that answers everything: both score
+high.
+
+| | |
+|---|---|
+| `recall` | of queries that SHOULD hit, how many did |
+| `false_hit_rate` | of queries that should MISS, how many hit anyway — the harmful case, where a user receives someone else's answer and acts on it |
+| `precision` | of all hits, how many matched the right group |
+
+Four corpus draws (`--seed 1 2 3 42`), threshold 0.85, 39% of the test set
+having no correct answer cached:
+
+| | MiniLM (shipped) | TF-IDF (default) |
+|---|---|---|
+| recall | **0.9990** [.9985–.9995] | 0.667 [.641–.684] |
+| false-hit | **0.0106** [.0062–.0185] | 0.304 [.274–.365] |
+| precision | **0.9377** [.9213–.9469] | 0.284 [.265–.303] |
+
+Per 1,000 queries with no cached answer, MiniLM wrongly answers **11**; TF-IDF
+wrongly answers **304**.
+
+⚠️ **`general_knowledge` is the weak domain at ~25% false positives** — "what
+is AI" and "what is machine learning" are adjacent enough to conflate. Reported
+rather than hidden.
+
+⚠️ **The bare `hit_rate` is no longer meaningful** and should not be quoted. It
+now averages recall and false-hit over a corpus that is 39% should-miss by
+design.
+
+**Cost:** roughly 10 minutes per `--use-sulci` run, 20+ with `--context`. This
+is a nightly or on-demand job, not a per-PR one.
+
+---
+
 ## Output Files
 
 All written to `benchmark/results/` (or `--out` directory):
@@ -210,7 +265,7 @@ All written to `benchmark/results/` (or `--out` directory):
 | File | Description |
 |------|-------------|
 | `summary.json` | Overall stateless benchmark stats |
-| `domain_breakdown.csv` | Per-domain hit rates, FP rates, cost savings |
+| `domain_breakdown.csv` | Per-domain hit rates, FP rates, cost savings. `general_knowledge` is the weak domain — see above. |
 | `threshold_sweep.csv` | Hit rate vs threshold 0.70–0.95 |
 | `time_series.csv` | Hit rate evolution over query batches |
 | `false_positives.csv` | Near-miss analysis (top 100) |
@@ -229,6 +284,13 @@ between runs in `benchmark/results/sulci_bench_db`. If you run the benchmark
 twice without `--fresh`, the second run's warmup phase writes on top of an
 already-populated cache, causing every test query to hit — producing an
 artificially inflated hit rate (100%) and zero misses.
+
+⚠️ **The same shape was true of the CORPUS itself until 2026-08-04.** Every
+test query was a cosmetic variant of a warmup query and every group was warmed,
+so every test query had a same-group twin already cached — "an artificially
+inflated hit rate and zero misses", from the corpus rather than the database.
+`--fresh` could not help, because the problem was not stale state. Held-out
+groups and near-miss pairs fixed it.
 
 **Always use `--fresh` for canonical benchmark runs:**
 
