@@ -64,6 +64,10 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
+# Seeded at import so the corpus is reproducible; overridden by --seed after
+# args are parsed. Varying it is how you tell a real result from one draw --
+# which 8 of each domain's 10 groups get warmed is a shuffle, and the held-out
+# pair is what the discrimination metrics are measured against.
 random.seed(42)
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
@@ -99,7 +103,14 @@ parser.add_argument("--agent-threshold",  type=float, default=0.85,
                     help="Similarity threshold for --agent (default: 0.85)")
 parser.add_argument("--out",            default=os.path.join(
                         os.path.dirname(__file__), "results"))
+parser.add_argument("--seed", type=int, default=None,
+                    help="Corpus RNG seed (default: 42). Vary it to check "
+                         "a result holds across corpus draws.")
 args = parser.parse_args()
+
+# Re-seed AFTER parsing. build_corpus() runs later, so this reaches it.
+if getattr(args, "seed", None) is not None:
+    random.seed(args.seed)
 
 os.makedirs(args.out, exist_ok=True)
 
@@ -1169,8 +1180,71 @@ def _context_analytics(results: list, context_window: int) -> dict:
 # 4.  CORPUS BUILDER
 # ══════════════════════════════════════════════════════════════════════════════
 
-def build_corpus(n_test: int = 5000) -> dict:
-    """Returns {domain: [{query, response, group, is_warmup}]}"""
+# ══════════════════════════════════════════════════════════════════════════════
+# NEAR-MISS PAIRS  --  the adversarial half of the corpus
+# ══════════════════════════════════════════════════════════════════════════════
+# Each entry is (domain, group_key, [queries]) where the group is NEVER warmed.
+# Every query here is lexically close to a warmed group and semantically
+# different from it. A hit on any of these is a FALSE HIT: the user receives an
+# answer to a question they did not ask, and acts on it.
+#
+# These are the queries the old corpus could not express. Without them a cache
+# that returns its nearest entry for everything scores ~100% and looks perfect.
+NEAR_MISS = [
+    ("customer_support", "reset api key", [
+        "How do I reset my API key?", "Reset my API key",
+        "I need to regenerate my API key", "How to rotate an API key",
+        "My API key needs resetting", "Generate a new API key",
+        "Where do I reset the API key?", "API key reset steps",
+    ]),
+    ("customer_support", "cancel appointment", [
+        "How do I cancel my appointment?", "Cancel my appointment",
+        "I want to cancel a scheduled appointment", "Cancel my booking",
+        "How to cancel a meeting I booked", "Appointment cancellation",
+        "Can I cancel my scheduled call?", "Cancel the demo I booked",
+    ]),
+    ("product_faq", "downgrade plan", [
+        "How do I downgrade my plan?", "Downgrade from Pro",
+        "I want to move to a cheaper plan", "How to downgrade my subscription",
+        "Switch from Pro to Free", "Downgrade my account tier",
+        "Can I move down a plan?", "Steps to downgrade",
+    ]),
+    ("developer_qa", "python threading", [
+        "How does threading work in Python?", "Python threading explained",
+        "Difference between threads and processes in Python",
+        "When to use threading over asyncio", "Python GIL and threads",
+        "Threading module basics", "How to spawn a thread in Python",
+        "Thread safety in Python",
+    ]),
+    ("medical_information", "low blood pressure", [
+        "What causes low blood pressure?", "Low blood pressure symptoms",
+        "How to treat hypotension", "Is low blood pressure dangerous?",
+        "Hypotension explained", "Signs of low blood pressure",
+        "What to do about low BP", "Low blood pressure treatment",
+    ]),
+    ("general_knowledge", "what is deep learning", [
+        "What is deep learning?", "Deep learning explained",
+        "How do neural networks work?", "Deep learning vs machine learning",
+        "What are neural nets?", "Introduction to deep learning",
+        "Explain deep learning simply", "Deep learning basics",
+    ]),
+]
+
+
+def build_corpus(n_test: int = 5000, holdout_per_domain: int = 2) -> dict:
+    """Returns {domain: [{query, response, group, is_warmup, should_hit}]}
+
+    HELD-OUT GROUPS. `holdout_per_domain` groups in each domain are tested but
+    never warmed, so no correct answer exists for them in the cache. They are
+    the same domain and the same vocabulary as the warmed groups, which makes
+    them hard negatives rather than trivial ones -- `what is ai` is warmed,
+    `machine learning` is not, and the two are genuinely adjacent.
+
+    Before 2026-08-04 every group was warmed, so every test query had a
+    same-group twin already cached and a hit was always available. The hit
+    rate could only be high, and the corpus could not express a query that
+    SHOULD miss. That is what made 99.9% meaningless.
+    """
     corpus      = {}
     n_per_domain= n_test // len(DOMAINS)
     prefixes    = ["", "Please tell me ", "Can you explain ", "I need to know ",
@@ -1182,6 +1256,12 @@ def build_corpus(n_test: int = 5000) -> dict:
         templates = cfg["templates"]
         responses = cfg["responses"]
         queries   = []
+
+        # Randomly drawn, not templates[-2:], so --seed varies WHICH groups the
+        # cache has never seen. Fixed hold-outs meant every run measured
+        # discrimination against the same two groups per domain.
+        held = (set(random.sample([g for g, _ in templates], holdout_per_domain))
+                if holdout_per_domain else set())
 
         for group_key, base_queries in templates:
             resp_key = next((k for k in responses if k in group_key),
@@ -1197,17 +1277,48 @@ def build_corpus(n_test: int = 5000) -> dict:
                     variant += "?"
                 expanded.append(variant)
             random.shuffle(expanded)
+            is_held = group_key in held
             for i, q in enumerate(expanded[:200]):
                 queries.append({
-                    "query":     q,
-                    "response":  response,
-                    "group":     group_key,
-                    "domain":    domain,
-                    "is_warmup": i < 100,
+                    "query":      q,
+                    "response":   response,
+                    "group":      group_key,
+                    "domain":     domain,
+                    # a held-out group contributes NO warmup rows
+                    "is_warmup":  (i < 100) and not is_held,
+                    "should_hit": not is_held,
+                })
+
+        # near-miss pairs: never warmed, must miss
+        for nm_domain, nm_group, nm_queries in NEAR_MISS:
+            if nm_domain != domain:
+                continue
+            expanded = list(nm_queries)
+            for _ in range(90):
+                base    = random.choice(nm_queries)
+                variant = (random.choice(prefixes) +
+                           base.rstrip("?") +
+                           random.choice(suffixes)).strip()
+                if not variant.endswith(("?", ".")):
+                    variant += "?"
+                expanded.append(variant)
+            random.shuffle(expanded)
+            for q in expanded[:100]:
+                queries.append({
+                    "query":      q,
+                    "response":   "",
+                    "group":      nm_group,
+                    "domain":     domain,
+                    "is_warmup":  False,
+                    "should_hit": False,
                 })
 
         random.shuffle(queries)
-        corpus[domain] = queries[:n_per_domain * 2]
+        # keep every held-out and near-miss row; they are the point
+        warm = [q for q in queries if q["is_warmup"]]
+        neg  = [q for q in queries if not q["should_hit"]]
+        pos  = [q for q in queries if not q["is_warmup"] and q["should_hit"]]
+        corpus[domain] = warm[:n_per_domain] + pos[:n_per_domain] + neg
 
     return corpus
 
@@ -1227,6 +1338,7 @@ class Result:
     matched_group:    str
     latency_ms:       float
     correct:          bool   # group-label correctness (synthetic mode)
+    should_hit:       bool = True   # False for held-out groups and near-miss pairs
     # Claude-mode extras (populated only when --use-claude is active)
     live_response:    str   = ""    # actual Claude response on miss
     live_latency_ms:  float = 0.0   # real API round-trip on miss
@@ -1275,6 +1387,7 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
         ms = (time.perf_counter() - t0) * 1000
         results.append(Result(
             query=item["query"], domain=item["domain"], group=item["group"],
+            should_hit=item.get("should_hit", True),
             is_warmup=True, cache_hit=False, similarity=1.0,
             matched_group="", latency_ms=round(ms, 3), correct=True,
         ))
@@ -1295,25 +1408,42 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
                               group=item["group"], domain=item["domain"])
                     results.append(Result(
                         query=item["query"], domain=item["domain"], group=item["group"],
+                        should_hit=item.get("should_hit", True),
                         is_warmup=False, cache_hit=False, similarity=sim,
                         matched_group="", latency_ms=round(ms, 3), correct=True,
                         live_response=live_resp, live_latency_ms=round(live_ms, 1),
                         semantic_correct=None,  # miss — no cached response to score
                     ))
                 else:
-                    # API cap hit or error: fall back to synthetic response
-                    cache.set(item["query"], item["response"],
-                              group=item["group"], domain=item["domain"])
+                    # API cap hit or error: fall back to synthetic response.
+                    # Same rule as the non-Claude path: never cache a row we
+                    # are asserting should miss.
+                    if item.get("should_hit", True):
+                        cache.set(item["query"], item["response"],
+                                  group=item["group"], domain=item["domain"])
                     results.append(Result(
                         query=item["query"], domain=item["domain"], group=item["group"],
+                        should_hit=item.get("should_hit", True),
                         is_warmup=False, cache_hit=False, similarity=sim,
                         matched_group="", latency_ms=round(ms, 3), correct=True,
                     ))
             else:
-                cache.set(item["query"], item["response"],
-                          group=item["group"], domain=item["domain"])
+                # Write-back on miss is correct for a cache benchmark: a real
+                # cache stores what it just computed, and the next identical
+                # query should hit.
+                #
+                # But NOT for a row we are asserting should miss. Those groups
+                # are deliberately unwarmed; caching the first one makes the
+                # other 199 hit it at sim 1.0 and turns the hard-negative set
+                # into a self-fulfilling 94% "false-hit rate". Measured, and
+                # wrong, on 2026-08-04 before this line existed. The tell was
+                # the entry count growing by exactly the test-set size.
+                if item.get("should_hit", True):
+                    cache.set(item["query"], item["response"],
+                              group=item["group"], domain=item["domain"])
                 results.append(Result(
                     query=item["query"], domain=item["domain"], group=item["group"],
+                    should_hit=item.get("should_hit", True),
                     is_warmup=False, cache_hit=False, similarity=sim,
                     matched_group="", latency_ms=round(ms, 3), correct=True,
                 ))
@@ -1331,6 +1461,7 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
                 )
                 results.append(Result(
                     query=item["query"], domain=item["domain"], group=item["group"],
+                    should_hit=item.get("should_hit", True),
                     is_warmup=False, cache_hit=True, similarity=sim,
                     matched_group=m_group, latency_ms=round(ms, 3),
                     correct=group_correct,
@@ -1341,6 +1472,7 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
             else:
                 results.append(Result(
                     query=item["query"], domain=item["domain"], group=item["group"],
+                    should_hit=item.get("should_hit", True),
                     is_warmup=False, cache_hit=True, similarity=sim,
                     matched_group=m_group, latency_ms=round(ms, 3), correct=group_correct,
                 ))
@@ -1376,6 +1508,16 @@ def summary(results: list, threshold: float) -> dict:
     fps  = [r for r in hits if not r.correct]
     COST = 0.005
 
+    # should-hit / should-miss partitions
+
+    pos      = [r for r in test if getattr(r, "should_hit", True)]
+
+    neg      = [r for r in test if not getattr(r, "should_hit", True)]
+
+    pos_hits = [r for r in pos if r.cache_hit]
+
+    neg_hits = [r for r in neg if r.cache_hit]
+
     out = {
         "threshold":             threshold,
         "total_queries":         len(test),
@@ -1384,6 +1526,24 @@ def summary(results: list, threshold: float) -> dict:
         "hit_rate":              round(len(hits) / len(test), 4) if test else 0,
         "false_positives":       len(fps),
         "false_positive_rate":   round(len(fps) / len(hits), 4) if hits else 0,
+
+        # ── Discrimination. A single hit rate cannot distinguish a good cache
+        # from one that answers everything: both score high. These three can.
+        #
+        #   recall        of the queries that SHOULD hit, how many did
+        #   false_hit_rate of the queries that should MISS, how many hit anyway
+        #                  -- the harmful case: the user gets someone else's
+        #                  answer and acts on it
+        #   precision     of all hits, how many matched the right group
+        #
+        # Before 2026-08-04 the corpus had no should-miss queries at all, so
+        # false_hit_rate did not exist and hit_rate was the only number. That
+        # is how 99.9% got published.
+        "recall":                round(len(pos_hits) / len(pos), 4) if pos else 0,
+        "false_hit_rate":        round(len(neg_hits) / len(neg), 4) if neg else 0,
+        "precision":             round((len(hits) - len(fps)) / len(hits), 4) if hits else 0,
+        "n_should_hit":          len(pos),
+        "n_should_miss":         len(neg),
         "avg_similarity_hits":   round(sum(r.similarity for r in hits) / len(hits), 4) if hits else 0,
         "latency_hit_p50_ms":    round(percentile([r.latency_ms for r in hits], 50), 3),
         "latency_hit_p95_ms":    round(percentile([r.latency_ms for r in hits], 95), 3),
