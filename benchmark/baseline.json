@@ -1,80 +1,73 @@
 {
   "_meta": {
-    "STATUS": "SUPERSEDED \u2014 DO NOT TREAT AS CURRENT",
-    "superseded_on": "2026-08-06",
+    "STATUS": "CURRENT",
+    "regenerated_on": "2026-08-07",
     "engine": "builtin-tfidf",
-    "engine_note": "Which engine produced these numbers. verify_benchmark.py checks the optional agent block ONLY when the results file carries a matching _provenance.engine stamp. Mtime cannot do this job: the agent file is always written by a separate earlier invocation, so any timestamp cutoff either rejects a legitimate fresh file or accepts a stale one. The 2026-08-06 defect was a leftover sulci-minilm run checked against these builtin-tfidf numbers, reporting six of eight rows as [OK].",
-    "description": "HISTORICAL TF-IDF benchmark numbers, measured on the PRE-2026-08-04 corpus. That corpus warmed every group, so every test query had a same-group twin already cached, a hit was always available, and the hit rate could only be high. It is kept for provenance: the retired 85.9% / 0.74ms / 3,000x / $21 site claims came from here, and so did the 31.11% false-positive rate that was never published beside them.",
-    "why_it_is_still_here": "scripts/verify_benchmark.py and `make benchmark-verify` compare against this file, and .github/workflows/benchmark.yml runs the benchmark. This file was NOT unreferenced -- it was RED. Deleting it would silently remove a check; leaving it undated let it read as current. It is dated instead.",
-    "known_drift_2026_08_06": "Verified on a clean tree: stateless hit_rate 0.8588 -> 0.6551, false_positive_rate 0.3111 -> 0.4418, cost_reduction_pct 85.88 -> 65.51. This drift predates the 2026-08-06 context work; it is the #127/#128 corpus rebuild, which added held-out groups and NEAR_MISS pairs so that 39% of test queries have no correct answer cached. The numbers below describe a corpus that no longer exists.",
-    "to_regenerate": "python benchmark/run.py --no-sweep --context, then copy the measured values from benchmark/results/summary.json and context_summary.json. Do this only once, deliberately, and record the date and commit here -- a baseline that is refreshed whenever it goes red is not a baseline.",
-    "source": "GitHub Actions benchmark.yml run #36 (commit 35a0c86, pre-v040-baseline)",
+    "source": "benchmark/run.py --no-sweep --context (stateless + context) and --no-sweep --agent (agent block), run locally on the corpus as of sulci-oss b25077f. Deterministic: the same command reproduced these values byte-identically on two machines and two Python patch levels before they were written here.",
+    "description": "Regression baseline for the built-in TF-IDF engine. These are NOT publishable figures and none of them appears on sulci.io. The site publishes MiniLM numbers (recall 0.9990, false-hit 0.0106, precision 0.9377) measured with --use-sulci across four corpus draws; see sulci-platform/docs/marketing/CLAIMS.md. This file exists to detect UNINTENDED CHANGE in the TF-IDF path, which is what CI runs.",
+    "replaces": "The pre-2026-08-07 baseline, which described a corpus that no longer exists: it warmed every group, so every test query had a same-group twin cached, a hit was always available, and the hit rate could only be high. It carried hit_rate 0.8588, false_positive_rate 0.3111, saved_cost_usd 21.47 and the context family 0.816 / 0.776 / 20.8 / 0.176 -- i.e. the retired 85.9%, $21, 81.6%, 77.6%, +20.8pp and +17.6pp site claims, at their source. Those values are deliberately GONE from this file rather than kept for provenance: sulci-oss is public, and a retired figure sitting in a file called baseline.json is found by grep long before anyone reads the note beside it. Their provenance lives in CLAIMS.md and in git history.",
+    "agent_block_note": "The agent numbers are UNCHANGED from the previous baseline (0.9497 / 0.43 / 0.9785 / 5 / 31). They never drifted. Every \"drift\" previously reported against them was a stale agent_summary.json left in benchmark/results/ from a --use-sulci run, compared against these TF-IDF numbers. run.py now stamps _provenance.engine and verify_benchmark.py refuses a mismatch.",
+    "not_checked_by_default": "verify_benchmark.py runs `run.py --no-sweep --context` with no --agent, so the agent block is reported as \"not measured this run\" unless you run `run.py --no-sweep --agent` first. That is expected and is not a failure.",
+    "regeneration_policy": "Do NOT refresh this file because it went red. A baseline refreshed whenever it drifts is not a baseline -- it records whatever happened last. Regenerate only when the corpus or the algorithm changes DELIBERATELY, and when you do, update STATUS, regenerated_on, source and replaces in the same commit.",
     "verified_stable_across_releases": [
       "v0.3.4 (run #26)",
       "v0.3.7 (implicit)",
       "pre-v040-baseline (run #36)"
     ],
-    "tolerance_notes": "Counts may drift by \u00b12 across platforms (Linux vs macOS) due to dict-iteration tie-breaks. Headline percentages match exactly. Latency varies by machine; not part of regression check.",
-    "agent_workload_note": "agent_workload is checked ONLY when benchmark/run.py was invoked with --agent. RETRACTED 2026-08-04: this note previously asserted that real-MiniLM mode gives \"~60-75% aggregate vs ~95% TF-IDF\". That was never measured. Measured 2026-08-04 it gives 95.0% -- the same as TF-IDF, which is therefore not an upper bound on this workload. That single sentence is where the 60-75% figure in the site hero, the SI pitch deck and the email signature came from. Do not restore it."
+    "tolerance_notes": "Counts may drift by \u00b12 across platforms (Linux vs macOS) due to dict-iteration tie-breaks. Headline percentages match exactly. Latency varies by machine; not part of regression check."
   },
   "stateless": {
     "threshold": 0.85,
-    "total_queries": 5000,
-    "cache_hits": 4294,
-    "hit_rate": 0.8588,
-    "false_positives": 1336,
-    "false_positive_rate": 0.3111,
-    "saved_cost_usd": 21.47,
-    "cost_reduction_pct": 85.88
+    "total_queries": 6588,
+    "cache_hits": 4316,
+    "hit_rate": 0.6551,
+    "false_positives": 1907,
+    "false_positive_rate": 0.4418,
+    "saved_cost_usd": 21.58,
+    "cost_reduction_pct": 65.51,
+    "_note": "total_queries is the TEST set (6,588), not --queries. 2,588 of those rows are should-miss by design (39%), which is why false_positive_rate is high and correct. Read it next to that share, never alone."
   },
   "context_aware": {
     "context_window": 4,
+    "query_weight": 0.7,
+    "holdout_per_domain": 1,
     "total_followup_queries": 125,
-    "stateless_hit_rate": 0.64,
-    "stateless_resolution_accuracy": 0.568,
-    "context_hit_rate": 0.816,
-    "context_resolution_accuracy": 0.776,
-    "accuracy_delta_pct": 20.8,
-    "hit_rate_delta": 0.176,
-    "_note": "Measured with NO held-out sessions, so false_hit_rate did not exist and is unmeasurable from this run. 125 follow-ups across 5 domains. accuracy_delta_pct 20.8 and the customer_support improvement of 0.56 below are the retired +20.8pp and +56pp site claims, at their source."
+    "stateless_hit_rate": 0.528,
+    "stateless_resolution_accuracy": 0.57,
+    "context_hit_rate": 0.728,
+    "context_resolution_accuracy": 0.81,
+    "accuracy_delta_pct": 24.0,
+    "hit_rate_delta": 0.2,
+    "context_recall": 0.83,
+    "context_false_hit_rate": 0.32,
+    "context_precision": 0.9451,
+    "_note": "125 follow-ups across 5 domains. Small. accuracy_delta_pct here is a TF-IDF regression figure and must not be published -- the retired +20.8pp came from this same metric on the old corpus. context_recall / false_hit_rate / precision are recorded for drift detection; verify_benchmark.py does not yet compare them."
   },
   "domain_breakdown_context_aware": [
     {
       "domain": "customer_support",
-      "stateless_accuracy": 0.32,
-      "context_accuracy": 0.88,
-      "improvement": 0.56
+      "improvement": 0.55
     },
     {
       "domain": "developer_qa",
-      "stateless_accuracy": 0.8,
-      "context_accuracy": 0.96,
-      "improvement": 0.16
-    },
-    {
-      "domain": "product_faq",
-      "stateless_accuracy": 0.72,
-      "context_accuracy": 0.76,
-      "improvement": 0.04
-    },
-    {
-      "domain": "medical_information",
-      "stateless_accuracy": 0.4,
-      "context_accuracy": 0.6,
       "improvement": 0.2
     },
     {
+      "domain": "product_faq",
+      "improvement": 0.05
+    },
+    {
+      "domain": "medical_information",
+      "improvement": 0.25
+    },
+    {
       "domain": "general_knowledge",
-      "stateless_accuracy": 0.6,
-      "context_accuracy": 0.68,
-      "improvement": 0.08
+      "improvement": 0.15
     }
   ],
   "agent_workload": {
-    "_engine": "tfidf_builtin",
     "n_sessions": 50,
     "dispatches_per_session": 200,
-    "total_dispatches": 10000,
     "aggregate_hit_rate": 0.9497,
     "hit_rate_cold_session": 0.43,
     "hit_rate_warm_session": 0.9785,
@@ -82,6 +75,7 @@
     "misses_per_session_p95": 31,
     "category_hit_rate_structural": 0.9684,
     "category_hit_rate_semi_structural": 0.9325,
-    "category_hit_rate_novel": 0.9378
+    "category_hit_rate_novel": 0.9378,
+    "_note": "RETRACTED and not restored: the previous note claimed real-MiniLM gives \"~60-75% aggregate vs ~95% TF-IDF\". Never measured. Measured 2026-08-04 it gives 95.0%, the same as TF-IDF, which is therefore not an upper bound on this workload. That sentence is where the 60-75% figure in the site hero, the SI pitch deck and the email signature came from."
   }
 }
