@@ -215,8 +215,11 @@ def verify_against_baseline(measured_summary: dict, measured_context: dict,
     # A baseline that has been superseded still runs, and still goes red. Print
     # WHY at the top rather than leaving eight [DRIFT] lines to be interpreted --
     # an unexplained red check is a check people learn to skip.
+    # Only shout when the baseline is NOT current. A banner that prints on every
+    # run is a banner nobody reads, and this one exists to explain an expected
+    # red -- there is nothing to explain when the baseline is live.
     _status = baseline["_meta"].get("STATUS")
-    if _status:
+    if _status and _status != "CURRENT":
         print(f" ⚠  {_status}")
         if baseline["_meta"].get("superseded_on"):
             print(f"    superseded {baseline['_meta']['superseded_on']}. "
