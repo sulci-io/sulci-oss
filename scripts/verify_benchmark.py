@@ -42,6 +42,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
 
+
 # Tolerances
 PCT_TOL    = 1.0   # 1.0 percentage point on rates
 COUNT_TOL  = 2     # 2 absolute on integer counts
@@ -70,27 +71,111 @@ def run_benchmark(timeout_sec: int) -> int:
         return -1
 
 
-def load_results() -> tuple[dict, dict, dict]:
+def load_results(run_started_at: float | None = None,
+                 baseline_engine: str | None = None) -> tuple[dict, dict, dict]:
     """Load benchmark output JSONs.
 
     Returns (summary, context, agent_or_None). The agent file is optional —
     only present when benchmark/run.py was invoked with --agent.
+
+    ⚠️ STALENESS IS THE POINT OF `run_started_at`. This function used to read
+    whatever was on disk. `benchmark/results/` is gitignored and nothing ever
+    clears it, and run_benchmark() invokes `run.py --no-sweep --context` with
+    NO `--agent` — so the agent block was verified against a leftover
+    `agent_summary.json` from some earlier session, and reported six of eight
+    rows as [OK]. Observed 2026-08-06: cold 0.27 / warm 0.9942, which are the
+    MiniLM figures, compared against a TF-IDF baseline of cold 0.43.
+
+    That is the failure class from the vendored-book incident: **a checker that
+    validates a file's properties cannot tell you it is the wrong artifact.**
+    The schema was right, the fields were right, the engine was different.
+
+    Files older than `run_started_at` are therefore not read. A required file
+    that is stale is an error; the optional agent file is skipped with a named
+    reason, because "not checked" and "checked and fine" must not look alike.
+
+    ⚠️ THE AGENT FILE IS GUARDED BY ENGINE, NOT BY TIME, and two timestamp
+    designs were tried and discarded first. This script never writes
+    agent_summary.json -- it runs `run.py --no-sweep --context` with no
+    --agent -- so that file is always produced by a separate earlier
+    invocation. Timing it against the subprocess rejected a file the user had
+    written 26 seconds before. Timing it against process start rejected the
+    same file, because a legitimate `run.py --agent` necessarily finishes
+    before this script begins. **Any mtime cutoff either rejects the legitimate
+    file or accepts this morning's**; there is no threshold that separates them.
+
+    The engine is what actually differed. The 2026-08-06 leftover was a MiniLM
+    run (cold 0.27 / warm 0.9942) checked against a TF-IDF baseline (cold 0.43),
+    and six of eight rows reported [OK]. `run.py` now stamps `_provenance.engine`
+    into every results JSON, and the agent block is checked only when that
+    matches the baseline's engine. A file with no stamp predates the stamp and
+    is skipped by name.
+
+    Age is still printed, because it is useful context -- but it decides
+    nothing.
     """
     summary = RESULTS_DIR / "summary.json"
     context = RESULTS_DIR / "context_summary.json"
     agent   = RESULTS_DIR / "agent_summary.json"
-    if not summary.exists():
-        print(f"ERROR: {summary} not found (benchmark didn't produce stateless results)",
-              file=sys.stderr)
-        sys.exit(2)
-    if not context.exists():
-        print(f"ERROR: {context} not found (benchmark didn't produce context-aware results)",
-              file=sys.stderr)
-        sys.exit(2)
-    agent_data = json.loads(agent.read_text()) if agent.exists() else None
+
+    def is_stale(path: Path, cutoff: float | None) -> bool:
+        if cutoff is None:
+            return False          # --skip-run: caller has opted out, see main()
+        # 1s slack for filesystems with coarse mtime granularity
+        return path.stat().st_mtime < (cutoff - 1.0)
+
+    def engine_of(data: dict) -> str | None:
+        return (data.get("_provenance") or {}).get("engine")
+
+    for required in (summary, context):
+        if not required.exists():
+            print(f"ERROR: {required} not found "
+                  f"(benchmark didn't produce these results)", file=sys.stderr)
+            sys.exit(2)
+        if is_stale(required, run_started_at):
+            print(f"ERROR: {required.name} predates this run "
+                  f"({_ago(required)}) — the benchmark did not rewrite it.",
+                  file=sys.stderr)
+            print(f"       Refusing to verify a stale artifact. Delete "
+                  f"{RESULTS_DIR}/ and re-run.", file=sys.stderr)
+            sys.exit(2)
+
+    agent_data = None
+    if agent.exists():
+        candidate  = json.loads(agent.read_text())
+        found      = engine_of(candidate)
+        if baseline_engine is None:
+            agent_data = candidate        # baseline records no engine; nothing to compare
+        elif found is None:
+            print(f"  ⚠  agent_summary.json has no engine stamp ({_ago(agent)}) "
+                  f"and is NOT checked.")
+            print(f"     It predates the _provenance stamp. Re-run "
+                  f"`run.py --agent` to produce a stamped file.")
+        elif found != baseline_engine:
+            print(f"  ⚠  agent_summary.json was produced by '{found}' but the "
+                  f"baseline is '{baseline_engine}'.")
+            print(f"     NOT checked ({_ago(agent)}). This is the 2026-08-06 "
+                  f"defect: a leftover MiniLM run")
+            print(f"     verified against TF-IDF numbers reported six of eight "
+                  f"rows as [OK].")
+        else:
+            agent_data = candidate
+
     return (json.loads(summary.read_text()),
             json.loads(context.read_text()),
             agent_data)
+
+
+def _ago(path: Path) -> str:
+    """Human-readable age of a file, for staleness messages."""
+    secs = max(0.0, time.time() - path.stat().st_mtime)
+    if secs < 90:
+        return f"{secs:.0f}s old"
+    if secs < 5400:
+        return f"{secs / 60:.0f}m old"
+    if secs < 172800:
+        return f"{secs / 3600:.0f}h old"
+    return f"{secs / 86400:.0f}d old"
 
 
 def compare(label: str, baseline_val, measured_val, tol, kind: str) -> tuple[bool, str]:
@@ -127,6 +212,17 @@ def verify_against_baseline(measured_summary: dict, measured_context: dict,
     print("\n" + "=" * 72)
     print(" Verifying benchmark output against baseline")
     print(f" baseline: {baseline['_meta']['source']}")
+    # A baseline that has been superseded still runs, and still goes red. Print
+    # WHY at the top rather than leaving eight [DRIFT] lines to be interpreted --
+    # an unexplained red check is a check people learn to skip.
+    _status = baseline["_meta"].get("STATUS")
+    if _status:
+        print(f" ⚠  {_status}")
+        if baseline["_meta"].get("superseded_on"):
+            print(f"    superseded {baseline['_meta']['superseded_on']}. "
+                  f"Drift below is EXPECTED until this file is regenerated.")
+        if baseline["_meta"].get("to_regenerate"):
+            print(f"    to regenerate: {baseline['_meta']['to_regenerate']}")
     print(f" tolerances: rates ±{PCT_TOL}pp, counts ±{COUNT_TOL}, money ±${COST_TOL:.2f}")
     print("=" * 72)
 
@@ -272,11 +368,21 @@ def main() -> int:
     baseline = json.loads(baseline_path.read_text())
 
     if not args.skip_run:
+        run_started_at = time.time()
         rc = run_benchmark(args.timeout)
         if rc != 0:
             return 2
+    else:
+        # Opting out of the run opts out of the staleness check — there is no
+        # run to be stale relative to. Say so, rather than letting the absence
+        # of a warning read as a clean bill of health.
+        run_started_at = None
+        print("  ⚠  --skip-run: verifying pre-existing benchmark/results/*.json.")
+        print("     Their age and engine are not checked.")
 
-    measured_summary, measured_context, measured_agent = load_results()
+    measured_summary, measured_context, measured_agent = load_results(
+        run_started_at,
+        baseline_engine=(baseline.get("_meta") or {}).get("engine"))
     ok = verify_against_baseline(measured_summary, measured_context,
                                  measured_agent, baseline)
 
