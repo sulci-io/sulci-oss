@@ -214,9 +214,12 @@ Claude API:
   --claude-max-calls N  Hard cap on API calls to bound cost (default: 500)
 
 Context benchmark:
-  --context             Run context-aware benchmark (800 conversation pairs)
+  --context             Run context-aware benchmark (125 follow-ups, see below)
   --context-window N    Turns per session (default: 4)
   --context-threshold F Context similarity cutoff (default: 0.58)
+  --context-holdout N   Sessions per domain left UNWARMED (default: 1)
+  --context-followups N Follow-ups per session (default: 5, clamped by the pools)
+  --context-sweep       Sweep --query-weight, recording accuracy AND false-hit
 ```
 
 ---
@@ -271,6 +274,7 @@ All written to `benchmark/results/` (or `--out` directory):
 | `false_positives.csv` | Near-miss analysis (top 100) |
 | `context_summary.json` | Context-aware benchmark results (`--context`) |
 | `context_accuracy.csv` | Per-domain resolution accuracy (`--context`) |
+| `context_alpha_sweep.csv` | Accuracy **and false-hit** vs `query_weight` (`--context-sweep`) |
 
 `*.json` and `*.csv` result files are gitignored. The `results/` directory
 contains only a `.gitkeep` in the repository.
@@ -342,6 +346,87 @@ python benchmark/run.py --no-sweep --queries 500
 - **Context benchmark:** uses brute-force cosine scan (not LSH) to avoid false
   negatives on the small context corpus (<300 entries). Threshold 0.58 is
   calibrated for TF-IDF blended vectors; real embeddings may warrant 0.70–0.75.
+
+---
+
+## The context benchmark — size, hold-outs, and the alpha sweep
+
+### It is 125 follow-ups, not 800 pairs
+
+⚠️ The module docstring said "800-pair" from v0.2.0 until 2026-08-06 and the
+corpus has never been that size. There are 25 sessions (5 domains × 5) and every
+`SESSION_FOLLOWUPS` pool holds exactly 5 entries, so `min(n_followups,
+len(pool))` clamps the draw to 5 and the corpus is 125 rows regardless of
+`--context-followups`. Setting it higher now prints the clamp rather than
+leaving it to be inferred. **Growing this corpus means writing follow-ups.**
+
+The retired `+20.8pp`, `+17.6pp` and `+56pp` figures came from this corpus. They
+were 125 samples across 5 domains, and nothing printed the n.
+
+### Hold-outs, and why a resolution-accuracy delta cannot stand alone
+
+`--context-holdout N` leaves N sessions per domain **unwarmed**. They are primed
+and queried identically; the only difference is that no correct answer exists
+for them. Every hit they produce is a **false hit** — the blended lookup vector
+drifted onto a neighbouring session and returned an answer to a question the
+user did not ask.
+
+This is the only thing that separates *"context resolved the follow-up"* from
+*"context made the cache answer everything"*. Both raise resolution accuracy on
+rows where an answer exists. Before 2026-08-06 the context benchmark had no
+should-miss rows at all, so `false_hit_rate` did not exist.
+
+`--context-holdout 0` reproduces the pre-2026-08-06 corpus. It reports
+`false_hit_rate: null`, **not** `0.0` — an unmeasured rate and a measured zero
+are different claims and must not render the same.
+
+⚠️ `resolution_accuracy` is computed over should-hit rows only. Held-out rows can
+never be resolved correctly, so folding them in would drag the number down
+mechanically and make it incomparable with anything measured before hold-outs
+existed. Their contribution is `false_hit_rate`, on its own axis.
+
+### Reading `context_alpha_sweep.csv`
+
+`--context-sweep` runs the context benchmark at eight values of `query_weight`
+and records accuracy **and** false-hit at each. Read both columns.
+
+**A lower alpha that raises accuracy and false-hit together has not found more
+answers — it has loosened the cache.** Measured on the **built-in TF-IDF engine**
+(`--context --context-sweep`, holdout 1, 100 should-hit / 25 should-miss):
+
+| `query_weight` | ctx accuracy | ctx recall | ctx false-hit | ctx precision |
+|---|---|---|---|---|
+| 0.20 | 97.0% | 97.0% | **92.0%** | 97.5% |
+| 0.30 | 97.0% | 97.0% | **92.0%** | 97.5% |
+| 0.40 | 94.0% | 97.0% | **92.0%** | 95.0% |
+| 0.50 | 94.0% | 97.0% | **92.0%** | 95.0% |
+| 0.60 | 80.0% | 85.0% | **64.0%** | 92.1% |
+| **0.70 (shipped default)** | 81.0% | 83.0% | **32.0%** | 94.5% |
+| 0.80 | 70.0% | 76.0% | **20.0%** | 88.9% |
+| 0.90 | 65.0% | 71.0% | **12.0%** | 87.8% |
+
+At 0.20 the cache answers 92% of the questions it has never seen an answer for.
+The accuracy gain is bought, not earned.
+
+⚠️ **These are TF-IDF numbers. The equivalent `--use-sulci` sweep has not been
+run.** The two engines are not interchangeable and this table must not be quoted
+as a MiniLM result. Run:
+
+```bash
+python benchmark/run.py --use-sulci --fresh --context --context-sweep --no-sweep --queries 500
+```
+
+⛔ **Do not change the shipped `query_weight` default on either table alone.**
+125 samples across 5 domains is not enough to move a default that every context
+user inherits.
+
+### `--context` without `--use-sulci` was broken until 2026-08-06
+
+`_BuiltinContextCache.__init__` accepted `query_weight` and never stored it;
+`_get_session` then read a bare `query_weight`, which is not a global. The
+documented no-install path — the one a technical buyer runs first — raised
+`NameError` at the first session. Every context figure ever quoted came from the
+`--use-sulci` arm. Fixed 2026-08-06.
 
 ---
 

@@ -1,8 +1,14 @@
 """
 benchmark/run.py
 ================
-5,000-query stateless + 800-pair context-aware benchmark for Sulci.
+5,000-query stateless + 125-follow-up context-aware benchmark for Sulci.
 Includes a dedicated context-aware caching benchmark (v0.2.0).
+
+⚠️ The context benchmark is 125 follow-ups (25 sessions x 5), not 800 pairs.
+It has said "800-pair" since v0.2.0 and the corpus has never been that size:
+every SESSION_FOLLOWUPS pool holds exactly 5 entries and the draw clamps to
+`min(n_followups, len(pool))`. The retired +20.8pp and +56pp figures came from
+this corpus, so they were 125 samples, and nothing printed that.
 
 Runs entirely without API keys or cloud accounts.
 Uses a built-in TF-IDF cosine similarity engine to simulate
@@ -16,6 +22,8 @@ Produces (in benchmark/results/):
   false_positives.csv       — near-miss analysis
   context_summary.json      — context-aware benchmark results (--context)
   context_accuracy.csv      — per-domain resolution accuracy (--context)
+  context_alpha_sweep.csv   — resolution accuracy AND false-hit vs query_weight
+                              (--context --context-sweep)
 
 Usage:
   # Standalone stateless benchmark (no install needed)
@@ -48,12 +56,19 @@ Options:
   --no-sweep            Skip threshold sweep (faster)
   --context             Run context-aware benchmark (measures follow-up resolution accuracy)
   --context-window N    Turns to remember per session (default: 4)
+  --context-holdout N   Sessions per domain left UNWARMED (default: 1). Their
+                        follow-ups have no correct answer cached, so they are the
+                        only rows a context false-hit rate can be measured
+                        against. 0 reproduces the pre-2026-08-06 corpus.
+  --context-followups N Follow-ups per session (default: 5, clamped by the pools)
+  --context-sweep       Sweep --query-weight, recording accuracy AND false-hit
   --out DIR             Output directory (default: benchmark/results)
 """
 
 import argparse
 import csv
 import json
+from datetime import datetime, timezone
 import math
 import os
 import random
@@ -98,6 +113,21 @@ parser.add_argument("--query-weight",     type=float, default=0.70,
                          "from the previous turn.")
 parser.add_argument("--context-threshold", type=float, default=0.58,
                     help="Similarity threshold for context benchmark (default: 0.58)")
+parser.add_argument("--context-followups", type=int, default=5,
+                    help="Follow-ups per session (default: 5). CLAMPED by the "
+                         "SESSION_FOLLOWUPS pools, which hold 5 each -- raising "
+                         "this does not grow the corpus, it prints a warning.")
+parser.add_argument("--context-holdout", type=int, default=1,
+                    help="Sessions per domain left UNWARMED (default: 1). Their "
+                         "follow-ups have no correct answer cached, so they are "
+                         "the only rows a context false-hit rate can be measured "
+                         "against. 0 reproduces the pre-2026-08-06 corpus, where "
+                         "false-hit was unmeasurable.")
+parser.add_argument("--context-sweep", action="store_true",
+                    help="Sweep --query-weight and record resolution accuracy "
+                         "AND false-hit rate at each alpha. Writes "
+                         "context_alpha_sweep.csv. This is the run that decides "
+                         "whether a low alpha is a real win or just a looser cache.")
 parser.add_argument("--agent",          action="store_true",
                     help="Run agent-workload benchmark (measures per-session call deduplication)")
 parser.add_argument("--agent-sessions",   type=int, default=50,
@@ -492,13 +522,20 @@ class _BuiltinContextCache(_BuiltinCache):
                  query_weight: float = 0.70):
         super().__init__(threshold)
         self.context_window = context_window
+        # Was accepted and then dropped on the floor. `_get_session` referenced a
+        # bare `query_weight`, which is not a global -- so `--context` without
+        # `--use-sulci` raised NameError at the first session, i.e. the exact
+        # no-install path the module docstring advertises. Every context number
+        # anyone has quoted came from the --use-sulci arm; the built-in arm has
+        # not run since the parameter was threaded through.
+        self.query_weight   = query_weight
         self._sessions: dict[str, _ContextWindow] = {}
 
     def _get_session(self, session_id: str) -> _ContextWindow:
         if session_id not in self._sessions:
             self._sessions[session_id] = _ContextWindow(
                 max_turns    = self.context_window,
-                query_weight = query_weight,
+                query_weight = self.query_weight,
                 decay        = 0.50,
             )
         return self._sessions[session_id]
@@ -935,16 +972,60 @@ class ContextResult:
     resolved_correctly: bool       # did we get the right domain response?
     latency_ms:         float
     mode:               str        # "stateless" | "context_aware"
+    should_hit:         bool = True  # False for held-out sessions (never warmed)
 
 
-def build_context_corpus(n_followups: int = 5) -> list:
+def held_out_context_keys(holdout_per_domain: int, seed: Optional[int] = None) -> set:
+    """Pick `holdout_per_domain` session keys per domain to leave UNWARMED.
+
+    These sessions are primed and queried exactly like the others, but their
+    canonical answer is never stored. The correct outcome for every one of
+    their follow-ups is a MISS. A hit is a FALSE HIT: the blended lookup vector
+    drifted onto a neighbouring session and returned an answer to a question
+    the user did not ask.
+
+    Why this matters more here than in the stateless benchmark: at a low
+    `query_weight` the lookup is mostly conversation history, so it is pulled
+    toward the session's topic by construction. If that topic is not cached,
+    the nearest neighbour is a different session in the same domain -- exactly
+    the case that a resolution-accuracy number cannot see, because it only
+    counts rows where a correct answer existed.
+
+    Seeded from --seed so the held-out set varies across corpus draws, for the
+    same reason build_corpus() draws its hold-outs rather than slicing them.
+    """
+    if holdout_per_domain <= 0:
+        return set()
+    rng  = random.Random(seed if seed is not None else 99)
+    held = set()
+    for _domain, cfg in CONTEXT_SESSIONS.items():
+        keys = [resp_key for _p, resp_key, _x, _kw in cfg["sessions"]]
+        held.update(rng.sample(keys, min(holdout_per_domain, len(keys))))
+    return held
+
+
+def build_context_corpus(n_followups: int = 5, held: Optional[set] = None) -> list:
     """
     Build a list of conversation pairs for the context benchmark.
     Each session: primer turn + n_followups queries specific to that session's topic.
     Follow-ups are drawn from SESSION_FOLLOWUPS[resp_key] so they share vocabulary
     with that session's keyword_bundle (within-session topic continuity test).
+
+    `held` is the set of session keys whose answers are never warmed. Their rows
+    carry should_hit=False and are the only rows a false-hit rate can be
+    measured against.
+
+    ⚠️ SIZE IS CAPPED BY CONTENT, NOT BY THE FLAG. Every pool in
+    SESSION_FOLLOWUPS holds exactly 5 entries, so `min(n_followups, len(pool))`
+    silently clamps to 5 and the corpus is 25 sessions × 5 = 125 rows however
+    high --context-followups is set. Growing it means writing follow-ups.
+    run_context_bench() prints the clamp rather than leaving it to be inferred.
     """
     sessions = []
+    held     = held or set()
+    # Deliberately NOT reseeded from --seed: keeping the follow-up draw fixed is
+    # what makes runs at different --query-weight comparable to each other and
+    # to the pre-hold-out numbers. --seed varies the held-out set instead.
     rng = random.Random(99)
 
     for domain, cfg in CONTEXT_SESSIONS.items():
@@ -953,20 +1034,24 @@ def build_context_corpus(n_followups: int = 5) -> list:
             followups = rng.sample(pool, min(n_followups, len(pool)))
             for fq in followups:
                 sessions.append({
-                    "domain":    domain,
-                    "key":       resp_key,
-                    "primer":    primer,
-                    "followup":  fq,
-                    "resp_key":  resp_key,
-                    "kw_bundle": kw_bundle,
-                    "response":  cfg["responses"][resp_key],
+                    "domain":     domain,
+                    "key":        resp_key,
+                    "primer":     primer,
+                    "followup":   fq,
+                    "resp_key":   resp_key,
+                    "kw_bundle":  kw_bundle,
+                    "response":   cfg["responses"][resp_key],
+                    "should_hit": resp_key not in held,
                 })
     return sessions
 
 
-def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
+def run_context_bench(n_followups: int = 5, use_sulci: bool = False,
                       context_window: int = 4,
-                      query_weight: float = 0.70) -> dict:
+                      query_weight: float = 0.70,
+                      holdout_per_domain: int = 1,
+                      seed: Optional[int] = None,
+                      quiet: bool = False) -> dict:
     """
     Run the context-aware benchmark.
 
@@ -978,10 +1063,14 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
 
     Returns dict with stateless and context_aware accuracy per domain.
     """
-    print(f"\n── Context-aware benchmark ──────────────────────────────")
-    print(f"  context_window={context_window}  followups_per_session={n_followups}")
-    print(f"  Engine: {'sulci.Cache' if use_sulci else 'built-in TF-IDF'}")
-    print()
+    # `quiet` is used by the alpha sweep, which calls this eight times and wants
+    # one table, not eight preambles. It suppresses narration only -- every
+    # number still lands in the returned dict and in the CSV.
+    _say = (lambda *a, **k: None) if quiet else print
+    _say(f"\n── Context-aware benchmark ──────────────────────────────")
+    _say(f"  context_window={context_window}  followups_per_session={n_followups}")
+    _say(f"  Engine: {'sulci.Cache' if use_sulci else 'built-in TF-IDF'}")
+    _say()
 
     # Context benchmark uses a slightly lower threshold than the stateless benchmark.
     # Reason: the blended query vector (70% query + 30% history) has lower raw cosine
@@ -990,7 +1079,7 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
     # Default 0.58 calibrated for TF-IDF blended vectors.
     # With real sentence-transformer embeddings (--use-sulci), set higher.
     ctx_threshold = args.context_threshold
-    print(f"  threshold(stateless)={args.threshold}  threshold(context)={ctx_threshold}")
+    _say(f"  threshold(stateless)={args.threshold}  threshold(context)={ctx_threshold}")
 
     # Build caches
     if use_sulci:
@@ -1013,10 +1102,17 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
     #   (b) A short keyword_bundle (e.g. "docker container error code deploy") —
     #       TF-IDF dense target that the blended follow-up vector can reach above
     #       the context threshold (0.58) while stateless stays below it (~0.40-0.55).
-    print("  Warming cache with canonical responses...")
+    #
+    # HELD-OUT SESSIONS are skipped here and only here. They are primed and
+    # queried identically below; the only difference is that no correct answer
+    # exists for them, so every hit they produce is a false hit.
+    held = held_out_context_keys(holdout_per_domain, seed)
+    _say("  Warming cache with canonical responses...")
 
     for domain, cfg in CONTEXT_SESSIONS.items():
         for primer, resp_key, _, kw_bundle in cfg["sessions"]:
+            if resp_key in held:
+                continue
             response = cfg["responses"][resp_key]
             for cache in (cache_stateless, cache_context):
                 # Store primer (verbose — context blending amplifies shared vocab)
@@ -1025,7 +1121,23 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
                 cache.set(kw_bundle, response, group=resp_key, domain=domain)
 
     # ── Build sessions ────────────────────────────────────────────────────────
-    sessions = build_context_corpus(n_followups=n_followups)
+    sessions = build_context_corpus(n_followups=n_followups, held=held)
+
+    # State the corpus shape rather than leaving it to be inferred. The pool
+    # clamp below is the reason the retired +20.8pp / +56pp figures were never
+    # solid: they were 125 samples, and nothing said so.
+    pool_max = max((len(p) for p in SESSION_FOLLOWUPS.values()), default=0)
+    if n_followups > pool_max:
+        _say(f"  ⚠  --context-followups={n_followups} requested, but the largest "
+              f"SESSION_FOLLOWUPS pool holds {pool_max}. Clamped to {pool_max}.")
+        _say(f"     The corpus cannot grow past this without writing follow-ups.")
+    n_neg = sum(1 for s in sessions if not s["should_hit"])
+    _say(f"  Corpus: {len(sessions)} follow-ups  |  held-out sessions: "
+          f"{len(held)}/{sum(len(c['sessions']) for c in CONTEXT_SESSIONS.values())}"
+          f"  |  should-miss rows: {n_neg} ({n_neg / max(len(sessions), 1):.0%})")
+    if not held:
+        _say(f"  ⚠  holdout=0: every follow-up has a correct answer cached, so "
+              f"false_hit_rate is unmeasurable and reported as null.")
     results:  list[ContextResult] = []
     session_counter = 0
 
@@ -1035,6 +1147,7 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
         primer   = item["primer"]
         followup = item["followup"]
         expected = item["response"]
+        should   = item["should_hit"]
         session_id = f"bench-session-{session_counter}"
         session_counter += 1
 
@@ -1053,7 +1166,7 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
             domain=domain, session_key=key, primer=primer, followup=followup,
             is_followup=True, context_depth=0, cache_hit=hit_sl,
             similarity=round(sim_sl, 4), resolved_correctly=correct_sl,
-            latency_ms=round(ms_sl, 3), mode="stateless",
+            latency_ms=round(ms_sl, 3), mode="stateless", should_hit=should,
         ))
 
         # ── Context-aware lookup ──────────────────────────────────────────────
@@ -1084,20 +1197,56 @@ def run_context_bench(n_followups: int = 8, use_sulci: bool = False,
             domain=domain, session_key=key, primer=primer, followup=followup,
             is_followup=True, context_depth=depth, cache_hit=hit_ctx,
             similarity=round(sim_ctx, 4), resolved_correctly=correct_ctx,
-            latency_ms=round(ms_ctx, 3), mode="context_aware",
+            latency_ms=round(ms_ctx, 3), mode="context_aware", should_hit=should,
         ))
 
-    return _context_analytics(results, context_window)
+    return _context_analytics(results, context_window, query_weight,
+                              holdout_per_domain, quiet=quiet)
 
 
-def _context_analytics(results: list, context_window: int) -> dict:
-    """Compute accuracy metrics comparing stateless vs context-aware."""
+def _context_analytics(results: list, context_window: int,
+                       query_weight: float = 0.70,
+                       holdout_per_domain: int = 0,
+                       quiet: bool = False) -> dict:
+    """Compute accuracy metrics comparing stateless vs context-aware.
+
+    ⚠️ `resolution_accuracy` is computed over SHOULD-HIT rows only. Held-out
+    rows can never be resolved correctly -- no correct answer exists for them --
+    so including them would drag the number down mechanically and make it
+    incomparable with any figure measured before hold-outs existed. Their
+    contribution is `false_hit_rate`, which is a separate axis and belongs in
+    its own column, not folded into an accuracy average.
+    """
     sl  = [r for r in results if r.mode == "stateless"]
     ctx = [r for r in results if r.mode == "context_aware"]
 
     def acc(rows):
-        if not rows: return 0.0
-        return round(sum(1 for r in rows if r.resolved_correctly) / len(rows), 4)
+        pos = [r for r in rows if r.should_hit]
+        if not pos: return 0.0
+        return round(sum(1 for r in pos if r.resolved_correctly) / len(pos), 4)
+
+    def discrimination(rows):
+        """recall / false_hit_rate / precision, same definitions as summary()."""
+        pos      = [r for r in rows if r.should_hit]
+        neg      = [r for r in rows if not r.should_hit]
+        hits     = [r for r in rows if r.cache_hit]
+        pos_hits = [r for r in pos if r.cache_hit]
+        neg_hits = [r for r in neg if r.cache_hit]
+        good     = [r for r in hits if r.resolved_correctly]
+        return {
+            # of the follow-ups that DO have a cached answer, how many were served
+            "recall":          round(len(pos_hits) / len(pos), 4) if pos else None,
+            # of the follow-ups that do NOT, how many were answered anyway.
+            # None (not 0.0) when there are no held-out rows -- an unmeasured
+            # rate and a measured zero are different claims.
+            "false_hit_rate":  round(len(neg_hits) / len(neg), 4) if neg else None,
+            # of everything served, how much was the right answer
+            "precision":       round(len(good) / len(hits), 4) if hits else None,
+            "n_should_hit":    len(pos),
+            "n_should_miss":   len(neg),
+            "n_hits":          len(hits),
+            "n_false_hits":    len(neg_hits),
+        }
 
     def hit_r(rows):
         if not rows: return 0.0
@@ -1131,21 +1280,34 @@ def _context_analytics(results: list, context_window: int) -> dict:
             "context_latency_ms":         avg_lat(d_ctx),
         })
 
+    sl_disc  = discrimination(sl)
+    ctx_disc = discrimination(ctx)
+
     summary = {
         "context_window":               context_window,
+        "query_weight":                 query_weight,
+        "holdout_per_domain":           holdout_per_domain,
         "total_followup_queries":       len(sl),
         "domains_tested":               len(CONTEXT_SESSIONS),
+        # Read this before reading any percentage below.
+        "_metric_note": (
+            "resolution_accuracy is over should-hit rows only. false_hit_rate is "
+            "over held-out sessions, which are never warmed. false_hit_rate is null "
+            "when holdout_per_domain=0 -- unmeasured, not zero."
+        ),
         "stateless": {
             "hit_rate":                 hit_r(sl),
             "resolution_accuracy":      acc(sl),
             "avg_similarity":           avg_sim(sl),
             "avg_latency_ms":           avg_lat(sl),
+            **sl_disc,
         },
         "context_aware": {
             "hit_rate":                 hit_r(ctx),
             "resolution_accuracy":      acc(ctx),
             "avg_similarity":           avg_sim(ctx),
             "avg_latency_ms":           avg_lat(ctx),
+            **ctx_disc,
         },
         "improvement": {
             "accuracy_delta":           round(acc(ctx) - acc(sl), 4),
@@ -1155,10 +1317,13 @@ def _context_analytics(results: list, context_window: int) -> dict:
         "domain_breakdown":             domain_rows,
     }
 
+    if quiet:
+        return {"summary": summary, "results": [asdict(r) for r in results]}
+
     # Print summary table
     print(f"\n{'='*62}")
     print(f"  CONTEXT-AWARE BENCHMARK RESULTS")
-    print(f"  context_window={context_window}")
+    print(f"  context_window={context_window}  query_weight={query_weight}")
     print(f"{'='*62}")
     print(f"  {'Metric':<30} {'Stateless':>12} {'Context':>12} {'Delta':>8}")
     print(f"  {'-'*62}")
@@ -1174,6 +1339,25 @@ def _context_analytics(results: list, context_window: int) -> dict:
     ctx_lat = avg_lat(ctx)
     delta_lat = ctx_lat - sl_lat
     print(f"  {'Avg latency (ms)':<30} {sl_lat:>10.2f}ms  {ctx_lat:>10.2f}ms  {delta_lat:>+.2f}ms")
+
+    # ── Discrimination ────────────────────────────────────────────────────────
+    # A resolution-accuracy delta on its own cannot distinguish "context
+    # resolves the follow-up" from "context makes the cache answer everything".
+    # Both raise accuracy on rows where an answer exists. Only the held-out
+    # rows separate them.
+    def _fmt(v):
+        return "  n/a  " if v is None else f"{v:>6.1%}"
+
+    print(f"\n  Discrimination  ({ctx_disc['n_should_hit']} should-hit / "
+          f"{ctx_disc['n_should_miss']} should-miss):")
+    print(f"    {'Metric':<28} {'Stateless':>12} {'Context':>12}")
+    print(f"    {'-'*54}")
+    for label, k in (("Recall (should-hit served)",   "recall"),
+                     ("False-hit (should-miss hit)",  "false_hit_rate"),
+                     ("Precision (hits correct)",     "precision")):
+        print(f"    {label:<28} {_fmt(sl_disc[k]):>12} {_fmt(ctx_disc[k]):>12}")
+    if ctx_disc["false_hit_rate"] is None:
+        print(f"    ⚠  false-hit is UNMEASURED at holdout=0, not zero.")
 
     print(f"\n  Domain breakdown:")
     for row in domain_rows:
@@ -1388,6 +1572,25 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
             print(f"  Claude cap: {_claude.max_calls} calls")
         print(f"{'='*58}")
         print(f"  Warmup : {len(warmup):,}  |  Test : {len(test):,}")
+        # STATE THE COMPOSITION. The context benchmark prints its should-miss
+        # share; this one did not, and that asymmetry is a trap: the should-miss
+        # rows (held-out groups + NEAR_MISS pairs) are a FIXED count per domain
+        # and do not scale with --queries, while the should-hit rows do. At
+        # --queries 200 the test set is ~92% should-miss, so a correct run
+        # reports a ~94% "false positive" rate and reads as catastrophe.
+        # The rate is only interpretable next to the share it is a rate of.
+        _neg = sum(1 for t in test if not t.get("should_hit", True))
+        _pos = len(test) - _neg
+        print(f"  Test set: {_pos:,} should-hit  |  {_neg:,} should-miss "
+              f"({_neg / max(len(test), 1):.0%})")
+        if len(test) and _neg / len(test) > 0.60:
+            print(f"  ⚠  should-miss rows are a FIXED count per domain and do not "
+                  f"scale with --queries.")
+            print(f"     At this corpus size most of the test set is SUPPOSED to "
+                  f"miss, so hit rate reads low")
+            print(f"     and false-positive rate reads high. Both are correct. Use "
+                  f"--queries 5000 to compare")
+            print(f"     against any published figure.")
         print(f"{'='*58}\n")
 
     results = []
@@ -1651,7 +1854,31 @@ def false_positives_report(results: list) -> list:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def save_json(obj, name):
+    """Write a results JSON, stamped with its provenance.
+
+    ⚠️ THE STAMP IS THE POINT. verify_benchmark.py reads whatever is in
+    benchmark/results/, which is gitignored and never cleared, and it launches
+    `run.py --no-sweep --context` with NO --agent -- so agent_summary.json is
+    always a leftover from some earlier invocation. On 2026-08-06 that leftover
+    was a MiniLM run (cold 0.27 / warm 0.9942) verified against a TF-IDF
+    baseline (cold 0.43), and six of eight rows reported [OK].
+
+    Mtime cannot settle this. A legitimate `run.py --agent` writes the file
+    minutes before verify_benchmark.py starts, so ANY timestamp cutoff either
+    rejects that legitimate file or accepts this morning's -- both were tried
+    and both were wrong. The engine is the thing that actually differed, so
+    record the engine.
+    """
     path = os.path.join(args.out, name)
+    if isinstance(obj, dict):
+        obj = dict(obj)
+        obj["_provenance"] = {
+            "engine":       "sulci-minilm" if args.use_sulci else "builtin-tfidf",
+            "engine_label": ("sulci.Cache (SQLite + MiniLM)" if args.use_sulci
+                             else "built-in TF-IDF engine"),
+            "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "argv":         " ".join(sys.argv[1:]),
+        }
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
     print(f"  Saved {path}")
@@ -2399,20 +2626,72 @@ def main():
     # ── Context-aware benchmark ───────────────────────────────────────────────
     if args.context:
         ctx_data = run_context_bench(
-            n_followups    = 8,
-            use_sulci      = args.use_sulci,
-            context_window=args.context_window,
-                                query_weight=args.query_weight,
+            n_followups        = args.context_followups,
+            use_sulci          = args.use_sulci,
+            context_window     = args.context_window,
+            query_weight       = args.query_weight,
+            holdout_per_domain = args.context_holdout,
+            seed               = args.seed,
         )
         save_json(ctx_data["summary"], "context_summary.json")
         save_csv(ctx_data["summary"]["domain_breakdown"], "context_accuracy.csv")
 
-        imp = ctx_data["summary"]["improvement"]
+        imp   = ctx_data["summary"]["improvement"]
+        c_sum = ctx_data["summary"]["context_aware"]
         print(f"  Context-aware accuracy improvement: "
               f"{imp['accuracy_delta_pct']:+.1f}pp  "
               f"(stateless={ctx_data['summary']['stateless']['resolution_accuracy']:.0%}  "
-              f"→ context={ctx_data['summary']['context_aware']['resolution_accuracy']:.0%})")
+              f"→ context={c_sum['resolution_accuracy']:.0%})")
+        # Never print the accuracy delta on its own. The delta is the headline
+        # that produced +20.8pp and +56pp; the false-hit rate is what says
+        # whether the delta was bought or earned.
+        fh = c_sum["false_hit_rate"]
+        print(f"  Context false-hit rate: "
+              + (f"{fh:.1%}  ({c_sum['n_false_hits']}/{c_sum['n_should_miss']} "
+                 f"held-out follow-ups answered anyway)" if fh is not None
+                 else "UNMEASURED (--context-holdout 0)"))
+        print(f"  ⚠  {c_sum['n_should_hit'] + c_sum['n_should_miss']} follow-ups total. "
+              f"Small. Do not publish a figure from this corpus without the n.")
         print()
+
+        # ── Alpha sweep ───────────────────────────────────────────────────────
+        if args.context_sweep:
+            alphas = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+            print(f"  ── query_weight sweep ({len(alphas)} points) ──────────────")
+            print(f"    {'alpha':>6}  {'sl_acc':>7}  {'ctx_acc':>8}  "
+                  f"{'ctx_recall':>11}  {'ctx_false_hit':>14}  {'ctx_prec':>9}")
+            rows = []
+            for a in alphas:
+                d = run_context_bench(
+                    n_followups        = args.context_followups,
+                    use_sulci          = args.use_sulci,
+                    context_window     = args.context_window,
+                    query_weight       = a,
+                    holdout_per_domain = args.context_holdout,
+                    seed               = args.seed,
+                    quiet              = True,
+                )["summary"]
+                s_, c_ = d["stateless"], d["context_aware"]
+                rows.append({
+                    "query_weight":        a,
+                    "stateless_accuracy":  s_["resolution_accuracy"],
+                    "context_accuracy":    c_["resolution_accuracy"],
+                    "context_recall":      c_["recall"],
+                    "context_false_hit":   c_["false_hit_rate"],
+                    "context_precision":   c_["precision"],
+                    "n_should_hit":        c_["n_should_hit"],
+                    "n_should_miss":       c_["n_should_miss"],
+                })
+                fhs = "n/a" if c_["false_hit_rate"] is None else f"{c_['false_hit_rate']:.1%}"
+                prs = "n/a" if c_["precision"] is None else f"{c_['precision']:.1%}"
+                print(f"    {a:>6.2f}  {s_['resolution_accuracy']:>6.1%}  "
+                      f"{c_['resolution_accuracy']:>7.1%}  "
+                      f"{(c_['recall'] or 0):>10.1%}  {fhs:>14}  {prs:>9}")
+            save_csv(rows, "context_alpha_sweep.csv")
+            print(f"\n  ⚠  A lower alpha that raises accuracy AND false-hit together "
+                  f"has not\n     found more answers -- it has loosened the cache. "
+                  f"Read both columns.")
+            print()
 
     # ── Agent workload benchmark ─────────────────────────────────────────────
     if args.agent:
