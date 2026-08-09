@@ -61,7 +61,10 @@ else:
         # invalid key produced a raw HTTPStatusError stack trace mid-run.
         _key_state = {"rejected": False}
 
-        def call_claude(query: str, model: str = "claude-sonnet-4-20250514") -> str:
+        # Keep in step with sulci-web's Demo2.jsx: this file is vendored
+        # to sulci.io, so a mismatch ships two different model strings
+        # for the same demo. They diverged silently until 2026-08-09.
+        def call_claude(query: str, model: str = "claude-sonnet-4-6") -> str:
             if _key_state["rejected"]:
                 return _mock_call(query)
             try:
