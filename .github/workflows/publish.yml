@@ -26,7 +26,7 @@ jobs:
           redis-cli ping
 
       - name: Install test dependencies
-        run: pip install ".[sqlite,redis]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
+        run: pip install ".[sqlite,redis,langchain,llamaindex]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
       - name: Cache HuggingFace models
         uses: actions/cache@v5
