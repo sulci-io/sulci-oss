@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from typing import Any, Optional, Sequence
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,23 @@ except ImportError as _li_err:  # pragma: no cover
         "Install: pip install \"sulci[llamaindex]\"\n"
         "or:      pip install llama-index-core"
     ) from _li_err
+except TypeError as _li_syntax:  # pragma: no cover
+    # Python 3.9: llama-index-core pulls `banks`, which declares
+    # requires_python>=3.9 but evaluates `Path | None` in a class body --
+    # PEP 604, 3.10+ only. It raises TypeError at import, not ImportError, so
+    # the guard above does not catch it and the user sees a cryptic message
+    # naming a package they have never heard of.
+    # Measured 2026-08-09 on CI 3.9: ubuntu, macos and windows, all three.
+    if sys.version_info < (3, 10):
+        raise ImportError(
+            "sulci[llamaindex] needs Python 3.10 or newer.\n"
+            "On 3.9, pip resolves llama-index-core to a version whose "
+            "transitive dependency 'banks' uses 3.10-only syntax and fails "
+            "at import. The core sulci package still supports 3.9; only this "
+            "adapter does not.\n"
+            f"Detected: Python {sys.version_info.major}.{sys.version_info.minor}"
+        ) from _li_syntax
+    raise
 
 # Keys accepted by sulci.Cache — everything else forwarded to the wrapped LLM
 _SULCI_KEYS = frozenset({

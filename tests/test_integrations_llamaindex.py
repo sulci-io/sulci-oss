@@ -10,10 +10,23 @@ backend with tmp_path so each test gets a fresh, isolated cache.
 Run from repo root (sulci-oss/):
     python -m pytest tests/test_integrations_llamaindex.py -v
 """
+import sys
 from typing import Any, Sequence
 from unittest.mock import patch
 
 import pytest
+
+# Python 3.9: llama-index-core pulls `banks`, which declares
+# requires_python>=3.9 but evaluates `Path | None` in a class body (PEP 604,
+# 3.10+). It raises TypeError at IMPORT, which importorskip does not catch, so
+# collection of this whole file aborts and takes the LangChain suite with it.
+# sulci/integrations/llamaindex.py raises a legible ImportError for this case;
+# this skip records the same limitation rather than hiding it.
+# Measured 2026-08-09 on CI 3.9: ubuntu, macos and windows, all three.
+pytestmark = pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="sulci[llamaindex] requires Python 3.10+ (banks uses 3.10 syntax)",
+)
 
 # Skip the entire module if llama-index-core is not installed.
 llamaindex_core = pytest.importorskip(

@@ -225,4 +225,8 @@ jobs:
 
       - name: Framework adapters
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_integrations_langchain.py tests/test_integrations_llamaindex.py -v --tb=short
+        run: pytest tests/test_integrations_langchain.py -v --tb=short
+
+      - name: Framework adapters (LlamaIndex)
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_integrations_llamaindex.py -v --tb=short
