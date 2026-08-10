@@ -43,10 +43,34 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DOC = ROOT / "docs" / "API-SURFACE.md"
-SOURCES = ("sulci/core.py", "sulci/async_cache.py")
-# Only these are the documented surface. _ProtocolAdaptedSessionStore is an
-# internal adapter that happens to live in core.py.
-CLASSES = ("Cache", "AsyncCache")
+SOURCES = (
+    "sulci/core.py",
+    "sulci/async_cache.py",
+    "sulci/integrations/langchain.py",
+    "sulci/integrations/llamaindex.py",
+)
+# The documented surface. _ProtocolAdaptedSessionStore is an internal adapter
+# that happens to live in core.py and is deliberately absent.
+#
+# The two integration classes were added 2026-08-10. They are the classes with
+# the most external readers -- a LangChain or LlamaIndex user reaches them
+# without ever opening core.py -- and they had no drift guard at all.
+CLASSES = ("Cache", "AsyncCache", "SulciCache", "SulciCacheLLM")
+
+# Classes whose doc table is a complete index of public methods, so a
+# name-set comparison is meaningful.
+#
+# AsyncCache is NOT in this list, on purpose. Its table is a view of *which
+# kwargs are forwarded* -- six rows against sixteen public methods -- and the
+# section says so in its own heading. Adding it here would score a correct
+# document red.
+METHOD_SET_CHECKED = ("Cache", "SulciCache", "SulciCacheLLM")
+
+# Classes whose __init__ keyword-only args are compared against the doc.
+# Cache is excluded: its constructor is covered in far more detail by the
+# defaults comparison below. The adapters have no defaults check, so without
+# this their one keyword-only constructor arg would be unguarded.
+INIT_KWONLY_CHECKED = ("SulciCache", "SulciCacheLLM")
 
 
 # --------------------------------------------------------------------------
@@ -108,7 +132,7 @@ def claimed() -> dict:
     if not DOC.exists():
         sys.exit(f"check_api_surface: {DOC} is missing")
     text = DOC.read_text()
-    out: dict = {"defaults": {}, "kwonly": {}, "version": None}
+    out: dict = {"defaults": {}, "kwonly": {}, "methods": {}, "version": None}
 
     m = re.search(r'\*\*Measured:\*\*[^\n]*?\*\*([0-9]+\.[0-9]+\.[0-9]+)\*\*', text)
     if m:
@@ -133,21 +157,43 @@ def claimed() -> dict:
         break
 
     # Method tables, keyed PER CLASS. `get` / `set` / `cached_call` appear in
-    # both tables -- Cache's real signature and AsyncCache's narrower sync
-    # passthrough -- so a flat dict keeps whichever came first and reports the
-    # other as a contradiction that does not exist.
-    m = re.search(r'^#+\s*`?AsyncCache', text, re.M)
-    split = m.start() if m else len(text)
-    for cls, seg in (("Cache", text[:split]), ("AsyncCache", text[split:])):
-        rows = {}
+    # more than one table -- Cache's real signature and AsyncCache's narrower
+    # sync passthrough -- so a flat dict keeps whichever came first and reports
+    # the other as a contradiction that does not exist.
+    for cls, seg in _segments(text).items():
+        rows, names = {}, set()
         for row in re.findall(r'^\|\s*`([^`]+)`[^|]*\|([^|]*)\|', seg, re.M):
-            name = re.match(r'([a-z_]+)', row[0])
+            name = re.match(r'(__init__|[a-z_]+)', row[0])
             if not name:
                 continue
+            names.add(name.group(1))
             kw = sorted(set(re.findall(r'`([a-z_]+)`', row[1])))
             if kw:
                 rows[name.group(1)] = kw
         out["kwonly"][cls] = rows
+        out["methods"][cls] = names
+    return out
+
+
+def _segments(text: str) -> dict:
+    """Split the doc into one section per documented class.
+
+    Was: everything before the AsyncCache heading is Cache, everything after is
+    AsyncCache. That runs off the end -- with two more classes and the Backends
+    and Embedding-models tables below them, "everything after" swept `chroma`,
+    `qdrant` and `minilm` into the last class as though they were methods.
+
+    Now: a `##` section belongs to a class when the first backticked token in
+    its heading is exactly that class name. `## \\`Cache.__init__\\` — the real
+    defaults` is therefore NOT the Cache section; it is its own thing, and the
+    defaults comparison reads it separately."""
+    out: dict = {}
+    heads = list(re.finditer(r'^##\s+(.*)$', text, re.M))
+    for i, h in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        m = re.search(r'`([A-Za-z_][A-Za-z0-9_.]*)`', h.group(1))
+        if m and m.group(1) in CLASSES:
+            out.setdefault(m.group(1), text[h.start():end])
     return out
 
 
@@ -194,6 +240,28 @@ def main() -> int:
     for key in doc["defaults"]:
         if key not in real["Cache"]["defaults"]:
             fails.append(f"default `{key}`: in the doc, not in Cache.__init__")
+
+    # Method SETS. The module docstring has always claimed this checker verifies
+    # "the public method set on each class"; until 2026-08-10 nothing compared
+    # them. Only the per-method kwarg loop below ran, and it skips any method
+    # with no keyword-only params -- which is all eleven adapter methods. Adding
+    # the adapters to SOURCES without this would have installed a guard that
+    # cannot fire, and reported green while doing it.
+    for cls in METHOD_SET_CHECKED:
+        want = {n for n in real[cls]["methods"] if n != "__init__"}
+        have = {n for n in doc["methods"].get(cls, set()) if n != "__init__"}
+        for n in sorted(want - have):
+            fails.append(f"{cls}.{n}: public method, absent from the doc")
+        for n in sorted(have - want):
+            fails.append(f"{cls}.{n}: in the doc, not a public method on the class")
+
+    for cls in INIT_KWONLY_CHECKED:
+        want = real[cls]["methods"].get("__init__", [])
+        have = doc["kwonly"].get(cls, {}).get("__init__", [])
+        if want != have:
+            fails.append(
+                f"{cls}.__init__: doc lists keyword-only "
+                f"{have or '(none)'}, code has {want or '(none)'}")
 
     for cls, d in real.items():
         for name, want in d["methods"].items():

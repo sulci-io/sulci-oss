@@ -1,7 +1,15 @@
 # Sulci — the measured public API surface
 
 **Measured:** 2026-07-24 against `sulci` **0.8.3**
-**Method:** AST parse of `sulci/core.py` and `sulci/async_cache.py`. Not memory, not the README.
+**Method:** AST parse of `sulci/core.py`, `sulci/async_cache.py`,
+`sulci/integrations/langchain.py` and `sulci/integrations/llamaindex.py`. Not
+memory, not the README.
+
+*Adapter sections (`SulciCache`, `SulciCacheLLM`) added and measured
+2026-08-10. Until that date `SOURCES` was `core.py` and `async_cache.py` only,
+so the two classes an integration user actually imports had no drift guard —
+and neither did the method **sets**, which this file's own checker had claimed
+to verify since it was written.*
 
 ---
 
@@ -244,6 +252,95 @@ PY
 A forwarded kwarg whose default differs from its source is an unconditional
 override of whatever the constructor was given. There is no case where that is
 what you meant.
+
+---
+
+## `SulciCache` — the LangChain adapter
+
+`sulci/integrations/langchain.py`. Subclasses `BaseCache`; installed with
+`set_llm_cache(SulciCache(...))`. Seven public methods.
+
+| Method | Keyword-only | Returns |
+|---|---|---|
+| `__init__(*, …, **kwargs)` | `namespace_by_llm` | — |
+| `lookup(prompt, llm_string)` | — | `list[Generation] \| None` |
+| `update(prompt, llm_string, return_val)` | — | `None` |
+| `clear(**kwargs)` | — | `None` |
+| `alookup(prompt, llm_string)` | — | `list[Generation] \| None` |
+| `aupdate(prompt, llm_string, return_val)` | — | `None` |
+| `aclear(**kwargs)` | — | `None` |
+| `stats()` | — | `dict` |
+
+**`namespace_by_llm` defaults to `True`.** Each distinct `llm_string` gets its
+own `Cache` on a `db_path` suffixed with an 8-char MD5 of that string, so two
+models never share cached responses. The partitions are created lazily on first
+lookup, which means the on-disk footprint is a function of how many LLM configs
+the process has seen, not of configuration.
+
+**Everything else in `**kwargs` goes straight to `Cache(**kwargs)`** — backend,
+threshold, `context_window`, `ttl_seconds`, all of it. The defaults are
+therefore `Cache.__init__`'s defaults, above; this section does not restate
+them, and neither should anything else.
+
+⚠️ **`namespace_by_llm=True` is silently downgraded to `False` when
+`backend="sulci"`**, with a `logger.warning`. Sulci Cloud isolates server-side,
+and per-LLM `db_path` partitions would otherwise spin up phantom cloud backend
+instances all pointing at one namespace. A reader who sets both and does not
+watch the log gets behaviour the constructor argument denies.
+
+⚠️ **`lookup` and `update` swallow every exception** — by design, so a cache
+fault cannot crash the caller's app. The consequence is that a misconfigured or
+unreachable backend does not raise: it presents as a cache that never hits.
+`stats()` and the warning log are the only evidence. **A hit rate of zero and a
+cache that is not running are the same observation from the outside.**
+
+`clear()` evicts the default cache *and* every namespace partition created so
+far. Partitions belonging to `llm_string`s this process has not seen are
+untouched, because they have not been instantiated.
+
+`stats()` reports the **default partition only**. With `namespace_by_llm=True`
+— the default — that is not the aggregate, and on a multi-model app it can be
+an empty cache while the real traffic is in the partitions.
+
+---
+
+## `SulciCacheLLM` — the LlamaIndex adapter
+
+`sulci/integrations/llamaindex.py`. Wraps any LlamaIndex `LLM`
+(`SulciCacheLLM(llm=inner)`) and delegates. Ten public methods.
+
+| Method | Cached? | Returns |
+|---|---|---|
+| `metadata` | — (property) | `LLMMetadata`, the wrapped LLM's, unchanged |
+| `complete(prompt, formatted=False, **kw)` | **yes** | `CompletionResponse` |
+| `chat(messages, **kw)` | **yes** | `ChatResponse` |
+| `acomplete(prompt, formatted=False, **kw)` | **yes** | `CompletionResponse` |
+| `achat(messages, **kw)` | **yes** | `ChatResponse` |
+| `stream_complete(prompt, formatted=False, **kw)` | **no** | `CompletionResponseGen` |
+| `stream_chat(messages, **kw)` | **no** | `ChatResponseGen` |
+| `astream_complete(prompt, formatted=False, **kw)` | **no** | `CompletionResponseAsyncGen` |
+| `astream_chat(messages, **kw)` | **no** | `ChatResponseAsyncGen` |
+| `stats()` | — | `dict` |
+
+⛔ **Four of the ten methods are uncached pass-through.** All four streaming
+paths hand straight to the wrapped LLM: a generator cannot be reliably stored
+mid-stream, so there is no attempt. **An application that streams gets no
+caching at all** — not a lower hit rate, none — and `stats()` will show it
+truthfully as a cache that is barely used. This is a capability boundary, not a
+tuning problem, and it should not be flattened into "works with LlamaIndex" on
+any surface that a buyer reads.
+
+**The chat cache key is the last user message**, not the message list. The list
+grows every turn with system prompt and history, which would make the key
+change on every call and never hit. If no `USER` role is present the fallback
+key is every message's content joined with spaces.
+
+`session_id` is popped out of `**kwargs` before the call reaches the wrapped
+LLM and passed to `Cache.set` — so context-aware behaviour is available through
+the adapter, but only by passing `session_id=` on each call.
+
+`acomplete` / `achat` are the sync methods run in an executor, so they are
+cached by the same path; they do not block the event loop.
 
 ---
 
