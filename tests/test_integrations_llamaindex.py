@@ -23,10 +23,15 @@ import pytest
 # sulci/integrations/llamaindex.py raises a legible ImportError for this case;
 # this skip records the same limitation rather than hiding it.
 # Measured 2026-08-09 on CI 3.9: ubuntu, macos and windows, all three.
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 10),
-    reason="sulci[llamaindex] requires Python 3.10+ (banks uses 3.10 syntax)",
-)
+# NOTE: pytest.mark.skipif does NOT work here. A marker is read AFTER the
+# module imports, and banks raises during import at the importorskip below --
+# so collection aborts before the marker is ever consulted. allow_module_level
+# executes at THIS point in the file and stops the module first.
+if sys.version_info < (3, 10):
+    pytest.skip(
+        "sulci[llamaindex] requires Python 3.10+ (banks uses 3.10 syntax)",
+        allow_module_level=True,
+    )
 
 # Skip the entire module if llama-index-core is not installed.
 llamaindex_core = pytest.importorskip(
