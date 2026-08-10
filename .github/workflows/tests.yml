@@ -158,7 +158,7 @@ jobs:
 
       - name: Install
         if: needs.changes.outputs.code == 'true'
-        run: pip install ".[sqlite,redis]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
+        run: pip install ".[sqlite,redis,langchain,llamaindex]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
       - name: Cache HuggingFace models
         if: needs.changes.outputs.code == 'true'
@@ -222,3 +222,16 @@ jobs:
       - name: Test AsyncCache
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_async_cache.py -v --tb=short
+
+      - name: Framework adapters
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_integrations_langchain.py -v --tb=short
+
+      # sulci[llamaindex] requires Python 3.10+ -- llama-index-core pulls banks,
+      # which declares requires_python>=3.9 and uses 3.10-only syntax. The test
+      # module skips itself on 3.9 (see the module-level skip in that file) and
+      # pytest then exits 5 = nothing collected. Excluded here so the exit code
+      # is not load-bearing. Measured 2026-08-09.
+      - name: Framework adapters (LlamaIndex)
+        if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
+        run: pytest tests/test_integrations_llamaindex.py -v --tb=short
