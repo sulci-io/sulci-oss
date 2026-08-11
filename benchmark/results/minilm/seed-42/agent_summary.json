@@ -1,0 +1,28 @@
+{
+  "n_sessions": 50,
+  "dispatches_per_session": 200,
+  "total_dispatches": 10000,
+  "total_hits": 9496,
+  "total_misses": 504,
+  "aggregate_hit_rate": 0.9496,
+  "misses_per_session_p50": 3,
+  "misses_per_session_p95": 48,
+  "hit_rate_cold_session": 0.27,
+  "hit_rate_warm_session": 0.9942,
+  "category_hit_rate": {
+    "structural": 0.9829,
+    "semi_structural": 0.9205,
+    "novel": 0.9259
+  },
+  "category_distribution": {
+    "structural": 4492,
+    "semi_structural": 3483,
+    "novel": 2025
+  },
+  "_provenance": {
+    "engine": "sulci-minilm",
+    "engine_label": "sulci.Cache (SQLite + MiniLM)",
+    "generated_at": "2026-08-11T14:29:05+00:00",
+    "argv": "--use-sulci --fresh --no-sweep --context --agent --threshold 0.85 --seed 42 --out benchmark/results/minilm/seed-42"
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "context_window": 4,
+  "query_weight": 0.7,
+  "holdout_per_domain": 1,
+  "total_followup_queries": 125,
+  "domains_tested": 5,
+  "_metric_note": "resolution_accuracy is over should-hit rows only. false_hit_rate is over held-out sessions, which are never warmed. false_hit_rate is null when holdout_per_domain=0 -- unmeasured, not zero.",
+  "stateless": {
+    "hit_rate": 0.888,
+    "resolution_accuracy": 0.89,
+    "avg_similarity": 0.8215,
+    "avg_latency_ms": 4.184,
+    "recall": 0.99,
+    "false_hit_rate": 0.48,
+    "precision": 0.8018,
+    "n_should_hit": 100,
+    "n_should_miss": 25,
+    "n_hits": 111,
+    "n_false_hits": 12
+  },
+  "context_aware": {
+    "hit_rate": 0.96,
+    "resolution_accuracy": 0.88,
+    "avg_similarity": 0.8124,
+    "avg_latency_ms": 7.818,
+    "recall": 1.0,
+    "false_hit_rate": 0.8,
+    "precision": 0.8583,
+    "n_should_hit": 100,
+    "n_should_miss": 25,
+    "n_hits": 120,
+    "n_false_hits": 20
+  },
+  "improvement": {
+    "accuracy_delta": -0.01,
+    "accuracy_delta_pct": -1.0,
+    "hit_rate_delta": 0.072
+  },
+  "domain_breakdown": [
+    {
+      "domain": "customer_support",
+      "sessions_tested": 25,
+      "stateless_hit_rate": 0.8,
+      "context_hit_rate": 1.0,
+      "stateless_accuracy": 1.0,
+      "context_accuracy": 1.0,
+      "accuracy_improvement": 0.0,
+      "stateless_avg_sim": 0.8094,
+      "context_avg_sim": 0.8086,
+      "stateless_latency_ms": 4.066,
+      "context_latency_ms": 7.218
+    },
+    {
+      "domain": "developer_qa",
+      "sessions_tested": 25,
+      "stateless_hit_rate": 0.96,
+      "context_hit_rate": 1.0,
+      "stateless_accuracy": 1.0,
+      "context_accuracy": 1.0,
+      "accuracy_improvement": 0.0,
+      "stateless_avg_sim": 0.8807,
+      "context_avg_sim": 0.8869,
+      "stateless_latency_ms": 4.11,
+      "context_latency_ms": 8.208
+    },
+    {
+      "domain": "product_faq",
+      "sessions_tested": 25,
+      "stateless_hit_rate": 0.92,
+      "context_hit_rate": 1.0,
+      "stateless_accuracy": 1.0,
+      "context_accuracy": 1.0,
+      "accuracy_improvement": 0.0,
+      "stateless_avg_sim": 0.8695,
+      "context_avg_sim": 0.8494,
+      "stateless_latency_ms": 4.204,
+      "context_latency_ms": 8.162
+    },
+    {
+      "domain": "medical_information",
+      "sessions_tested": 25,
+      "stateless_hit_rate": 1.0,
+      "context_hit_rate": 1.0,
+      "stateless_accuracy": 0.5,
+      "context_accuracy": 0.4,
+      "accuracy_improvement": -0.1,
+      "stateless_avg_sim": 0.7309,
+      "context_avg_sim": 0.713,
+      "stateless_latency_ms": 4.279,
+      "context_latency_ms": 7.912
+    },
+    {
+      "domain": "general_knowledge",
+      "sessions_tested": 25,
+      "stateless_hit_rate": 0.76,
+      "context_hit_rate": 0.8,
+      "stateless_accuracy": 0.95,
+      "context_accuracy": 1.0,
+      "accuracy_improvement": 0.05,
+      "stateless_avg_sim": 0.8207,
+      "context_avg_sim": 0.8021,
+      "stateless_latency_ms": 4.263,
+      "context_latency_ms": 7.591
+    }
+  ],
+  "_provenance": {
+    "engine": "sulci-minilm",
+    "engine_label": "sulci.Cache (SQLite + MiniLM)",
+    "generated_at": "2026-08-11T14:26:26+00:00",
+    "argv": "--use-sulci --fresh --no-sweep --context --agent --threshold 0.85 --seed 42 --out benchmark/results/minilm/seed-42"
+  }
+}

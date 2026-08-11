@@ -57,3 +57,6 @@ sulci_milvus.db
 
 node_modules/
 package-lock.json
+
+# benchmark run DBs — regenerable from run.py, never committed
+benchmark/results/**/*_db
