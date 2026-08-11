@@ -124,3 +124,28 @@ you can verify that a release artifact was built and published by this
 repository's `publish.yml` workflow.
 
 Thank you for practicing responsible disclosure.
+
+
+## Known gap: `~/.sulci/config` permissions on Windows
+
+`sulci.config.save()` restricts `~/.sulci` to `0700` and `~/.sulci/config` to
+`0600`, because that file holds the API key. **This works on Linux and macOS
+and does not work on Windows.** `os.chmod` there toggles only the read-only
+bit; POSIX mode bits are not applied. Measured 2026-08-11: `0o777` on the
+directory and `0o666` on the file.
+
+The file then inherits the ACL of the user profile directory. On a
+single-user machine that is usually adequate. On a shared or
+domain-joined machine it may not be, and it is not what the code's own
+docstring implied.
+
+**Mitigations today:** set `SULCI_API_KEY` in the environment instead of
+persisting a key, or restrict the directory yourself with `icacls`.
+
+Proper hardening needs an ACL call rather than `chmod`. Not implemented.
+
+*How this was found: the assertions had existed since v0.5.2 and had never
+run on Windows, because `.github/workflows/tests.yml` names each test file it
+runs and `test_config.py` was not among them. Turning the unlisted suites on
+(2026-08-11) surfaced it immediately. `scripts/check_ci_test_coverage.py` now
+fails the build if a suite is unlisted.*

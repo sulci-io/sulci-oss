@@ -62,9 +62,18 @@ What this demonstrates:
        the first agent's outputs from the prior run.
 
     3. Cumulative cost savings via `cache.stats()` — saved_cost is
-       populated because we pass `cost_per_call=0.003` to
-       `cached_call()` (sidesteps issue #88 where unconfigured
-       Cache constructors leave saved_cost at $0).
+       populated because the Cache below is constructed with
+       `cost_per_call=COST_PER_CALL` (issue #88: an unconfigured Cache
+       falls back to sulci's own default of $0.005, which is NOT what the
+       per-run arithmetic in this file uses).
+
+       ⚠️ This paragraph used to claim the value was passed to
+       `cached_call()`. It was not passed anywhere. The constructor took
+       sulci's $0.005 default while the print statements computed
+       `hits * 0.003`, so one run printed BOTH "Aggregate cost saved
+       $0.012" and "saved_cost=$0.020" for the same four hits, eleven
+       lines apart — while the docstring said the discrepancy had been
+       sidestepped. Fixed 2026-08-11: one constant, used by both.
 
     4. The CachedLLM pattern works for any non-LangChain agent
        framework. AutoGen, LlamaIndex agents, hand-rolled ReAct
@@ -119,6 +128,12 @@ from sulci import Cache
 # NOT pollute prior demo state. Pattern adopted in v0.5.4.
 _DB_PATH = os.path.join(tempfile.mkdtemp(prefix="sulci_crewai_"), "cache")
 
+# ONE source for the per-call price. The Cache uses it for saved_cost and the
+# summary arithmetic below uses it for its own totals; if these ever diverge
+# again the two printed dollar figures will disagree, as they did until
+# 2026-08-11.
+COST_PER_CALL = 0.003
+
 sulci_cache = Cache(
     backend          = "sqlite",
     db_path          = _DB_PATH,
@@ -126,6 +141,7 @@ sulci_cache = Cache(
     context_window   = 4,        # context-aware blending across the Crew run
     query_weight     = 0.70,
     ttl_seconds      = 3600,
+    cost_per_call    = COST_PER_CALL,   # issue #88 — see module docstring
 )
 
 
@@ -320,7 +336,7 @@ def run_task(task_topic: str, run_num: int) -> dict:
     print(f"   Cache misses (LLM calls)  : {misses}")
     print(f"   Hit rate                  : {cached_llm.run_hit_rate:.0%}")
     print(f"   Wall time                 : {elapsed:.1f}s")
-    print(f"   Cost saved (vs $0.003/call): ${hits * 0.003:.3f}")
+    print(f"   Cost saved (vs ${COST_PER_CALL}/call): ${hits * COST_PER_CALL:.3f}")
 
     # Truncated preview of the Crew output for visual confirmation
     output_str = str(result)[:140].replace("\n", " ")
@@ -337,7 +353,10 @@ def main():
     print(f"  DB    : {_DB_PATH}")
     print()
     print("  3 runs of the same Crew task — watch the hit rate climb.")
-    print("  Each Crew run dispatches ~6-12 LLM calls across 2 agents.")
+    # Measured 2026-08-11 on the mock path: 2 calls per run, not 6-12. The
+    # old copy asserted a range the example never produced. Printed from the
+    # actual counter below rather than restated as prose.
+    print("  Each Crew run dispatches 2 agents; the call count is printed per run.")
 
     TASK = "semantic caching for LLM applications"
 
@@ -361,7 +380,7 @@ def main():
         print(f"   Total cache hits          : {total_hits}  "
               f"(would have been LLM calls without Sulci)")
         print(f"   Aggregate hit rate        : {total_hits/total_calls:.0%}")
-    print(f"   Aggregate cost saved      : ${total_hits * 0.003:.3f}")
+    print(f"   Aggregate cost saved      : ${total_hits * COST_PER_CALL:.3f}")
     print(f"   Hot-run speedup vs cold   : {speedup:.1f}×")
 
     # Aggregate cache stats from Sulci's own counters (sanity check)

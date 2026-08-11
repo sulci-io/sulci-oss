@@ -113,8 +113,15 @@ class SulciCacheLLM(LLM):
     ``context_window > 0`` — dramatically improving hit rates in
     multi-turn RAG and agent workloads:
 
-    - Customer support:  32% → 88% hit rate  (+56 pp)
-    - Developer Q&A:     80% → 96% hit rate  (+16 pp)
+    How much it helps depends on your query mix. Run
+    ``benchmark/run.py --context``, or point it at your own traffic.
+
+    .. note::
+       A per-domain gain table (32% → 88%, +56 pp) was withdrawn from this
+       docstring on 2026-08-11: TF-IDF basis never stated, no n on a
+       125-follow-up corpus, and it stopped reproducing even on TF-IDF. See
+       the longer note in ``sulci/integrations/langchain.py``. Do not restore
+       it — this file ships to PyPI.
 
     Note: This is the first correct native LLM-level semantic cache for
     LlamaIndex. GPTCache's claimed integration was a broken global

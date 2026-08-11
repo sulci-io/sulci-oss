@@ -89,6 +89,9 @@ jobs:
       # moves core.py and leaves the doc behind; a docs-only PR edits the doc
       # and the 12-job matrix is skipped entirely, so nothing else would read
       # it. ~1s: two ast.parse calls and a regex over one markdown file.
+      - name: CI runs every test suite on disk
+        run: python3 scripts/check_ci_test_coverage.py
+
       - name: API surface matches the docs
         run: python3 scripts/check_api_surface.py
 
@@ -264,3 +267,28 @@ jobs:
       - name: Caching proxy
         if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
         run: pytest tests/test_proxy.py -v --tb=short
+
+      # ── suites that CI never ran until 2026-08-11 ────────────────────────
+      # These eleven were run by `make checkin` and by NO CI job, some for
+      # months -- including all four telemetry suites, which guard the wire
+      # allowlist, and test_connect (59 tests). Found by the audit that
+      # followed the v0.9.0 suites being omitted the same way.
+      #
+      # scripts/check_ci_test_coverage.py now fails the build if a file in
+      # tests/ is not named here, so the next omission is loud instead of
+      # silent. Run it before adding a suite.
+      - name: Telemetry
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_telemetry.py tests/test_telemetry_gateway_override.py tests/test_telemetry_lifecycle.py -v --tb=short
+
+      - name: Connect and config
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_connect.py tests/test_oss_connect.py tests/test_config.py -v --tb=short
+
+      - name: Cloud backend
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_cloud_backend.py -v --tb=short
+
+      - name: Attribution, nudge, thresholds, session-store injection
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_hit_attribution.py tests/test_nudge.py tests/test_per_call_threshold.py tests/test_session_store_injection.py -v --tb=short
