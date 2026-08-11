@@ -344,6 +344,61 @@ cached by the same path; they do not block the event loop.
 
 ---
 
+## `SulciLiteLLMCache` — the LiteLLM adapter
+
+Added 2026-08-11. `sulci.integrations.litellm`. Subclasses
+`litellm.caching.base_cache.BaseCache`. Extra: `sulci[litellm]`.
+
+| Method | Keyword-only | Notes |
+|---|---|---|
+| `__init__(cache=None, *, …, **kwargs)` | `namespace_by_model`, `session_key` | — |
+| `get_cache(key, **kwargs)` | — | Prompt comes from `kwargs["messages"]` / `["input"]`, **not** from `key` |
+| `set_cache(key, value, **kwargs)` | — | Value JSON-serialised with `default=str` |
+| `async_get_cache(key, **kwargs)` | — | `run_in_executor` over the sync path |
+| `async_set_cache(key, value, **kwargs)` | — | idem |
+| `async_set_cache_pipeline(cache_list, **kwargs)` | — | iterates; no batching |
+| `disconnect()` | — | no-op, parity with `BaseCache` |
+| `stats()` | — | passthrough to `Cache.stats()` |
+
+Seven public methods. Keyword-only constructor args: `namespace_by_model`
+(default `True`), `session_key` (default `"sulci_session_id"`).
+
+**`key` is not usable for semantic lookup.** LiteLLM computes it as a hash of
+the whole request, so it changes with every prompt. The prompt itself arrives
+in `kwargs` — the same contract `RedisSemanticCache._get_prompt_from_kwargs`
+reads.
+
+**LiteLLM has no `custom` cache type.** `LiteLLMCacheType` is exactly {local,
+redis, redis-semantic, valkey-semantic, s3, disk, qdrant-semantic, azure-blob,
+gcs}, measured 2026-08-11 at litellm 1.96.0. The injection point is
+`litellm.cache.cache = <BaseCache>`, which is what `install()` does.
+
+---
+
+## `sulci-mcp` and `sulci-proxy` — function surfaces, not classes
+
+Both expose a factory rather than a public class, so neither is in
+`CLASSES` in `check_api_surface.py`. **If either grows a public class, add it
+there** — that tuple is the only thing standing between an adapter and the
+undocumented-drift state these two sections exist to prevent.
+
+| Entry point | Signature |
+|---|---|
+| `sulci.integrations.mcp_server.build_server` | `(cache=None, *, name, read_only, default_tenant_id, instructions, **cache_kwargs) -> MCPServer` |
+| `sulci.integrations.mcp_server.main` | `(argv=None) -> None` — console script `sulci-mcp` |
+| `sulci.proxy.build_app` | `(cache=None, *, openai_upstream, anthropic_upstream, share_across_models, timeout, client, **cache_kwargs) -> FastAPI` |
+| `sulci.proxy.__main__.main` | `(argv=None) -> None` — console script `sulci-proxy` |
+
+MCP tools: `cache_lookup`, `cache_stats` (`readOnlyHint=True`), `cache_store`.
+Proxy routes: `POST /v1/chat/completions`, `POST /v1/messages`, `GET /healthz`,
+`GET /stats`.
+
+**Requires `mcp>=2.0.0`.** `mcp.server.fastmcp.FastMCP` was removed in 2.0;
+the entry point is `mcp.server.MCPServer`. A `>=1.0.0` pin resolves and then
+fails at import, which is why the extra pins 2.
+
+---
+
 ## Backends
 
 | Backend | ID | Native vectors | Tenant isolation |
@@ -379,5 +434,6 @@ PR #114.
 
 ---
 
-*Measured 2026-07-24 at `sulci` 0.8.3. Re-run the command at the top before
-trusting any line of this.*
+*Measured 2026-07-24 at `sulci` 0.8.3; the `SulciLiteLLMCache`, `sulci-mcp` and
+`sulci-proxy` sections measured 2026-08-11. Re-run the command at the top
+before trusting any line of this.*
