@@ -12,10 +12,10 @@
   "n_should_hit": 4000,
   "n_should_miss": 2588,
   "avg_similarity_hits": 0.9779,
-  "latency_hit_p50_ms": 87.248,
-  "latency_hit_p95_ms": 91.76,
-  "latency_miss_p50_ms": 87.311,
-  "latency_miss_p95_ms": 91.486,
+  "latency_hit_p50_ms": 86.977,
+  "latency_hit_p95_ms": 88.148,
+  "latency_miss_p50_ms": 86.976,
+  "latency_miss_p95_ms": 88.035,
   "baseline_cost_usd": 32.94,
   "actual_cost_usd": 12.72,
   "saved_cost_usd": 20.22,
@@ -23,7 +23,7 @@
   "_provenance": {
     "engine": "sulci-minilm",
     "engine_label": "sulci.Cache (SQLite + MiniLM)",
-    "generated_at": "2026-08-11T14:00:27+00:00",
-    "argv": "--use-sulci --fresh --no-sweep --context --agent --threshold 0.85 --seed 2 --out benchmark/results/minilm/seed-2"
+    "generated_at": "2026-08-11T15:21:07+00:00",
+    "argv": "--use-sulci --fresh --no-sweep --agent --threshold 0.85 --seed 2 --out benchmark/results/minilm/seed-2"
   }
 }

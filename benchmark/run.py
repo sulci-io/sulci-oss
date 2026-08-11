@@ -2711,6 +2711,11 @@ def main():
             dispatches = args.agent_dispatches,
             threshold  = args.agent_threshold,
             use_sulci  = args.use_sulci,
+            # --seed was not reaching this call, so every agent run used the
+            # hardcoded 1729 and four --seed draws produced identical output.
+            # None would seed from the OS and make this non-deterministic,
+            # which is worse than one fixed draw.
+            seed       = args.seed if args.seed is not None else 1729,
         )
         save_json(agent_data["summary"],    "agent_summary.json")
         save_csv(agent_data["per_session"], "agent_per_session.csv")
