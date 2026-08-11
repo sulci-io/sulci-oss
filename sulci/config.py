@@ -93,6 +93,18 @@ def save(data: Dict[str, Any]) -> bool:
     cannot corrupt an existing config — important because :func:`load`
     is the only line of defense between a corrupt file and a crash on
     next import.
+
+    .. warning::
+       **The 0700/0600 hardening is POSIX-only.** ``os.chmod`` on Windows
+       toggles the read-only bit and does not apply POSIX mode bits, so on
+       Windows this file is left at whatever the profile directory grants —
+       measured as 0o777/0o666 on 2026-08-11, the first time the assertions
+       ran there. The file holds the API key.
+
+       On a single-user Windows machine the profile ACL is usually adequate.
+       It is not the guarantee the paragraph above implies, and restricting
+       it properly needs an ACL call (pywin32 / ``icacls``), not ``chmod``.
+       See SECURITY.md.
     """
     try:
         cfg_dir = _config_dir()
