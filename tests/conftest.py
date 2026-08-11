@@ -41,3 +41,40 @@ import os
 # Remove production-key leak vector for the entire test session.
 # Tests that need real telemetry must pass api_key= explicitly.
 os.environ.pop("SULCI_API_KEY", None)
+
+
+# ── shared fixtures for the v0.9.0 integration suites ────────────────────
+#
+# WHY THIS IS A FIXTURE AND NOT AN IMPORT
+#
+# tests/test_integrations_{mcp,litellm}.py and tests/test_proxy.py originally
+# did `from tests._fake_embedder import FakeEmbedder`. That works under
+# `python -m pytest` -- which is what the Makefile uses -- because `-m`
+# inserts the CWD into sys.path, making the repo root importable as a package
+# root. It does NOT work under a bare `pytest`, which is what
+# .github/workflows/tests.yml uses: pytest inserts the TEST FILE'S directory
+# (tests/), not the repo root, so `tests` is not a module and collection dies
+# with ModuleNotFoundError before a single test runs.
+#
+# Local green, CI red, on identical code. Measured 2026-08-11 by reproducing
+# with `PYTHONPATH=<sulci-only> pytest <abs path>`.
+#
+# conftest.py is loaded by pytest itself regardless of sys.path, so a fixture
+# defined here is reachable from every test module with no import at all.
+# _fake_embedder.py stays as the documented home of the class; only the route
+# to it changes.
+import sys as _sys
+from pathlib import Path as _Path
+
+_sys.path.insert(0, str(_Path(__file__).parent))
+
+import pytest as _pytest  # noqa: E402
+from _fake_embedder import FakeEmbedder as _FakeEmbedder  # noqa: E402
+
+FakeEmbedder = _FakeEmbedder
+
+
+@_pytest.fixture
+def fake_embedder():
+    """Deterministic, offline Embedder. See tests/_fake_embedder.py."""
+    return _FakeEmbedder()
