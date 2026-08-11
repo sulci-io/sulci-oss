@@ -32,54 +32,22 @@ QUESTION = "In two sentences, what is semantic caching?"
 _DB_PATH = os.path.join(tempfile.mkdtemp(prefix="sulci_litellm_"), "cache")
 
 
-def _install_mock_llm() -> None:
-    """Register a mock provider so the example runs with no credentials.
-
-    Every other example in this directory degrades to a mock rather than
-    raising (see anthropic_example.py:37, agent_example_crewai.py). The
-    first version of this file did not, and exited with a 60-line litellm
-    traceback -- which reads like the ADAPTER is broken when in fact only
-    the key is missing.
-    """
-    import hashlib
-
-    def _mock_completion(model, messages, **kwargs):
-        from litellm.types.utils import ModelResponse
-
-        prompt = messages[-1]["content"] if messages else ""
-        digest = hashlib.sha256(prompt.encode()).hexdigest()[:6]
-        time.sleep(0.4)  # stand in for network latency on the miss path
-        return ModelResponse(
-            **{
-                "choices": [
-                    {
-                        "index": 0,
-                        "finish_reason": "stop",
-                        "message": {
-                            "role": "assistant",
-                            "content": (
-                                f"[Mock {digest}] Semantic caching stores LLM "
-                                "responses indexed by meaning rather than by "
-                                "exact text, so near-duplicate questions reuse "
-                                "one answer."
-                            ),
-                        },
-                    }
-                ],
-                "model": model,
-                "usage": {"prompt_tokens": 0, "completion_tokens": 0,
-                          "total_tokens": 0},
-            }
-        )
-
-    litellm.completion = _mock_completion
-
-
 def main() -> None:
+    # LiteLLM's OWN mock_response kwarg, not a monkeypatch of
+    # litellm.completion. This matters: the cache is consulted INSIDE the
+    # litellm.completion wrapper, so replacing that function removes the
+    # entire caching path -- the first version of this fallback did exactly
+    # that and printed hits=0, misses=0, total_queries=0 while still exiting
+    # 0. mock_response goes through the full wrapper, so the cache is
+    # exercised identically to a real call.
+    mock_kwargs = {}
     if not os.environ.get("OPENAI_API_KEY"):
-        print("⚠  OPENAI_API_KEY not set — using mock LLM "
-              "(set it for real miss-path timings)\n")
-        _install_mock_llm()
+        print("⚠  OPENAI_API_KEY not set — using litellm's mock_response "
+              "(set a key for real miss-path timings)\n")
+        mock_kwargs["mock_response"] = (
+            "Semantic caching stores LLM responses indexed by meaning rather "
+            "than exact text, so near-duplicate questions reuse one answer."
+        )
 
     # namespace_by_model=False: sqlite does not enforce tenant isolation, so
     # leaving it on would only produce a warning and no protection.
@@ -96,12 +64,25 @@ def main() -> None:
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": QUESTION}],
             metadata={"sulci_session_id": "demo-1"},
+            **mock_kwargs,
         )
         ms = (time.perf_counter() - t0) * 1000
         text = resp["choices"][0]["message"]["content"][:60]
         print(f"{label:<7} {ms:8.1f} ms  {text}...")
 
-    print("stats:", adapter.stats())
+    stats = adapter.stats()
+    print("stats:", stats)
+
+    # Assert rather than assume. Without this, a fallback that bypasses the
+    # cache entirely still exits 0 and `make examples` reports PASS.
+    if stats["total_queries"] != 2 or stats["hits"] != 1:
+        raise SystemExit(
+            f"\nFAILED: expected 1 hit / 1 miss, got {stats}.\n"
+            "The cache was not consulted -- litellm.completion is the layer "
+            "that consults it, so anything replacing that function removes "
+            "the caching path."
+        )
+    print("\nOK: miss then hit, cache consulted on both calls.")
 
 
 if __name__ == "__main__":

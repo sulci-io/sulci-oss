@@ -222,3 +222,64 @@ def test_stats_passes_through(adapter):
     adapter.set_cache("k", VALUE, messages=MESSAGES)
     adapter.get_cache("k", messages=MESSAGES)
     assert adapter.stats()["hits"] == 1
+
+
+# ── end-to-end through litellm.completion ────────────────────────────────
+# WHY THESE EXIST (added 2026-08-11, after the fact)
+#
+# Every test above calls adapter.get_cache/.set_cache DIRECTLY. That verifies
+# the adapter honours BaseCache, and it verified nothing about whether LiteLLM
+# ever CALLS it. The gap was invisible until examples/litellm_example.py
+# printed hits=0, misses=0, total_queries=0 while exiting 0 -- a mock that
+# replaced litellm.completion had removed the caching path wholesale, because
+# the cache is consulted INSIDE that wrapper.
+#
+# A direct-call test suite cannot catch that. These go through the real
+# litellm.completion using its own mock_response kwarg, so the wrapper, the
+# cache lookup and the store are all exercised without a network call.
+
+def _completion(messages, **kw):
+    import litellm
+
+    return litellm.completion(
+        model=kw.pop("model", "gpt-4o-mini"),
+        messages=messages,
+        mock_response=kw.pop("mock_response", "Cached answer."),
+        **kw,
+    )
+
+
+@pytest.fixture
+def installed(cache):
+    import litellm
+
+    previous = getattr(litellm, "cache", None)
+    adapter = ll.install(cache, namespace_by_model=False)
+    yield adapter
+    litellm.cache = previous
+
+
+def test_completion_populates_the_cache_on_a_miss(installed):
+    _completion(MESSAGES)
+    stats = installed.stats()
+    assert stats["total_queries"] == 1 and stats["misses"] == 1
+
+
+def test_second_identical_completion_is_a_cache_hit(installed):
+    _completion(MESSAGES)
+    _completion(MESSAGES)
+    stats = installed.stats()
+    assert stats["hits"] == 1, f"cache not consulted by litellm: {stats}"
+    assert stats["total_queries"] == 2
+
+
+def test_cache_is_actually_consulted_at_all(installed):
+    # The regression that motivated this block: total_queries stuck at 0.
+    _completion(MESSAGES)
+    assert installed.stats()["total_queries"] > 0
+
+
+def test_different_prompt_does_not_hit(installed):
+    _completion(MESSAGES)
+    _completion([{"role": "user", "content": "zebra migration patterns"}])
+    assert installed.stats()["hits"] == 0
