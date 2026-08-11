@@ -235,6 +235,14 @@ caches are wired. Pass the conversation id as
 `metadata={"sulci_session_id": ...}` to get context blending.
 
 
+## ⚠️ The MCP, proxy and LiteLLM extras need Python 3.10+
+
+Sulci itself supports Python 3.9. `mcp`, `litellm` and `fastapi` all declare
+`requires-python >=3.10`, so `pip install "sulci[mcp]"` (or `[proxy]`,
+`[litellm]`) will not resolve on 3.9. The core library, the backends and the
+LangChain adapter are unaffected. Same constraint as `sulci[llamaindex]`.
+
+
 ## ⚠️ Tenant isolation is enforced by Qdrant only
 
 `tenant_id` is accepted by every backend and **filtered by one**. Measured

@@ -50,6 +50,13 @@ openai   = ["openai>=1.0.0"]
 cloud    = ["httpx>=0.27.0"]  # no-op since v0.6.3 (httpx is now mandatory); kept for back-compat
 langchain = ["langchain-core>=0.1.0"]
 llamaindex = ["llama-index-core>=0.10.0"]
+# ⚠ These three extras require PYTHON 3.10+, while sulci itself is >=3.9:
+#   mcp      requires-python >=3.10
+#   litellm  requires-python >=3.10,<3.15
+#   fastapi  requires-python >=3.10
+# They are extras precisely so the 3.9 floor holds for everyone else. Same
+# situation as llamaindex. Measured 2026-08-11.
+#
 # mcp 1.x is NOT supported: its FastMCP entry point was removed in 2.0.
 mcp      = ["mcp>=2.0.0"]
 litellm  = ["litellm>=1.90.0"]

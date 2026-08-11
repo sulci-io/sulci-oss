@@ -160,6 +160,14 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: pip install ".[sqlite,redis,langchain,llamaindex]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
+      # The v0.9.0 surfaces need Python 3.10+: mcp, litellm and fastapi all
+      # declare requires-python >=3.10, while sulci itself is >=3.9. Installed
+      # as a SEPARATE step so a resolver failure here cannot be mistaken for a
+      # failure of the core install. Measured 2026-08-11.
+      - name: Install v0.9.0 integration surfaces (3.10+)
+        if: matrix.python-version != '3.9'
+        run: pip install ".[mcp,litellm,proxy]"
+
       - name: Cache HuggingFace models
         if: needs.changes.outputs.code == 'true'
         uses: actions/cache@v5
@@ -235,3 +243,24 @@ jobs:
       - name: Framework adapters (LlamaIndex)
         if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
         run: pytest tests/test_integrations_llamaindex.py -v --tb=short
+
+      # ── v0.9.0 integration surfaces ──────────────────────────────────────
+      # Added 2026-08-11. These suites shipped on 08-11 and this workflow
+      # enumerates test files BY NAME, so for one push they ran on zero CI
+      # jobs while all 12 checks reported green. Anything added to tests/
+      # must be added here too -- nothing detects the omission.
+      #
+      # 3.9 is excluded for the same reason as LlamaIndex above: mcp,
+      # litellm and fastapi are all requires-python >=3.10, so the deps are
+      # not installed there and pytest would exit 5 (nothing collected).
+      - name: MCP server
+        if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
+        run: pytest tests/test_integrations_mcp.py -v --tb=short
+
+      - name: LiteLLM cache adapter
+        if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
+        run: pytest tests/test_integrations_litellm.py -v --tb=short
+
+      - name: Caching proxy
+        if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
+        run: pytest tests/test_proxy.py -v --tb=short
