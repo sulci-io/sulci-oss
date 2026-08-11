@@ -327,6 +327,16 @@ python benchmark/run.py --context
 Results are written to `benchmark/results/`. The `.gitignore` in that directory
 excludes `*.json` and `*.csv` so result files are never committed.
 
+
+⚠️ `--seed`'s default is `42` **in effect, not in argparse**. `argparse` supplies
+`None`; `run.py:146` reseeds only when the value is not `None`, leaving the
+module RNG at the `random.seed(42)` from `:86`. Running without `--seed` is
+therefore deterministic and reproduces `baseline.json` exactly —
+`verify_benchmark.py` confirms 17 metrics at Δ=0.0000.
+
+📌 The four committed draws behind every published figure are at
+`benchmark/results/minilm/seed-{1,2,3,42}`.
+
 ### All benchmark flags
 
 | Flag                    | Default             | Description                                       |
@@ -339,6 +349,9 @@ excludes `*.json` and `*.csv` so result files are never committed.
 | `--context-window N`    | 4                   | Turns per session window                          |
 | `--use-sulci`           | off                 | Use real MiniLM embeddings (vs TF-IDF simulation) |
 | `--out DIR`             | `benchmark/results` | Output directory for result files                 |
+| `--seed N`              | 42                  | Corpus RNG seed. `--seed 1 2 3 42` is what every published figure uses. |
+| `--agent`               | off                 | Agent-workload pass: 50 sessions x 200 dispatches |
+| `--fresh`               | off                 | Delete existing benchmark DBs first. Without it the cache is warm from the previous run. |
 
 ---
 

@@ -248,6 +248,21 @@ having no correct answer cached:
 Per 1,000 queries with no cached answer, MiniLM wrongly answers **11**; TF-IDF
 wrongly answers **304**.
 
+⚠️ **2026-08-12 — "four corpus draws" applies unevenly.** True of the stateless
+pass. **Was not true of the agent pass** until 2026-08-12: `run.py` omitted
+`seed` when calling `run_agent_bench`, so every agent draw used the hardcoded
+`1729`. Fixed; the agent figures now vary across seeds and cold measures
+`33.4% [30.0–35.0]` against a previously published `27%`.
+
+Still not fully true of the **context** pass. `run_context_bench` receives
+`args.seed` and resolves `None` to `99` at `:999`, but `:1029` uses
+`random.Random(99)` unconditionally while `:1459–1512` use the module RNG. Two
+RNGs, one seedable and one pinned. The context draws do vary across seeds, so it
+is partially seeded — but "four corpus draws" claims more independence than the
+code delivers. The context-aware family is retired in `CLAIMS.md`, so nothing
+published rests on it.
+
+
 ⚠️ **`general_knowledge` is the weak domain at ~25% false positives** — "what
 is AI" and "what is machine learning" are adjacent enough to conflate. Reported
 rather than hidden.

@@ -8,6 +8,90 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### The published figures had no committed source (2026-08-12)
+
+`CLAIMS.md` on sulci-platform lists five figures as *Measured — safe to
+publish*, sourced to `--use-sulci --fresh`, four draws, threshold 0.85. None
+was in any committed artifact in this repo.
+
+`baseline.json` and everything under `benchmark/results/` carried
+`_provenance.engine: builtin-tfidf`. There was no latency field anywhere.
+`baseline.json._meta.description` named the MiniLM numbers and pointed at
+`CLAIMS.md` for them — a chain that terminates in prose.
+
+The register's own first rule is *"a figure on the site must be reproducible
+from the public repo. A technical buyer will run it."* A buyer running
+`--use-sulci` had nothing committed to compare against, and
+`verify_benchmark.py` checks TF-IDF only.
+
+Four draws are now committed under `benchmark/results/minilm/seed-{1,2,3,42}`.
+All five reproduce: `recall .9990 [.9985–.9995]` n=4,000 · `false_hit_rate
+.0106 [.0062–.0185]` n=2,588 → 98.9% declined · `precision .9377
+[.9213–.9469]` n=4,014 · agent `27.0% → 99.4%` at seed 1729 · latency p50
+`87.2ms [87.0–87.7]`.
+
+⚠️ The run databases (`*_db`) are gitignored — regenerable, 28M across four
+seeds. Only the JSON and CSV outputs are committed.
+
+---
+
+### `--seed` was not reaching `run_agent_bench` (2026-08-12)
+
+`run.py`'s agent invocation omitted the `seed` argument, so every agent run used
+that function's hardcoded `1729` regardless of `--seed`. Four draws were one
+draw, four times.
+
+It surfaced because the derived figure ranges were **zero-width** —
+`[0.2700–0.2700]` across four different corpus draws, with `total_hits` and the
+per-category dispatch counts byte-identical. Extraordinary stability and no
+variation measured at all look identical in a summary; they differ in the range.
+
+Seeded, over seeds 1/2/3/42: cold `.335 / .35 / .30 / .35` — mean **33.4%**,
+range **[30.0–35.0]**. Warm `.9973 / .9969 / .9981 / .9973` — mean **99.74%**.
+
+⛔ The published `27% → 99.4%` reproduces **only at seed 1729** and sits below
+every seeded draw. Registered in `CLAIMS.md`. `None` is guarded to `1729` at the
+call site rather than passed through — `random.Random(None)` would seed from the
+OS and make the agent benchmark non-deterministic by default, which is worse
+than one fixed draw.
+
+---
+
+### Correction: the unseeded path IS deterministic (2026-08-12)
+
+Recorded so the claim is not re-derived. `run.py:146` guards the reseed:
+
+```python
+if getattr(args, "seed", None) is not None:
+    random.seed(args.seed)
+```
+
+so `random.seed(None)` never runs and the module RNG stays at the
+`random.seed(42)` set at `:86`. The `--seed` help saying *default: 42* is
+accurate in effect. `verify_benchmark.py` regenerated the baseline this session:
+**17 metrics, every one Δ=0.0000**, byte-identical. `baseline.json`'s
+`STATUS: CURRENT` is supported.
+
+---
+
+### Outstanding: `README.md` still carries retired figures (2026-08-12)
+
+No claims checker exists in this repo, and `check-claims.py` on sulci-web sets
+`ROOT` to its own repo, so neither has ever read it. `pyproject.toml:9` makes it
+the PyPI project page.
+
+Live: `85.9%`, `0.74ms`, `$21.47`, `77.6%`, `+20.8pp` ×2, `~60–75%` (U+2013),
+and the withdrawn per-domain table in full at `:830–838` — including `+16pp` and
+`+20pp`, the two domains `CLAIMS.md` records as dropped.
+
+Also `:32` and `:830` say **800 conversation pairs**. `benchmark/run.py:7–10`
+says the corpus is **125 follow-ups (25 sessions × 5)** and that it *"has said
+800-pair since v0.2.0."* Off by 6.4×, flagged by the harness, repeated by the
+README.
+
+Tracked as Tier 5 of the marketing rebuild. It is a rewrite, not a sweep.
+
+
 ### Docs: the telemetry allowlist is EIGHT fields, not nine (2026-07-25)
 
 `WIRE_FIELDS` has held exactly eight names since v0.5.2 — `event`, `backend`,
