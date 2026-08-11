@@ -17,7 +17,6 @@ import json
 import pytest
 
 from sulci import Cache
-from tests._fake_embedder import FakeEmbedder
 
 pytest.importorskip("fastapi", reason='pip install "sulci[proxy]"')
 import httpx  # noqa: E402
@@ -103,11 +102,11 @@ class _AsyncStream(httpx.AsyncByteStream):
 
 
 @pytest.fixture
-def cache(tmp_path):
+def cache(tmp_path, fake_embedder):
     return Cache(
         backend="sqlite",
         db_path=str(tmp_path / "px"),
-        embedding_model=FakeEmbedder(),
+        embedding_model=fake_embedder,
         threshold=0.85,
         telemetry=False,
     )

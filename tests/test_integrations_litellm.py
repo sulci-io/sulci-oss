@@ -14,7 +14,6 @@ import json
 import pytest
 
 from sulci import Cache
-from tests._fake_embedder import FakeEmbedder
 
 ll = pytest.importorskip(
     "sulci.integrations.litellm",
@@ -24,11 +23,11 @@ SulciLiteLLMCache = ll.SulciLiteLLMCache
 
 
 @pytest.fixture
-def cache(tmp_path):
+def cache(tmp_path, fake_embedder):
     return Cache(
         backend="sqlite",
         db_path=str(tmp_path / "ll"),
-        embedding_model=FakeEmbedder(),
+        embedding_model=fake_embedder,
         threshold=0.85,
         telemetry=False,
     )

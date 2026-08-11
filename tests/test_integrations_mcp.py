@@ -17,7 +17,6 @@ import json
 import pytest
 
 from sulci import Cache
-from tests._fake_embedder import FakeEmbedder
 
 mcp_server = pytest.importorskip(
     "sulci.integrations.mcp_server",
@@ -28,11 +27,11 @@ build_server = mcp_server.build_server
 
 # ── fixtures ─────────────────────────────────────────────────────────────
 @pytest.fixture
-def cache(tmp_path):
+def cache(tmp_path, fake_embedder):
     return Cache(
         backend="sqlite",
         db_path=str(tmp_path / "mcp"),
-        embedding_model=FakeEmbedder(),
+        embedding_model=fake_embedder,
         threshold=0.85,
         telemetry=False,
     )
