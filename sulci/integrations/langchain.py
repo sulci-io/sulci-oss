@@ -54,26 +54,36 @@ class SulciCache(BaseCache):
     Unlike exact-match caches (``InMemoryCache``, ``SQLiteCache``) and
     stateless semantic caches (``GPTCache``, ``RedisSemanticCache``),
     SulciCache blends prior conversation turns into the similarity lookup
-    vector — giving dramatically higher hit rates in multi-turn workloads:
-
-    .. list-table::
-       :header-rows: 1
-
-       * - Workload
-         - Stateless semantic
-         - SulciCache (context-aware)
-       * - Customer support
-         - 32%
-         - **88%** (+56 pp)
-       * - Developer Q&A
-         - 80%
-         - **96%** (+16 pp)
+    vector, which raises hit rates on multi-turn workloads where a follow-up
+    only makes sense given what came before.
 
     ``context_window=0`` (default) is fully stateless and backward-
-    compatible.  Raise it to 4 to unlock context-aware mode:
+    compatible.  Raise it to 4 to unlock context-aware mode.
 
-    - Customer support:  32% → 88% hit rate  (+56 pp)
-    - Developer Q&A:     80% → 96% hit rate  (+16 pp)
+    **How much it helps depends on your query mix, and we are not going to
+    put a number here.** Run ``benchmark/run.py --context`` against the
+    public corpus, or better, point it at your own traffic. The corpus is
+    125 follow-ups across 25 sessions — the harness prints "do not publish a
+    figure from this corpus without the n" for a reason.
+
+    .. note::
+       A per-domain gain table used to live in this docstring: 32% → 88%
+       (+56 pp) for customer support, +16 pp for developer Q&A. **It was
+       withdrawn 2026-08-11 and must not be restored.** Three defects, any
+       one of which disqualifies it:
+
+       1. It was measured on the built-in TF-IDF engine, not the shipped
+          MiniLM embedder, and said so nowhere. On MiniLM the same corpus
+          gives roughly a fifth of that delta.
+       2. It carried no n. The corpus is 125 follow-ups.
+       3. By 2026-08-11 it no longer reproduced even on TF-IDF: the
+          canonical run gives +55 pp / +20 pp, against a published
+          +56 / +16.
+
+       The claims register (``sulci-platform docs/marketing/CLAIMS.md``)
+       records the per-domain table as withdrawn, not renumbered. Numbers in
+       this file ship to PyPI and were mirrored into two upstream PRs; treat
+       any figure here as published, because it is.
 
     Args:
         namespace_by_llm (bool):

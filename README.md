@@ -37,10 +37,21 @@ shipped MiniLM embedder the same corpus gives a peak Δ of about **+4.0pp** at
 number. Quote the +20.8pp figure only where the TF-IDF basis is stated alongside
 it. See `benchmark/README.md` for both series and the reproduction commands.
 
-**Agent workloads** are the headline result and are measured on real MiniLM:
-`benchmark/run.py --agent` reports **~60–75%** aggregate per-session hit rate on
-a 45% structural / 35% semi-structural / 20% novel dispatch distribution, against
-a ~95% TF-IDF upper bound.
+**Agent workloads** are the headline result, measured on real MiniLM across
+four corpus draws (`--seed 1 2 3 42`, n=10,000):
+
+| | measured |
+|---|---|
+| aggregate per-session hit rate | **95.01%** `[94.99–95.05]` |
+| cold session | **33.4%** `[30.0–35.0]`, n=200 |
+| warm session | **99.74%** `[99.69–99.81]`, n=200 |
+
+Reproduce with `benchmark/run.py --agent --use-sulci --fresh --seed 1`.
+
+> The **~60–75%** figure this paragraph used to carry was never measured. It
+> came from one line in `benchmark/README.md` that asserted it and called it
+> "the number to cite externally." Retired 2026-08-04; `CLAIMS.md` recorded
+> the correction as landed, and it had not landed here. Fixed 2026-08-11.
 
 ---
 
@@ -105,7 +116,7 @@ from sulci.integrations.langchain import SulciCache
 # Stateless semantic — drop-in for GPTCache
 set_llm_cache(SulciCache(backend="sqlite"))
 
-# Context-aware — chatbot / agent (+56pp hit rate in customer support)
+# Context-aware — chatbot / agent
 set_llm_cache(SulciCache(backend="sqlite", context_window=4, threshold=0.75))
 
 # Managed Sulci Cloud
@@ -133,7 +144,7 @@ Settings.llm = SulciCacheLLM(
     threshold = 0.85,
 )
 
-# Context-aware — RAG chatbot / agent (+56pp hit rate in customer support)
+# Context-aware — RAG chatbot / agent
 Settings.llm = SulciCacheLLM(
     llm            = OpenAI(model="gpt-4o"),
     backend        = "sqlite",
@@ -943,14 +954,18 @@ lookup_vec = α · embed(query) + (1−α) · Σ(decay^i · turn_i)
 - Only **user query** vectors are stored in context (not LLM responses)
 - Raw un-blended vectors stored in cache; blending happens at lookup time only
 
-**Context-aware benchmark results (800 conversation pairs, context_window=4):**
+**Context-aware benchmark:** run it rather than reading a number here.
 
-| Domain              | Stateless | Context-aware | Δ           |
-| ------------------- | --------- | ------------- | ----------- |
-| customer_support    | 32%       | 88%           | **+56pp**   |
-| developer_qa        | 80%       | 96%           | +16pp       |
-| medical_information | 40%       | 60%           | +20pp       |
-| **overall**         | **64.0%** | **81.6%**     | **+17.6pp** |
+```bash
+python benchmark/run.py --no-sweep --context
+```
+
+The corpus is **125 follow-ups across 25 sessions**, which is small — the
+harness says so on every run. A per-domain gain table used to sit here
+(+56pp customer support, +17.6pp overall) and was withdrawn 2026-08-11: it
+was measured on the built-in TF-IDF engine rather than the shipped MiniLM
+embedder, carried no n, described the corpus as 800 pairs when
+`benchmark/run.py` says 125, and had stopped reproducing even on TF-IDF.
 
 ---
 

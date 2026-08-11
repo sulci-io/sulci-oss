@@ -297,7 +297,10 @@ def demo_context_aware():
     Uses llm_string as session_id so each conversation gets its own context
     window. Ambiguous follow-up questions resolve correctly within the session.
 
-    Customer support result: 32% → 88% hit rate (+56pp) with context_window=4.
+    How much this helps depends on the query mix; run
+    benchmark/run.py --context rather than quoting a figure. A "32% → 88%
+    (+56pp)" line was withdrawn from here 2026-08-11 (TF-IDF basis, no n,
+    no longer reproducing) -- see sulci/integrations/langchain.py.
     """
     print()
     print("━" * 58)
