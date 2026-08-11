@@ -193,6 +193,18 @@ miss-uncacheable | bypass`; hits also carry `x-sulci-similarity`.
 
 Scope a lookup with the `x-sulci-tenant-id` and `x-sulci-session-id` headers.
 
+⚠️ **A cache hit is not authenticated.** Your `Authorization` header is
+forwarded upstream only on a **miss**; a hit is served from the store without
+any credential check, so an invalid or expired key still returns 200 for a
+question already cached. This is inherent to every caching proxy, and it is
+why `--host` defaults to `127.0.0.1`. Read access to the proxy is read access
+to the cache contents — put your own auth in front of it before binding it to
+anything but localhost.
+
+⚠️ **Give it a dedicated `--db-path`.** `./sulci_db` is sulci's *default*
+path, shared with anything else that omits `db_path`. Pointing the proxy at it
+means unrelated entries can satisfy a lookup.
+
 **Not cached, by design:** streaming requests (`"stream": true`) pass through
 untouched; tool-call responses are never stored, because their arguments are
 state-dependent and a stale one sends an agent to the wrong file. Cached

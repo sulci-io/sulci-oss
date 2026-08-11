@@ -13,6 +13,8 @@ inner implementation after constructing a Cache, which install() does.
 """
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 
 import litellm
@@ -21,13 +23,16 @@ from sulci.integrations.litellm import install
 
 QUESTION = "In two sentences, what is semantic caching?"
 
+# Per-run tempdir — see examples/basic_usage.py and issue #19.
+_DB_PATH = os.path.join(tempfile.mkdtemp(prefix="sulci_litellm_"), "cache")
+
 
 def main() -> None:
     # namespace_by_model=False: sqlite does not enforce tenant isolation, so
     # leaving it on would only produce a warning and no protection.
     adapter = install(
         backend="sqlite",
-        db_path="./sulci_db_litellm",
+        db_path=_DB_PATH,
         context_window=4,
         namespace_by_model=False,
     )

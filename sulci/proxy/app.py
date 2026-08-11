@@ -35,6 +35,16 @@ DESIGN DECISIONS, so they are not re-litigated
    state-dependent. Serving a stale one sends an agent to the wrong file.
 4. **Auth headers are forwarded, never stored or logged.** The proxy holds
    no credentials of its own.
+
+   ⚠️  **BUT A CACHE HIT IS NOT AUTHENTICATED.** The Authorization header is
+   forwarded upstream only on a MISS. On a hit the response is served from
+   the store and the header is never checked by anyone — so an invalid,
+   expired or absent key still returns 200 for any question already in the
+   cache. This is inherent to every caching proxy (LiteLLM, Portkey and
+   Helicone all share it) and it is why `--host` defaults to `127.0.0.1`.
+   Treat read access to the proxy as equivalent to read access to the cache
+   contents. Do not bind it to 0.0.0.0 on a shared network without putting
+   your own authentication in front of it.
 5. **The cache key includes the model** unless ``--share-across-models``.
 
 ⚠️  CORRECTNESS WARNING — the one that matters in CI.

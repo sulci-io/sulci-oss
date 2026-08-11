@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import tempfile
 
 from sulci.integrations.mcp_server import build_server
 
@@ -28,8 +30,15 @@ async def call(server, name: str, **args) -> dict:
     return json.loads("".join(getattr(b, "text", "") for b in blocks))
 
 
+# Per-run tempdir so re-running is idempotent, matching every other example
+# in this directory (issue #19: "no db_path pollution accumulates across
+# runs"). A fixed path would let a PREVIOUS run's entries satisfy this run's
+# "miss" and the demo would silently prove nothing.
+_DB_PATH = os.path.join(tempfile.mkdtemp(prefix="sulci_mcp_"), "cache")
+
+
 async def main() -> None:
-    server = build_server(backend="sqlite", db_path="./sulci_db_mcp", context_window=4)
+    server = build_server(backend="sqlite", db_path=_DB_PATH, context_window=4)
 
     print("tools:", [t.name for t in await server.list_tools()])
     print("miss :", await call(server, "cache_lookup", query=Q))
