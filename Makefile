@@ -98,6 +98,20 @@ test-async:
 	python -m pytest tests/test_async_cache.py -v --tb=short
 
 ## Run integration tests (LangChain + LlamaIndex)
+test-mcp:
+	python -m pytest tests/test_integrations_mcp.py -v
+
+test-litellm:
+	python -m pytest tests/test_integrations_litellm.py -v
+
+test-proxy:
+	python -m pytest tests/test_proxy.py -v
+
+# The v0.9.0 surfaces. Unlike test-integrations these need NO model weights
+# (tests/_fake_embedder.py), so they run offline and in CI without HF access.
+test-surfaces:
+	python -m pytest tests/test_integrations_mcp.py tests/test_integrations_litellm.py tests/test_proxy.py -q
+
 test-integrations:
 	python -m pytest tests/test_integrations_langchain.py \
 	                 tests/test_integrations_llamaindex.py \

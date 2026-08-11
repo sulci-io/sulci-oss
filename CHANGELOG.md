@@ -92,6 +92,98 @@ README.
 Tracked as Tier 5 of the marketing rebuild. It is a rewrite, not a sweep.
 
 
+### Added: three new integration surfaces — MCP, proxy, LiteLLM (2026-08-11)
+
+**`sulci-oss` was reachable four ways and is now reachable seven.** The three
+added here are the doors the agentic-CI ecosystem actually uses: a
+containerised agent cannot `pip install sulci` into its own process.
+
+- **`sulci.integrations.mcp_server`** — a Model Context Protocol server.
+  `sulci-mcp` console script; tools `cache_lookup`, `cache_store`,
+  `cache_stats`; stdio / sse / streamable-http transports.
+  Extra: `sulci[mcp]`.
+- **`sulci.proxy`** — an OpenAI- and Anthropic-compatible HTTP shim.
+  `sulci-proxy` console script; `POST /v1/chat/completions`,
+  `POST /v1/messages`, `GET /healthz`, `GET /stats`. Point `OPENAI_BASE_URL`
+  or `ANTHROPIC_BASE_URL` at it and every call is cached with no code change.
+  Extra: `sulci[proxy]`.
+- **`sulci.integrations.litellm`** — `SulciLiteLLMCache(BaseCache)` plus
+  `install()`. Extra: `sulci[litellm]`.
+
+All three are additive. No existing module changed behaviour.
+
+**Three API facts, measured against the shipping libraries on 2026-08-11 and
+recorded because each contradicts what the obvious guess would be:**
+
+1. **`mcp` is at 2.0.0 and `mcp.server.fastmcp.FastMCP` no longer exists.**
+   The entry point is `mcp.server.MCPServer`. The extra pins `mcp>=2.0.0`
+   deliberately — a `>=1.0.0` pin resolves fine and then fails at import.
+   `call_tool()` returns a `CallToolResult` whose `.content` is a list of
+   `TextContent`; `ToolAnnotations` is set in camelCase and reads back in
+   snake_case (`readOnlyHint` in, `read_only_hint` out).
+2. **LiteLLM has no `custom` cache type.** `LiteLLMCacheType` is exactly
+   {local, redis, redis-semantic, valkey-semantic, s3, disk, qdrant-semantic,
+   azure-blob, gcs}. `Cache(type="custom", custom_cache=...)` does not exist.
+   The supported injection point is replacing the inner implementation after
+   construction — `litellm.cache.cache = <BaseCache>` — which is how
+   LiteLLM's own semantic caches are wired. A test asserts `"custom" not in
+   LiteLLMCacheType` so a future first-class mechanism is caught.
+3. **The prompt reaches a LiteLLM cache via `kwargs["messages"]`**, not via
+   the `key` argument, which is a hash of the whole request and useless for
+   semantic lookup. Mirrors `RedisSemanticCache._get_prompt_from_kwargs`.
+
+### Fixed: scoping now warns instead of silently doing nothing (2026-08-11)
+
+**`ENFORCES_TENANT_ISOLATION` is `True` for the qdrant backend and `False`
+for chroma, cloud, faiss, milvus, redis and sqlite.** `tenant_id` is accepted
+by all seven and filtered by one. On the other six it is accepted and
+IGNORED, and entries from different tenants can be served for each other.
+
+That was survivable while `tenant_id` was a hint a human passed. It is not
+survivable in the three surfaces above, because **all three sell scoping as a
+safety property** — `sulci-mcp --tenant-id`, `namespace_by_model=True` (on by
+default), and the proxy's per-model scoping (on unless
+`--share-across-models`). On `sqlite`, which is the default backend for both
+new CLIs, **every one of those is a no-op.**
+
+Shipping them quietly would have been the `delete_user` defect again: a
+documented capability the code does not have. New internal helper
+`sulci.integrations._scope` emits `ScopeNotEnforcedWarning` once per process
+per backend, naming the feature and the fix. It warns; it does not raise —
+the cache still works, it is only the isolation that is absent, and the
+caller may not need it.
+
+**The tests assert the behaviour the code actually has**, not the behaviour
+the docs would prefer:
+
+```python
+def test_tenant_id_is_accepted(server):
+    # On sqlite, tenant_id is accepted and IGNORED. If a future sqlite
+    # backend starts enforcing, this test SHOULD fail. That is the point.
+    assert lookup(tenant_id="repo-b")["cache_hit"] is True
+```
+
+### Added: offline test fixture for adapter suites (2026-08-11)
+
+`tests/_fake_embedder.py` — a deterministic, dependency-free `Embedder`.
+
+`test_integrations_langchain.py` and `..._llamaindex.py` build a real `Cache`
+and therefore load `all-MiniLM-L6-v2` from huggingface.co. On a runner without
+model access those suites do not fail, they **error**, 37 of 56 — and the
+2026-08-05 reconciliation could not upgrade a marker for exactly that reason.
+Adapter code translates between someone else's contract and `Cache`; that is
+fully testable without a real embedder.
+
+The three new suites — 73 tests total, `make test-surfaces` — run offline in
+about five seconds. Uses `zlib.crc32` rather than builtin `hash()`, because
+`PYTHONHASHSEED` randomises str hashing per process and a persisted SQLite
+store written by one process would not match vectors computed by the next.
+
+⚠️ **This is not a substitute for the embedder-backed suites.** It proves the
+plumbing, not retrieval quality. Bag-of-characters similarity is not semantic
+similarity — draw no hit-rate conclusions from it.
+
+
 ### Docs: the telemetry allowlist is EIGHT fields, not nine (2026-07-25)
 
 `WIRE_FIELDS` has held exactly eight names since v0.5.2 — `event`, `backend`,

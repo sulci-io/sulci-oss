@@ -10,7 +10,8 @@ per file, and produce a summary table.
 What it covers:
     * examples/*.py              — usage examples (basic_usage, context_aware,
                                    anthropic, langchain, llamaindex, async,
-                                   agent_example_langgraph, agent_example_crewai)
+                                   agent_example_langgraph, agent_example_crewai,
+                                   mcp_example, litellm_example)
     * examples/extending_sulci/  — protocol-implementation reference impls
     * smoke_test*.py             — end-to-end smoke tests at repo root
 
@@ -76,6 +77,14 @@ DEFAULT_FILES = [
     "examples/llamaindex_example.py",
     "examples/agent_example_langgraph.py",
     "examples/agent_example_crewai.py",
+
+    # v0.9.0 integration surfaces (2026-08-11). mcp_example and
+    # litellm_example are self-contained: per-run tempdir, and litellm falls
+    # back to a mock LLM with no key. proxy_example is DELIBERATELY ABSENT --
+    # it needs a running `sulci-proxy` on :8787, so it would fail here for a
+    # reason that is not a defect. Start the proxy and run it by hand.
+    "examples/mcp_example.py",
+    "examples/litellm_example.py",
 ]
 
 

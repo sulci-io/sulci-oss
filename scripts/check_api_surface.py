@@ -48,6 +48,8 @@ SOURCES = (
     "sulci/async_cache.py",
     "sulci/integrations/langchain.py",
     "sulci/integrations/llamaindex.py",
+    "sulci/integrations/litellm.py",
+    "sulci/proxy/app.py",
 )
 # The documented surface. _ProtocolAdaptedSessionStore is an internal adapter
 # that happens to live in core.py and is deliberately absent.
@@ -55,7 +57,19 @@ SOURCES = (
 # The two integration classes were added 2026-08-10. They are the classes with
 # the most external readers -- a LangChain or LlamaIndex user reaches them
 # without ever opening core.py -- and they had no drift guard at all.
-CLASSES = ("Cache", "AsyncCache", "SulciCache", "SulciCacheLLM")
+# SulciLiteLLMCache added 2026-08-11 with the v0.9.0 surfaces, for the same
+# reason the two above were added on 08-10: a LiteLLM user reaches it without
+# ever opening core.py. The MCP server and the proxy expose FUNCTIONS
+# (build_server / build_app) rather than a public class, so they are guarded
+# by their own suites rather than here -- if either grows a public class,
+# add it to this tuple.
+CLASSES = (
+    "Cache",
+    "AsyncCache",
+    "SulciCache",
+    "SulciCacheLLM",
+    "SulciLiteLLMCache",
+)
 
 # Classes whose doc table is a complete index of public methods, so a
 # name-set comparison is meaningful.
@@ -64,13 +78,13 @@ CLASSES = ("Cache", "AsyncCache", "SulciCache", "SulciCacheLLM")
 # kwargs are forwarded* -- six rows against sixteen public methods -- and the
 # section says so in its own heading. Adding it here would score a correct
 # document red.
-METHOD_SET_CHECKED = ("Cache", "SulciCache", "SulciCacheLLM")
+METHOD_SET_CHECKED = ("Cache", "SulciCache", "SulciCacheLLM", "SulciLiteLLMCache")
 
 # Classes whose __init__ keyword-only args are compared against the doc.
 # Cache is excluded: its constructor is covered in far more detail by the
 # defaults comparison below. The adapters have no defaults check, so without
 # this their one keyword-only constructor arg would be unguarded.
-INIT_KWONLY_CHECKED = ("SulciCache", "SulciCacheLLM")
+INIT_KWONLY_CHECKED = ("SulciCache", "SulciCacheLLM", "SulciLiteLLMCache")
 
 
 # --------------------------------------------------------------------------

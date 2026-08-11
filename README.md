@@ -68,6 +68,9 @@ pip install "sulci[sqlite,langchain]"   # + LangChain integration
 
 ```bash
 pip install "sulci[sqlite,llamaindex]"  # + LlamaIndex native integration
+pip install "sulci[sqlite,mcp]"          # + MCP server (sulci-mcp)
+pip install "sulci[sqlite,proxy]"        # + OpenAI/Anthropic caching proxy (sulci-proxy)
+pip install "sulci[sqlite,litellm]"      # + LiteLLM cache layer
 ```
 
 **AsyncCache (non-blocking async wrapper):**
@@ -147,6 +150,110 @@ Settings.llm = SulciCacheLLM(
 ```
 
 Install: `pip install "sulci[sqlite,llamaindex]"`
+
+
+## MCP Server
+
+Agents that run in containers — Copilot CLI, Claude Code, Codex, GitHub
+Agentic Workflows — cannot `pip install sulci` into their own process. They
+can call an MCP server.
+
+```bash
+pip install "sulci[sqlite,mcp]"
+sulci-mcp --backend sqlite --db-path ./sulci_db
+```
+
+Tools: `cache_lookup` and `cache_stats` (both annotated `readOnlyHint`), and
+`cache_store` (annotated as a write). `SULCI_MCP_READ_ONLY=1` registers only
+the read-only pair. Transports: `stdio` (default), `sse`, `streamable-http`.
+
+Requires **mcp >= 2.0.0**. mcp 1.x is not supported — the `FastMCP` entry
+point it used was removed in 2.0.
+
+See `examples/gh_aw_sulci_mcp.md` for a GitHub Agentic Workflow that mounts
+the store on gh-aw's `cache-memory` so it survives between runs.
+
+
+## Caching Proxy (OpenAI / Anthropic compatible)
+
+The zero-code-change door. Point any SDK or CLI at it and every call is
+cached — no import, no adapter, no cooperation from the caller.
+
+```bash
+pip install "sulci[sqlite,proxy]"
+sulci-proxy --backend sqlite --db-path ./sulci_db --port 8787
+
+export OPENAI_BASE_URL=http://localhost:8787/v1
+export ANTHROPIC_BASE_URL=http://localhost:8787
+```
+
+Serves `POST /v1/chat/completions` and `POST /v1/messages`, plus `/healthz`
+and `/stats`. Every response carries `x-sulci-cache: hit | miss |
+miss-uncacheable | bypass`; hits also carry `x-sulci-similarity`.
+
+Scope a lookup with the `x-sulci-tenant-id` and `x-sulci-session-id` headers.
+
+⚠️ **A cache hit is not authenticated.** Your `Authorization` header is
+forwarded upstream only on a **miss**; a hit is served from the store without
+any credential check, so an invalid or expired key still returns 200 for a
+question already cached. This is inherent to every caching proxy, and it is
+why `--host` defaults to `127.0.0.1`. Read access to the proxy is read access
+to the cache contents — put your own auth in front of it before binding it to
+anything but localhost.
+
+⚠️ **Give it a dedicated `--db-path`.** `./sulci_db` is sulci's *default*
+path, shared with anything else that omits `db_path`. Pointing the proxy at it
+means unrelated entries can satisfy a lookup.
+
+**Not cached, by design:** streaming requests (`"stream": true`) pass through
+untouched; tool-call responses are never stored, because their arguments are
+state-dependent and a stale one sends an agent to the wrong file. Cached
+replies report `usage.total_tokens == 0` — no tokens were consumed upstream,
+and fabricating the original counts would corrupt billing reconciliation.
+
+
+## LiteLLM
+
+Sulci as the cache layer inside a LiteLLM deployment, giving it the
+context-aware cache it does not have.
+
+```bash
+pip install "sulci[sqlite,litellm]"
+```
+
+```python
+from sulci.integrations.litellm import install
+install(backend="sqlite", context_window=4)
+
+import litellm
+litellm.completion(model="gpt-4o", messages=[...])   # now cached
+```
+
+LiteLLM has no `custom` cache type — `install()` replaces the inner
+implementation on `litellm.cache`, which is how LiteLLM's own semantic
+caches are wired. Pass the conversation id as
+`metadata={"sulci_session_id": ...}` to get context blending.
+
+
+## ⚠️ Tenant isolation is enforced by Qdrant only
+
+`tenant_id` is accepted by every backend and **filtered by one**. Measured
+2026-08-11:
+
+| backend | `ENFORCES_TENANT_ISOLATION` |
+|---|---|
+| qdrant | **True** |
+| chroma, cloud, faiss, milvus, redis, sqlite | False |
+
+On the other six the argument is accepted and ignored, so entries from
+different tenants can be served for each other. This matters most for the
+three surfaces above, which all offer scoping as a safety property —
+`--tenant-id`, `namespace_by_model=True`, per-model proxy scoping. On the
+default `sqlite` backend **each of those is a no-op**, and each will emit a
+`ScopeNotEnforcedWarning` saying so rather than pretending otherwise.
+
+If you need real isolation today: use `backend="qdrant"`, or give each scope
+its own `db_path`, or turn the feature off and share deliberately.
 
 **Via LangChain (alternative — works today, no extra install):**
 
