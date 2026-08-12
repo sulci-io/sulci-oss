@@ -162,6 +162,13 @@ parser.add_argument("--out",            default=_DEFAULT_OUT,
                          "and the DEFAULT is suffixed with the engine slug -- "
                          "benchmark/results/tfidf/ or benchmark/results/minilm/. "
                          "An explicit --out is used verbatim, no suffix.")
+parser.add_argument("--allow-overwrite", action="store_true",
+                    help="Proceed when the results directory already holds a "
+                         "run at a DIFFERENT calibration. Off by default: the "
+                         "engine suffix separates engines, not parameter "
+                         "variants, so two runs at different "
+                         "--context-threshold would otherwise overwrite each "
+                         "other silently.")
 parser.add_argument("--seed", type=int, default=None,
                     help="Corpus RNG seed (default: 42). Vary it to check "
                          "a result holds across corpus draws.")
@@ -214,6 +221,75 @@ if _OUT_IS_DEFAULT:
     args.out = os.path.join(args.out, _ENGINE_SLUG)
 
 os.makedirs(args.out, exist_ok=True)
+
+
+# ── Variant collision guard ───────────────────────────────────────────────────
+# ⚠️ The engine suffix above separates ENGINES, not PARAMETER VARIANTS. Two
+# `--use-sulci` runs at different `--context-threshold` both land in
+# `results/minilm/` and the second silently overwrites the first -- the defect
+# recorded 2026-08-12. This refuses that specific case and nothing else.
+#
+# A re-run at the SAME calibration is legitimate and must stay silent: `make
+# checkin` re-runs into its own directory every time, and a guard that fires on
+# routine work gets deleted within a week.
+#
+# ⚠️ KNOWN LIMIT, and it is the same shape as the thing it guards: this
+# enumerates the flags it considers calibration-relevant. A flag added later
+# that moves the numbers will NOT be compared until it is added to this tuple,
+# and the guard will report clean while the collision happens. A check that
+# enumerates cannot see what it does not enumerate.
+_CALIBRATION_FLAGS = ("--threshold", "--context-threshold", "--query-weight",
+                      "--context-window", "--queries", "--seed",
+                      "--holdout-per-domain")
+
+
+def _calibration_of(argv: list) -> dict:
+    """Pull the calibration-relevant flags out of a recorded argv."""
+    out = {}
+    for i, tok in enumerate(argv):
+        for flag in _CALIBRATION_FLAGS:
+            if tok == flag and i + 1 < len(argv):
+                out[flag] = argv[i + 1]
+            elif tok.startswith(flag + "="):
+                out[flag] = tok.split("=", 1)[1]
+    return out
+
+
+def _check_variant_collision(out_dir: str, force: bool = False) -> None:
+    import glob as _glob
+    mine = _calibration_of(sys.argv)
+    for path in sorted(_glob.glob(os.path.join(out_dir, "*.json"))):
+        try:
+            with open(path) as fh:
+                blob = json.load(fh)
+        except Exception:
+            continue                      # unreadable is not evidence of anything
+        prov = blob.get("_provenance") or blob.get("_meta", {}).get("_provenance")
+        if not isinstance(prov, dict) or not isinstance(prov.get("argv"), list):
+            continue                      # predates the guard; say nothing
+        theirs = _calibration_of(prov["argv"])
+        if theirs == mine:
+            continue                      # same calibration -- a legitimate re-run
+        differing = sorted(set(theirs) | set(mine))
+        differing = [f for f in differing if theirs.get(f) != mine.get(f)]
+        msg = (
+            f"\n  ⚠️  VARIANT COLLISION in {out_dir}/\n"
+            f"      {os.path.basename(path)} was written at a different "
+            f"calibration and this run would overwrite it.\n"
+            + "".join(f"      {f}: on disk {theirs.get(f, '(default)')!r}"
+                      f"  ->  this run {mine.get(f, '(default)')!r}\n"
+                      for f in differing)
+            + "      The engine suffix separates engines, not parameter variants.\n"
+              "      Pass an explicit --out for this variant, or --allow-overwrite\n"
+              "      if replacing the directory is what you meant.\n"
+        )
+        if force:
+            print(msg + "      --allow-overwrite given; proceeding.\n")
+            return
+        sys.exit(msg)
+
+
+_check_variant_collision(args.out, force=getattr(args, "allow_overwrite", False))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1.  BUILT-IN EMBEDDING ENGINE
