@@ -15,6 +15,7 @@ import time
 import hashlib
 import importlib
 import time as _time
+import warnings as _warnings
 from typing import Optional, Callable, Any, Union
 
 from sulci.context import ContextWindow
@@ -137,6 +138,42 @@ class _ProtocolAdaptedSessionStore:
         }
 
 
+# ── warning stacklevel ───────────────────────────────────────────────────────
+
+_PKG_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _caller_stacklevel() -> int:
+    """
+    Frames to skip so a warning points at the CALLER's code, not at sulci's.
+
+    A fixed ``stacklevel=2`` is right when the user calls ``Cache.get``
+    directly and wrong the moment anything in this package calls it for them.
+    Observed 2026-08-12: the context-threshold warning blamed
+    ``sulci/core.py`` itself, because ``cached_call`` adds a frame between the
+    user and ``get``. A warning that names the library's own line as the site
+    of the problem is the defect it exists to report, one level in.
+
+    Walks out of the package and stops at the first frame that is not ours.
+    On a worker thread there is no user frame to find — the caller is a
+    thread-pool trampoline — so this stops there and the message, which
+    self-identifies as ``sulci.Cache:``, has to carry it.
+    """
+    import sys as _sys
+    try:
+        frame = _sys._getframe(1)
+    except (AttributeError, ValueError):        # no frame introspection
+        return 2
+    level = 1
+    while frame is not None:
+        filename = frame.f_code.co_filename
+        if not os.path.abspath(filename).startswith(_PKG_DIR):
+            break
+        frame = frame.f_back
+        level += 1
+    return max(level, 2)
+
+
 class Cache:
     """
     Semantic cache for LLM applications with optional context-awareness.
@@ -158,6 +195,15 @@ class Cache:
 
         cache = Cache(backend="sqlite", context_window=6)
 
+    Blended lookups are compared against ``context_threshold`` when it is
+    set, and against ``threshold`` when it is not.  Unset is the default and
+    changes nothing; it also emits a one-time warning on the first lookup
+    that actually blends, because comparing a blended vector against an
+    exact-match threshold is stricter than it appears::
+
+        cache = Cache(backend="sqlite", context_window=6,
+                      context_threshold=...)   # calibrate on your own traffic
+
         cache.cached_call(
             "My Docker container crashes on startup",
             my_llm,
@@ -176,6 +222,17 @@ class Cache:
                          "chroma" | "qdrant" | "faiss" | "redis" | "sqlite" | "milvus"
         threshold:       Cosine similarity threshold (0.0–1.0).
                          0.85 is a good starting point.
+        context_threshold:
+                         Cosine similarity threshold applied ONLY to lookups
+                         that actually blended prior turns (context_depth > 0).
+                         None (default) means "use `threshold`", which is the
+                         pre-2026-08-12 behaviour. The blend is 70% query
+                         + 30% history, so its raw cosine to any stored
+                         entry is structurally lower than an exact-match one — a
+                         value calibrated for `threshold` is tighter here than
+                         it looks. **No default ships and no value is
+                         recommended**: calibrate it against your own held-out
+                         follow-ups. See docs/context-threshold.md.
         embedding_model: Local: "minilm" (default), "mpnet", "bge"
                          API:   "openai" (requires OPENAI_API_KEY)
         ttl_seconds:     Cache entry time-to-live. None = no expiry.
@@ -213,10 +270,40 @@ class Cache:
         event_sink:      Optional[EventSink]            = None,
         # ── v0.7.1 — issue #88 ──────────────────────────────────────────────
         cost_per_call:   float         = 0.005,
+        # ── unreleased (2026-08-12) — context-blended lookup threshold ──────
+        # Appended, not inserted next to `threshold`, so positional callers are
+        # unaffected — the same reason cost_per_call was appended in v0.7.1.
+        context_threshold: Optional[float] = None,
     ):
         self._telemetry     = telemetry
         self.backend        = backend
         self.threshold      = threshold
+        # unreleased (2026-08-12) — separate threshold for context-BLENDED lookups.
+        #
+        # None means "use `threshold`", which is exactly today's behaviour, so
+        # nothing moves for an existing caller. It is deliberately NOT given a
+        # numeric default: the only sweep that exists is 125 synthetic
+        # follow-ups across 5 domains, whose false-hit rate moves in 4pp quanta
+        # and whose apparent optimum reverses when the held-out draw changes.
+        # benchmark/README.md's own rule — "125 samples across 5 domains is not
+        # enough to move a default that every context user inherits" — binds
+        # this parameter more tightly than it bound query_weight.
+        #
+        # Validated here rather than in get(): unlike the per-call `threshold`,
+        # this one is construction-time configuration, so failing at
+        # construction points at the line that is actually wrong.
+        if context_threshold is not None:
+            context_threshold = float(context_threshold)
+            if not 0.0 <= context_threshold <= 1.0:
+                raise ValueError(
+                    "context_threshold must be between 0.0 and 1.0, "
+                    f"got {context_threshold!r}"
+                )
+        self.context_threshold = context_threshold
+        # Once-per-instance, not once-per-call: a warning on every lookup is
+        # noise a caller learns to filter, which is the same as no warning.
+        self._ctx_threshold_warned        = False
+        self._ctx_threshold_remote_warned = False
         self.ttl_seconds    = ttl_seconds
         self.personalized   = personalized
         self.context_window  = context_window
@@ -529,6 +616,12 @@ class Cache:
             tenant_id:  Optional tenant identifier for multi-tenant isolation.
             user_id:    Optional user identifier for personalization.
             session_id: Optional session identifier for context-aware lookup.
+                        When this resolves to a non-empty window, the lookup
+                        blends and ``Cache.context_threshold`` (if set) replaces
+                        the instance ``threshold`` for THIS call — including in
+                        telemetry and the emitted CacheEvent, so the event and
+                        the answer stay decided by one number. An explicit
+                        ``threshold`` above still wins over both.
             plan:       Optional customer plan tier (e.g. 'free', 'pro').
                         Forwarded onto emitted CacheEvent.plan so downstream
                         billing/analytics can route by plan without a join.
@@ -563,6 +656,23 @@ class Cache:
             )
 
         if self._is_remote_transport:
+            # unreleased (2026-08-12) — context_threshold is SELF-HOSTED only. On
+            # the cloud transport the gateway blends and searches server-side,
+            # so there is no client-side blended lookup to apply it to. Say so
+            # rather than accepting the argument and doing nothing with it: a
+            # parameter that is silently inert is worse than one that is absent,
+            # because the caller believes it took effect.
+            if (self.context_threshold is not None
+                    and not self._ctx_threshold_remote_warned):
+                self._ctx_threshold_remote_warned = True
+                _warnings.warn(
+                    "sulci.Cache: context_threshold is not applied on the "
+                    "remote (gateway) transport — the gateway performs the "
+                    "blended lookup and applies its own threshold. The value "
+                    "passed here has no effect on this Cache.",
+                    UserWarning,
+                    stacklevel=_caller_stacklevel(),
+                )
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.
             # The gateway-side library does the embedding, ANN search, and
             # billing event emit. The SDK forwards the raw query string and
@@ -577,6 +687,65 @@ class Cache:
         else:
             # Self-hosted path — library is the engine in-process.
             vec, depth = self._context_vec(query, session_id)
+
+            # unreleased (2026-08-12) — blended-lookup threshold, applied HERE and
+            # nowhere earlier: `depth` is the only thing that says whether this
+            # lookup actually blended. depth == 0 means _context_vec returned
+            # the raw query embedding — no session, no window, or an empty one —
+            # and that is an exact-match lookup no matter what context_window
+            # says. Keying off self.context_window instead would apply the
+            # blended threshold to every stateless lookup a context-enabled
+            # Cache performs, which is the defect this parameter exists to fix.
+            #
+            # An explicit per-call `threshold=` still wins: a caller who names a
+            # number gets that number.
+            #
+            # Reassigned onto eff_threshold rather than carried in a second
+            # variable, ON PURPOSE. Everything below — the backend search, the
+            # telemetry payload, and the CacheEvent whose event_type drives
+            # billing — must be decided by the number that actually served the
+            # answer. Two names is precisely the v0.8.0 defect described in
+            # get()'s docstring: the library deciding cache_hit at one threshold
+            # while the answer was decided at another.
+            if (
+                threshold is None
+                and depth > 0
+                and self.context_threshold is not None
+            ):
+                eff_threshold = self.context_threshold
+            elif (
+                threshold is None
+                and depth > 0
+                and self.context_threshold is None
+                and not self._ctx_threshold_warned
+            ):
+                # Fires on the first lookup that ACTUALLY blends, not on
+                # construction: a Cache built with context_window=6 whose caller
+                # never passes a session_id has no problem to warn about, and
+                # warning it anyway teaches everyone to filter the category.
+                #
+                # It names no number. There is no recommended value — see
+                # docs/context-threshold.md.
+                self._ctx_threshold_warned = True
+                _warnings.warn(
+                    "sulci.Cache: this lookup blended "
+                    f"{depth} prior turn(s) into the query vector, but "
+                    "context_threshold is unset, so the blend is being "
+                    "compared against `threshold` "
+                    f"({self.threshold}) — the value calibrated for "
+                    "exact-match lookups. A 70/30 blended vector has "
+                    "structurally lower cosine similarity to any stored entry "
+                    "than an exact-match lookup does, so this is stricter than "
+                    "it looks. sulci ships no context-specific default because "
+                    "no measurement supports one: calibrate context_threshold "
+                    "against your own held-out follow-ups. See "
+                    "docs/context-threshold.md. Pass context_threshold=<float> "
+                    "to silence this, or filter it with "
+                    "warnings.filterwarnings.",
+                    UserWarning,
+                    stacklevel=_caller_stacklevel(),
+                )
+
             # v0.7.2 — backends that expose search_match() also report
             # WHICH stored entry was served, so the emitted CacheEvent
             # can carry matched_query_hash for per-entry hit counting

@@ -291,4 +291,4 @@ jobs:
 
       - name: Attribution, nudge, thresholds, session-store injection
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_hit_attribution.py tests/test_nudge.py tests/test_per_call_threshold.py tests/test_session_store_injection.py -v --tb=short
+        run: pytest tests/test_hit_attribution.py tests/test_nudge.py tests/test_per_call_threshold.py tests/test_context_threshold.py tests/test_session_store_injection.py -v --tb=short

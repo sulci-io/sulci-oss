@@ -73,6 +73,7 @@ cache = Cache(
     session_store   = None,
     event_sink      = None,
     cost_per_call   = 0.005,
+    context_threshold = None,   # blended lookups only; None = use `threshold`
 )
 ```
 
