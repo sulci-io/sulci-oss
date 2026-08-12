@@ -8,6 +8,68 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### The benchmark attributed its numbers to the wrong engine (2026-08-12)
+
+`--use-sulci` is opt-in, so the plain documented invocation of
+`benchmark/run.py` measured a built-in TF-IDF engine that ships in no product.
+The shipped engine is `all-MiniLM-L6-v2`. Four separate mechanisms made the
+wrong engine the path of least resistance: the flag is opt-in;
+`verify_benchmark.py` hard-coded the omission and called itself *"the canonical
+benchmark"*; TF-IDF finishes in ~4s against ~592s, so anything on a check-in
+loop converges on it; and **both engines defaulted to `benchmark/results/`**, so
+`summary.json`, `domain_breakdown.csv` and `context_summary.json` were whatever
+ran last. A `--use-sulci` run silently overwrote a `make checkin` result on
+2026-08-11.
+
+Provenance already existed and did not help. `baseline.json` carried
+`_meta.engine`; every artifact carried `_provenance.engine`; the banner printed
+`Engine: built-in TF-IDF engine` — twelve lines above the numbers people copy,
+and off-screen by the time you reach the domain breakdown. **Provenance that
+lives one level deeper than the thing being copied is provenance nobody reads.**
+
+- **Output directories are engine-qualified.** The DEFAULT `--out` is suffixed:
+  `benchmark/results/tfidf/` and `benchmark/results/minilm/`. Two runs can no
+  longer collide and every consumer names the engine by construction rather
+  than by discipline. An explicit `--out` is used verbatim and unchanged, so
+  pinned paths — including the committed `results/minilm/seed-*/` draws — keep
+  working. This is the change that ends the class; the rest is labelling.
+- **One `_engine_banner()` helper, four call sites**, and the engine slug is
+  inside the metric lines themselves: `Hits (tfidf)`, `Domain breakdown
+  (tfidf)`, `Context false-hit rate (tfidf)`. A TF-IDF run also prints *"TF-IDF
+  ships in no product. Publishable figures require `--use-sulci`."*
+- **`verify_benchmark.py` declares what it is**: a TF-IDF regression check, not
+  the canonical benchmark. It keeps TF-IDF — 4 seconds on every check-in is the
+  right trade — but its pass line now reads `TF-IDF PATH UNCHANGED — no
+  regression in 'builtin-tfidf'` rather than `ALL METRICS WITHIN TOLERANCE`,
+  which was a green statement about an engine nobody runs. It derives its
+  results directory from the baseline's `_meta.engine`, so it cannot read one
+  engine's output while checking another engine's numbers.
+- **Every public usage line names the engine and says `python3`.** 29 `python
+  benchmark/run.py` occurrences across `README.md`, `benchmark/README.md`,
+  `LOCAL_SETUP.md`, `run.py`'s own header, the CI workflow and
+  `scripts/_make_issues.py`. `python` is not on the PATH on macOS
+  (`zsh: command not found: python`), and the command merged into
+  langchain-ai/docs#3554 inherited that from `run.py`'s header — the repo's own
+  docs are where that defect came from. Lines that legitimately want the fast
+  engine keep it and say so inline (`# TF-IDF, fast; not the shipped engine, do
+  not cite`) rather than being silently correct.
+- **`benchmark/README.md`'s context-aware results table is withdrawn**, not
+  corrected. It carried `+17.6pp` / `+20.8pp` / `+56pp` under a heading
+  asserting all results came from `--use-sulci --use-claude`. The root
+  `README.md` withdrew these on 2026-08-11; this file had not. No replacement
+  table is published: whether the 125-follow-up corpus can discriminate on the
+  shipped engine is an open question, and one draw at one seed is not a result
+  either way.
+- **`_provenance` records the machine** — platform, processor, python, torch,
+  torch device, sentence-transformers — probed and degrading to `null` on the
+  TF-IDF path. Per `CLAIMS.md`: every other figure in `summary.json` is a ratio
+  and travels to a buyer's hardware; the four latency fields do not.
+
+⚠️ **The first `benchmark-verify` after this lands may look odd** until both
+directories exist, because `benchmark/results/` currently holds MiniLM output
+from the 08-11 investigation that overwrote that morning's TF-IDF run. That
+confusion is the defect, one last time.
+
 ### The published figures had no committed source (2026-08-12)
 
 `CLAIMS.md` on sulci-platform lists five figures as *Measured — safe to

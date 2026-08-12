@@ -19,15 +19,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Run benchmark (built-in engine, no deps)
+      # TF-IDF, fast; not the shipped engine. This job is a regression guard
+      # on the no-dependency code path, NOT a measurement of the product —
+      # nothing it prints should be quoted. Publishable figures need
+      # `--use-sulci`, which needs the model weights and ~10 minutes.
+      - name: Run benchmark (built-in TF-IDF engine, no deps — NOT the shipped engine)
         run: |
-          python benchmark/run.py --no-sweep
-          echo "── Stateless Results ──"
-          cat benchmark/results/summary.json
+          python3 benchmark/run.py --no-sweep
+          echo "── Stateless Results (TF-IDF — not the shipped engine) ──"
+          cat benchmark/results/tfidf/summary.json
 
-          python benchmark/run.py --no-sweep --context
-          echo "── Context-Aware Results ──"
-          cat benchmark/results/context_summary.json
+          python3 benchmark/run.py --no-sweep --context
+          echo "── Context-Aware Results (TF-IDF — not the shipped engine) ──"
+          cat benchmark/results/tfidf/context_summary.json
 
       - name: Upload results as artifact
         uses: actions/upload-artifact@v6

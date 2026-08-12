@@ -311,21 +311,27 @@ Priority: OpenAI → Anthropic → mock. To force Anthropic: `unset OPENAI_API_K
 ## Step 7 — Run the Benchmark
 
 ```bash
-# fast run — stateless, 1,000 queries (~30 seconds)
-python benchmark/run.py --no-sweep --queries 1000
+# fast run — stateless      # TF-IDF, fast; not the shipped engine, do not cite
+python3 benchmark/run.py --no-sweep --queries 1000
 
-# fast run — with context-aware mode
-python benchmark/run.py --no-sweep --queries 1000 --context
+# fast run — context-aware  # TF-IDF, fast; not the shipped engine, do not cite
+python3 benchmark/run.py --no-sweep --queries 1000 --context
 
-# full benchmark — stateless, 5,000 queries
-python benchmark/run.py
-
-# full benchmark — with context-aware mode
-python benchmark/run.py --context
+# THE CANONICAL RUN — shipped engine (MiniLM), stateless + context (~10 min)
+pip install -e ".[sqlite]"
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 ```
 
-Results are written to `benchmark/results/`. The `.gitignore` in that directory
-excludes `*.json` and `*.csv` so result files are never committed.
+⚠️ **`--use-sulci` is opt-in and everything above it measures a built-in
+TF-IDF engine that ships in no product.** It is kept because a 4-second
+regression check on every check-in is worth having, not because it measures
+the product. Anything you would show someone needs `--use-sulci`.
+
+Results are written to `benchmark/results/tfidf/` or `benchmark/results/minilm/`
+— the default output directory is suffixed with the engine, so a fast TF-IDF
+run can no longer overwrite a MiniLM run's `summary.json`. An explicit `--out`
+is used verbatim. The `.gitignore` in that directory excludes `*.json` and
+`*.csv` so result files are never committed.
 
 
 ⚠️ `--seed`'s default is `42` **in effect, not in argparse**. `argparse` supplies

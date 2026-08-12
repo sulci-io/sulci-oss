@@ -954,10 +954,13 @@ lookup_vec = α · embed(query) + (1−α) · Σ(decay^i · turn_i)
 - Only **user query** vectors are stored in context (not LLM responses)
 - Raw un-blended vectors stored in cache; blending happens at lookup time only
 
-**Context-aware benchmark:** run it rather than reading a number here.
+**Context-aware benchmark:** run it rather than reading a number here, and
+run it on the shipped engine — `--use-sulci` is opt-in, and without it this
+measures a built-in TF-IDF engine that is in no product.
 
 ```bash
-python benchmark/run.py --no-sweep --context
+pip install -e ".[sqlite]"
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 ```
 
 The corpus is **125 follow-ups across 25 sessions**, which is small — the
@@ -1164,15 +1167,22 @@ python examples/async_example.py        # AsyncCache demo, OpenAI/Anthropic/mock
 ## Benchmark
 
 ```bash
-# fast run (~30 seconds)
-python benchmark/run.py --no-sweep --queries 1000
+# fast run (~30 seconds)   # TF-IDF, fast; not the shipped engine, do not cite
+python3 benchmark/run.py --no-sweep --queries 1000
 
-# with context-aware pass
-python benchmark/run.py --no-sweep --queries 1000 --context
+# with context-aware pass  # TF-IDF, fast; not the shipped engine, do not cite
+python3 benchmark/run.py --no-sweep --queries 1000 --context
 
-# full benchmark
-python benchmark/run.py --context
+# full benchmark on the SHIPPED engine — the only form worth citing (~10 min)
+pip install -e ".[sqlite]"
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 ```
+
+> **`--use-sulci` is opt-in.** Without it the benchmark runs a built-in TF-IDF
+> engine that ships in no product; the shipped engine is `all-MiniLM-L6-v2`.
+> The choice does not scale a number, it can invert a conclusion. Output is
+> written to `benchmark/results/tfidf/` or `benchmark/results/minilm/`
+> accordingly, so the two can never be confused for each other.
 
 See [`benchmark/README.md`](./benchmark/README.md) for full methodology and results.
 

@@ -297,10 +297,16 @@ def demo_context_aware():
     Uses llm_string as session_id so each conversation gets its own context
     window. Ambiguous follow-up questions resolve correctly within the session.
 
-    How much this helps depends on the query mix; run
-    benchmark/run.py --context rather than quoting a figure. A "32% → 88%
-    (+56pp)" line was withdrawn from here 2026-08-11 (TF-IDF basis, no n,
-    no longer reproducing) -- see sulci/integrations/langchain.py.
+    How much this helps depends on the query mix; run it yourself rather than
+    quoting a figure, and run it on the SHIPPED engine:
+
+        pip install -e ".[sqlite]"
+        python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
+
+    `--use-sulci` is opt-in; without it you measure a built-in TF-IDF engine
+    that is in no product. A "32% → 88% (+56pp)" line was withdrawn from here
+    2026-08-11 (TF-IDF basis, no n, no longer reproducing) -- see
+    sulci/integrations/langchain.py.
     """
     print()
     print("━" * 58)

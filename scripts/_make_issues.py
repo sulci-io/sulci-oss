@@ -195,7 +195,7 @@ $21.47 saved per 5000 queries) come from the built-in TF-IDF engine
 Architecture and Sulci docs tabs) quotes the same numbers without engine
 context.
 
-A user who installs sulci, runs `python benchmark/run.py --use-sulci`
+A user who installs sulci, runs `python3 benchmark/run.py --use-sulci`
 (real production setup with MiniLM), will see different numbers:
 
 - Stateless hit rate: ~94% (MiniLM is more sensitive than TF-IDF)
@@ -230,7 +230,7 @@ OSS README: ~3 lines added. sulci-web: separate issue.
         "body": """\
 ## Problem
 
-Running `python benchmark/run.py --use-sulci [...]` creates SQLite-backed
+Running `python3 benchmark/run.py --use-sulci [...]` creates SQLite-backed
 Cache instances that persist their data inside `benchmark/results/`:
 
 - benchmark/results/ctx_bench_context_db/

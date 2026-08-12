@@ -114,7 +114,10 @@ class SulciCacheLLM(LLM):
     multi-turn RAG and agent workloads:
 
     How much it helps depends on your query mix. Run
-    ``benchmark/run.py --context``, or point it at your own traffic.
+    ``python3 benchmark/run.py --use-sulci --fresh --no-sweep --context``,
+    or point it at your own traffic. ``--use-sulci`` selects the shipped
+    MiniLM engine; without it the harness measures a built-in TF-IDF engine
+    that is in no product.
 
     .. note::
        A per-domain gain table (32% → 88%, +56 pp) was withdrawn from this

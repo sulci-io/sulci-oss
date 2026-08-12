@@ -10,11 +10,20 @@ every SESSION_FOLLOWUPS pool holds exactly 5 entries and the draw clamps to
 `min(n_followups, len(pool))`. The retired +20.8pp and +56pp figures came from
 this corpus, so they were 125 samples, and nothing printed that.
 
-Runs entirely without API keys or cloud accounts.
-Uses a built-in TF-IDF cosine similarity engine to simulate
-sentence-transformer embeddings — no ML dependencies required.
+⚠️ TWO ENGINES, AND ONLY ONE OF THEM SHIPS. `--use-sulci` is opt-in. Without
+it this file runs a built-in TF-IDF engine that is in no product; the shipped
+engine is all-MiniLM-L6-v2. The engine choice does not scale a number, it can
+invert a conclusion — MiniLM answers ~91% of context follow-ups statelessly,
+so there is little for context to recover, while TF-IDF is weak stateless and
+therefore has room. **Any figure a reader could cite requires `--use-sulci`.**
 
-Produces (in benchmark/results/):
+Runs entirely without API keys or cloud accounts.
+The default (TF-IDF) engine has no ML dependencies and exists for fast
+regression checks — see scripts/verify_benchmark.py.
+
+Produces (in benchmark/results/<engine>/ — `tfidf/` or `minilm/`, so two runs
+cannot overwrite each other; an explicit --out is used verbatim with no
+suffix):
   summary.json              — stateless benchmark overall stats
   domain_breakdown.csv      — per-domain hit rates and cost savings
   threshold_sweep.csv       — hit rate vs threshold (0.70 → 0.95)
@@ -26,25 +35,32 @@ Produces (in benchmark/results/):
                               (--context --context-sweep)
 
 Usage:
-  # Standalone stateless benchmark (no install needed)
-  python benchmark/run.py
+  # THE CANONICAL RUN — shipped engine, quotable figures. ~10 min.
+  pip install -e ".[sqlite]"
+  python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 
-  # Add context-aware benchmark
-  python benchmark/run.py --context
-
-  # With real sulci embeddings (better accuracy)
-  pip install "sulci[sqlite]"
-  python benchmark/run.py --use-sulci --context
+  # Shipped engine, stateless only
+  pip install -e ".[sqlite]"
+  python3 benchmark/run.py --use-sulci --fresh
 
   # With real Claude API calls on misses (requires ANTHROPIC_API_KEY)
-  pip install "sulci[sqlite]" anthropic
-  python benchmark/run.py --use-sulci --use-claude --queries 1000 --no-sweep
+  pip install -e ".[sqlite]" anthropic
+  python3 benchmark/run.py --use-sulci --use-claude --queries 1000 --no-sweep
 
-  # Fast CI run
-  python benchmark/run.py --no-sweep --queries 1000
+  # Fast regression check   # TF-IDF, ~4s; not the shipped engine, do not cite
+  python3 benchmark/run.py --no-sweep --queries 1000
+
+  # Standalone, no install  # TF-IDF; not the shipped engine, do not cite
+  python3 benchmark/run.py --context
+
+  ⚠️ `python` is not on the PATH on macOS (`zsh: command not found: python`).
+  Every line here says `python3` for that reason. The command published in
+  langchain-ai/docs#3554 inherited `python` from this header.
 
 Options:
-  --use-sulci           Use sulci.Cache with SQLite + MiniLM instead of built-in engine
+  --use-sulci           Use sulci.Cache with SQLite + MiniLM — THE SHIPPED ENGINE.
+                        Opt-in. Omitting it measures the built-in TF-IDF engine,
+                        which ships in no product.
   --use-claude          Call Claude API on cache misses for real latency + semantic scoring
                         Requires: ANTHROPIC_API_KEY env var, pip install anthropic
   --claude-model MODEL  Claude model for --use-claude (default: claude-haiku-4-5-20251001)
@@ -62,7 +78,10 @@ Options:
                         against. 0 reproduces the pre-2026-08-06 corpus.
   --context-followups N Follow-ups per session (default: 5, clamped by the pools)
   --context-sweep       Sweep --query-weight, recording accuracy AND false-hit
-  --out DIR             Output directory (default: benchmark/results)
+  --out DIR             Output directory. Default benchmark/results/ is
+                        SUFFIXED with the engine — benchmark/results/tfidf/ or
+                        benchmark/results/minilm/. An explicit --out is used
+                        verbatim, unchanged, so pinned paths keep working.
 """
 
 import argparse
@@ -136,8 +155,13 @@ parser.add_argument("--agent-dispatches", type=int, default=200,
                     help="LLM dispatches per session for --agent (default: 200)")
 parser.add_argument("--agent-threshold",  type=float, default=0.85,
                     help="Similarity threshold for --agent (default: 0.85)")
-parser.add_argument("--out",            default=os.path.join(
-                        os.path.dirname(__file__), "results"))
+_DEFAULT_OUT = os.path.join(os.path.dirname(__file__), "results")
+
+parser.add_argument("--out",            default=_DEFAULT_OUT,
+                    help="Results directory. Defaults to benchmark/results/, "
+                         "and the DEFAULT is suffixed with the engine slug -- "
+                         "benchmark/results/tfidf/ or benchmark/results/minilm/. "
+                         "An explicit --out is used verbatim, no suffix.")
 parser.add_argument("--seed", type=int, default=None,
                     help="Corpus RNG seed (default: 42). Vary it to check "
                          "a result holds across corpus draws.")
@@ -146,6 +170,48 @@ args = parser.parse_args()
 # Re-seed AFTER parsing. build_corpus() runs later, so this reaches it.
 if getattr(args, "seed", None) is not None:
     random.seed(args.seed)
+
+
+# ── Engine identity ───────────────────────────────────────────────────────────
+# One source of truth for "which engine is this run". Everything that names the
+# engine -- the banner, the metric lines, _provenance, the output directory --
+# reads from here, so they cannot disagree.
+_ENGINE_SLUG  = "minilm" if args.use_sulci else "tfidf"
+_ENGINE_LABEL = ("sulci.Cache (SQLite + MiniLM)" if args.use_sulci
+                 else "built-in TF-IDF engine")
+_ENGINE_PROV  = "sulci-minilm" if args.use_sulci else "builtin-tfidf"
+
+
+def _engine_banner(use_sulci: bool) -> str:
+    """The engine line every benchmark preamble prints.
+
+    ⚠️ It is impossible to read a summary table produced by this file without
+    having passed this line, and the metric lines carry the slug as well --
+    `Hit rate (minilm): 61.0%` cannot be copied without its engine. Copying is
+    the failure mode: the banner already said `Engine: built-in TF-IDF engine`
+    twelve lines above the numbers people copy, and off-screen by the time you
+    reach the domain breakdown, and it did not help. Provenance that lives one
+    level deeper than the thing being copied is provenance nobody reads.
+    """
+    slug  = "minilm" if use_sulci else "tfidf"
+    label = ("sulci.Cache (SQLite + MiniLM)" if use_sulci
+             else "built-in TF-IDF engine")
+    line  = f"  ENGINE: {label}  [{slug}]"
+    if not use_sulci:
+        line += "\n  ⚠  TF-IDF ships in no product. Publishable figures require --use-sulci."
+    return line
+
+
+# ⚠️ Suffix the DEFAULT only. An explicit --out must keep working unchanged or
+# we break whatever pins a directory -- the committed minilm/seed-*/ draws, CI
+# artifact paths, anything downstream. Two engines writing to one directory is
+# the defect this suffix exists to end: `--out` defaulted to benchmark/results/
+# either way, so summary.json / domain_breakdown.csv / context_summary.json
+# were whatever ran last, and on 2026-08-11 a --use-sulci run silently
+# overwrote that morning's `make checkin` output.
+_OUT_IS_DEFAULT = os.path.abspath(args.out) == os.path.abspath(_DEFAULT_OUT)
+if _OUT_IS_DEFAULT:
+    args.out = os.path.join(args.out, _ENGINE_SLUG)
 
 os.makedirs(args.out, exist_ok=True)
 
@@ -1069,7 +1135,7 @@ def run_context_bench(n_followups: int = 5, use_sulci: bool = False,
     _say = (lambda *a, **k: None) if quiet else print
     _say(f"\n── Context-aware benchmark ──────────────────────────────")
     _say(f"  context_window={context_window}  followups_per_session={n_followups}")
-    _say(f"  Engine: {'sulci.Cache' if use_sulci else 'built-in TF-IDF'}")
+    _say(_engine_banner(use_sulci))
     _say()
 
     # Context benchmark uses a slightly lower threshold than the stateless benchmark.
@@ -1321,9 +1387,13 @@ def _context_analytics(results: list, context_window: int,
         return {"summary": summary, "results": [asdict(r) for r in results]}
 
     # Print summary table
+    # _context_analytics has no use_sulci parameter; the engine is a property
+    # of the process, not of this call, so read the single source of truth.
+    _slug = _ENGINE_SLUG
     print(f"\n{'='*62}")
-    print(f"  CONTEXT-AWARE BENCHMARK RESULTS")
+    print(f"  CONTEXT-AWARE BENCHMARK RESULTS ({_slug})")
     print(f"  context_window={context_window}  query_weight={query_weight}")
+    print(_engine_banner(args.use_sulci))
     print(f"{'='*62}")
     print(f"  {'Metric':<30} {'Stateless':>12} {'Context':>12} {'Delta':>8}")
     print(f"  {'-'*62}")
@@ -1359,7 +1429,7 @@ def _context_analytics(results: list, context_window: int,
     if ctx_disc["false_hit_rate"] is None:
         print(f"    ⚠  false-hit is UNMEASURED at holdout=0, not zero.")
 
-    print(f"\n  Domain breakdown:")
+    print(f"\n  Domain breakdown ({_slug}):")
     for row in domain_rows:
         delta = row["accuracy_improvement"]
         sign  = "+" if delta >= 0 else ""
@@ -1549,13 +1619,12 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
     if use_sulci:
         db_path = os.path.join(args.out, "sulci_bench_db")
         cache   = _SulciWrapper(threshold, db_path)
-        engine  = "sulci.Cache (SQLite + MiniLM)"
     else:
         cache  = _BuiltinCache(threshold)
-        engine = "built-in TF-IDF engine"
 
+    banner = _engine_banner(use_sulci)
     if _claude:
-        engine += f" + Claude API ({_claude.model})"
+        banner += f"\n  + Claude API ({_claude.model})"
 
     all_items  = []
     for items in corpus.values():
@@ -1567,7 +1636,7 @@ def run(corpus: dict, threshold: float, use_sulci: bool, verbose: bool = True) -
     if verbose:
         print(f"\n{'='*58}")
         print(f"  Sulci Benchmark  |  threshold={threshold}")
-        print(f"  Engine: {engine}")
+        print(banner)
         if _claude:
             print(f"  Claude cap: {_claude.max_calls} calls")
         print(f"{'='*58}")
@@ -1853,6 +1922,38 @@ def false_positives_report(results: list) -> list:
 # 8.  I/O
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _machine_provenance() -> dict:
+    """Machine identity for the latency fields, which do not travel.
+
+    Every other figure in summary.json is a ratio and reproduces on a buyer's
+    hardware; the four latency fields do not. torch/sentence-transformers are
+    optional imports here -- absent on the TF-IDF path -- so probe, never
+    require.
+    """
+    import platform
+    info = {
+        "platform":    platform.platform(),
+        "processor":   platform.processor() or platform.machine(),
+        "python":      platform.python_version(),
+    }
+    try:                                   # only present on the --use-sulci path
+        import torch
+        info["torch"] = torch.__version__
+        info["torch_device"] = (
+            "cuda" if torch.cuda.is_available()
+            else "mps" if getattr(torch.backends, "mps", None)
+            and torch.backends.mps.is_available()
+            else "cpu")
+    except Exception:
+        info["torch"] = None
+    try:
+        import sentence_transformers
+        info["sentence_transformers"] = sentence_transformers.__version__
+    except Exception:
+        info["sentence_transformers"] = None
+    return info
+
+
 def save_json(obj, name):
     """Write a results JSON, stamped with its provenance.
 
@@ -1873,11 +1974,19 @@ def save_json(obj, name):
     if isinstance(obj, dict):
         obj = dict(obj)
         obj["_provenance"] = {
-            "engine":       "sulci-minilm" if args.use_sulci else "builtin-tfidf",
-            "engine_label": ("sulci.Cache (SQLite + MiniLM)" if args.use_sulci
-                             else "built-in TF-IDF engine"),
+            "engine":       _ENGINE_PROV,
+            "engine_slug":  _ENGINE_SLUG,
+            "engine_label": _ENGINE_LABEL,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "argv":         " ".join(sys.argv[1:]),
+            "out_dir":      args.out,
+            "out_default":  _OUT_IS_DEFAULT,
+            # CLAIMS.md: "_provenance records engine, argv and seed but no CPU
+            # or torch version. Adding it to save_json makes the next
+            # reconciliation arithmetic instead of archaeology." The latency
+            # figures are the only ones that do not travel to other hardware,
+            # so the hardware has to travel with them.
+            "machine":      _machine_provenance(),
         }
     with open(path, "w") as f:
         json.dump(obj, f, indent=2)
@@ -2575,12 +2684,14 @@ def main():
             save_csv(sw, "threshold_sweep.csv")
 
     elapsed = time.time() - t0
+    _e = _ENGINE_SLUG
     print(f"\n{'='*62}")
-    print(f"  STATELESS BENCHMARK  |  threshold={args.threshold}")
+    print(f"  STATELESS BENCHMARK ({_e})  |  threshold={args.threshold}")
+    print(_engine_banner(args.use_sulci))
     print(f"{'='*62}")
     print(f"  Queries        : {s['total_queries']:,}")
-    print(f"  Hits           : {s['cache_hits']:,}  ({s['hit_rate']:.1%})")
-    print(f"  False positives: {s['false_positives']} ({s['false_positive_rate']:.2%})")
+    print(f"  {'Hits (' + _e + ')':<15}: {s['cache_hits']:,}  ({s['hit_rate']:.1%})")
+    print(f"  {'FP (' + _e + ')':<15}: {s['false_positives']} ({s['false_positive_rate']:.2%})")
     print(f"  Latency (hit)  : {s['latency_hit_p50_ms']:.2f}ms p50  /  {s['latency_hit_p95_ms']:.2f}ms p95")
     # Show real API miss latency when available, otherwise synthetic
     if s.get("real_latency_miss_p50_ms"):
@@ -2593,7 +2704,9 @@ def main():
     print(f"  Results in     : {args.out}/")
     print(f"{'='*62}\n")
 
-    print("  Domain breakdown:")
+    # The domain breakdown is the table people copy, and by the time you reach
+    # it the banner is off-screen. Name the engine here too.
+    print(f"  Domain breakdown ({_e}):")
     for row in domain_breakdown(results):
         print(f"    {row['domain']:22s}  hit={row['hit_rate_pct']:5.1f}%  "
               f"fp={row['fp_rate_pct']:4.1f}%  saved=${row['saved_usd']:.2f}")
@@ -2638,7 +2751,7 @@ def main():
 
         imp   = ctx_data["summary"]["improvement"]
         c_sum = ctx_data["summary"]["context_aware"]
-        print(f"  Context-aware accuracy improvement: "
+        print(f"  Context-aware accuracy improvement ({_ENGINE_SLUG}): "
               f"{imp['accuracy_delta_pct']:+.1f}pp  "
               f"(stateless={ctx_data['summary']['stateless']['resolution_accuracy']:.0%}  "
               f"→ context={c_sum['resolution_accuracy']:.0%})")
@@ -2646,7 +2759,7 @@ def main():
         # that produced +20.8pp and +56pp; the false-hit rate is what says
         # whether the delta was bought or earned.
         fh = c_sum["false_hit_rate"]
-        print(f"  Context false-hit rate: "
+        print(f"  Context false-hit rate ({_ENGINE_SLUG}): "
               + (f"{fh:.1%}  ({c_sum['n_false_hits']}/{c_sum['n_should_miss']} "
                  f"held-out follow-ups answered anyway)" if fh is not None
                  else "UNMEASURED (--context-holdout 0)"))
@@ -2696,7 +2809,9 @@ def main():
     # ── Agent workload benchmark ─────────────────────────────────────────────
     if args.agent:
         print(f"\n{'='*62}")
-        print(f"  AGENT WORKLOAD BENCHMARK  |  threshold={args.agent_threshold}")
+        print(f"  AGENT WORKLOAD BENCHMARK ({_ENGINE_SLUG})  |  "
+              f"threshold={args.agent_threshold}")
+        print(_engine_banner(args.use_sulci))
         print(f"{'='*62}")
 
         # Distribution diagnostics (so users can verify the workload shape)
@@ -2722,9 +2837,9 @@ def main():
 
         s_a = agent_data["summary"]
         print(f"\n  Aggregate dispatches  : {s_a['total_dispatches']:,}")
-        print(f"  Aggregate hit rate    : {s_a['aggregate_hit_rate']:.1%}")
-        print(f"  Cold session hit rate : {s_a['hit_rate_cold_session']:.1%}  (session 1)")
-        print(f"  Warm session hit rate : {s_a['hit_rate_warm_session']:.1%}  (median of last quarter)")
+        print(f"  Aggregate hit rate ({_ENGINE_SLUG}) : {s_a['aggregate_hit_rate']:.1%}")
+        print(f"  Cold session ({_ENGINE_SLUG})       : {s_a['hit_rate_cold_session']:.1%}  (session 1)")
+        print(f"  Warm session ({_ENGINE_SLUG})       : {s_a['hit_rate_warm_session']:.1%}  (median of last quarter)")
         print(f"  Misses per session    : p50={s_a['misses_per_session_p50']}  "
               f"p95={s_a['misses_per_session_p95']}  "
               f"(of {args.agent_dispatches} dispatches)")

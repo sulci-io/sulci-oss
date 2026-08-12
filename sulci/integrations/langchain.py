@@ -61,8 +61,13 @@ class SulciCache(BaseCache):
     compatible.  Raise it to 4 to unlock context-aware mode.
 
     **How much it helps depends on your query mix, and we are not going to
-    put a number here.** Run ``benchmark/run.py --context`` against the
-    public corpus, or better, point it at your own traffic. The corpus is
+    put a number here.** Run
+    ``python3 benchmark/run.py --use-sulci --fresh --no-sweep --context``
+    against the public corpus, or better, point it at your own traffic.
+    ``--use-sulci`` is not optional for a figure you intend to read: without
+    it the harness measures a built-in TF-IDF engine that ships in no
+    product, and that engine choice can invert the conclusion rather than
+    scale it. The corpus is
     125 follow-ups across 25 sessions — the harness prints "do not publish a
     figure from this corpus without the n" for a reason.
 
