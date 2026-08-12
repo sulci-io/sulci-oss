@@ -14,10 +14,23 @@ on:
       - ".gitignore"
   # DELIBERATELY UNFILTERED. This repo HAS a base branch policy — #116 was
   # refused and needed `--admin` — so a `paths-ignore` here could leave a
-  # required check pending forever on a docs-only PR. (sulci-platform is the
-  # opposite case: `gh api .../branches/main/protection` 403s there, so
-  # narrowing its triggers is free. Do not generalise either way; check the
-  # repo.)
+  # required check pending forever on a docs-only PR.
+  #
+  # ❌ This comment used to read: "sulci-platform is the opposite case: `gh api
+  #    .../branches/main/protection` 403s there, so narrowing its triggers is
+  #    free." Corrected 2026-08-12. A PERMISSION ERROR IS NOT A POLICY READING,
+  #    and the sentence was wrong twice:
+  #      * It named the wrong endpoint. `/branches/main/protection` reads
+  #        CLASSIC protection only; on sulci-oss it returns 404 "Branch not
+  #        protected" while a ruleset is actively refusing merges. The 403
+  #        comes from the RULESETS endpoint, and it says "Upgrade to GitHub
+  #        Pro" — a plan limit, not an answer about the branch.
+  #      * A 404 and a 403 from these endpoints mean different things and
+  #        NEITHER means "unprotected".
+  #    The conclusion happened to be right — a direct push to sulci-platform
+  #    main succeeded on 2026-08-12 — but it was right by luck. The only test
+  #    that settles it is attempting the operation. Check the repo by pushing
+  #    to a throwaway branch and opening a PR, not by reading an error code.
   #
   # The saving is taken in the jobs instead. A job skipped by an `if:`
   # condition reports a conclusion, and GitHub treats a skipped required check
