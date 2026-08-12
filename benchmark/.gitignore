@@ -1,6 +1,22 @@
+# run.py suffixes its DEFAULT --out with the engine slug, so results now land
+# in results/tfidf/ and results/minilm/ rather than colliding in results/.
+# The old flat patterns stay: an explicit --out benchmark/results still works
+# and pre-suffix output may exist locally.
 results/*.json
 results/*.csv
 results/*.txt
 results/*_db/
+
+# Engine-qualified default output. Nothing here is ever committed.
+results/tfidf/
+
+# ⚠️ minilm/ is NOT ignored wholesale. The committed results/minilm/seed-*/
+# draws are the four-seed published figures and must stay tracked. Only the
+# top-level default-run output is ignored.
+results/minilm/*.json
+results/minilm/*.csv
+results/minilm/*.txt
+results/minilm/*_db/
+
 # Keep the placeholder
 !results/.gitkeep

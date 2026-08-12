@@ -4,15 +4,44 @@
 """
 scripts/verify_benchmark.py
 ============================
-Run the canonical TF-IDF benchmark and verify results against the committed
-baseline (benchmark/baseline.json). Fails if any non-latency metric drifts
-beyond tolerance.
+TF-IDF REGRESSION CHECK. NOT THE SHIPPED ENGINE.
+Publishable figures require `--use-sulci`.
 
-Why this exists:
-    The headline numbers on sulci.io and in benchmark/README.md (85.88% hit
-    rate, +20.8pp resolution accuracy, $21.47 saved per 5000 queries) come
-    from this benchmark. Any regression here is website-visible breakage.
-    'make checkin' should catch it before a PR lands.
+Runs `benchmark/run.py --no-sweep --context` -- deliberately WITHOUT
+`--use-sulci` -- and verifies the result against benchmark/baseline.json,
+which pins `_meta.engine: builtin-tfidf`. Fails if any non-latency metric
+drifts beyond tolerance.
+
+⚠️ THIS SCRIPT USED TO CALL ITSELF "the canonical benchmark". It is not, and
+that phrasing is how the built-in TF-IDF engine became the path of least
+resistance: the flag is opt-in, this script hard-coded the omission, `make
+checkin` runs this script, and TF-IDF finishes in ~4s against ~592s for the
+shipped engine. Anything on a check-in loop converges on the fast one.
+Four mechanisms, all pointing at an engine that ships in no product.
+
+What it IS:
+    A fast guard against UNINTENDED CHANGE in the TF-IDF code path. Four
+    seconds on every check-in is the right trade and the TF-IDF engine is
+    kept for exactly that reason.
+
+What it is NOT:
+    A measurement of anything a reader could cite. The shipped engine is
+    all-MiniLM-L6-v2. Engine choice here does not scale a number -- it can
+    invert a conclusion, because MiniLM answers ~91% of context follow-ups
+    statelessly and has little for context to recover, while TF-IDF is weak
+    statelessly and therefore has room. A green run of this script says
+    nothing about the product.
+
+    For quotable figures:
+        pip install -e ".[sqlite]"
+        python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
+
+Where it reads:
+    benchmark/results/<engine>/, derived from the baseline's `_meta.engine`,
+    so this script cannot read one engine's output while checking another
+    engine's numbers. That collision -- both engines defaulting to
+    benchmark/results/ -- is what let a --use-sulci run silently overwrite a
+    `make checkin` result on 2026-08-11.
 
 Tolerance:
     Percentages: ±1.0 percentage point absolute
@@ -40,7 +69,39 @@ import time
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-RESULTS_DIR = REPO_ROOT / "benchmark" / "results"
+
+# benchmark/run.py suffixes its DEFAULT --out with the engine slug, so
+# benchmark/results/ now holds tfidf/ and minilm/ side by side and two runs
+# cannot overwrite each other. Derive the directory from the engine the
+# baseline pins rather than hard-coding it: a baseline regenerated on another
+# engine then reads that engine's output by construction, instead of silently
+# comparing MiniLM output against TF-IDF numbers.
+ENGINE_DIRS = {
+    "builtin-tfidf": "tfidf",
+    "sulci-minilm":  "minilm",
+}
+DEFAULT_ENGINE = "builtin-tfidf"
+
+# Set by main() once the baseline is loaded. Module-level default keeps the
+# --skip-run path and any direct import working.
+RESULTS_DIR = REPO_ROOT / "benchmark" / "results" / ENGINE_DIRS[DEFAULT_ENGINE]
+
+
+def results_dir_for(engine: str | None) -> Path:
+    """Output directory run.py writes for `engine`.
+
+    An unrecognised engine is an error, not a fallback: quietly defaulting to
+    tfidf/ is how a MiniLM baseline would end up verified against TF-IDF
+    output, which is the 2026-08-06 defect with the directories swapped.
+    """
+    slug = ENGINE_DIRS.get(engine or DEFAULT_ENGINE)
+    if slug is None:
+        print(f"ERROR: baseline _meta.engine is '{engine}', which maps to no "
+              f"known results directory.", file=sys.stderr)
+        print(f"       Known engines: {', '.join(sorted(ENGINE_DIRS))}",
+              file=sys.stderr)
+        sys.exit(2)
+    return REPO_ROOT / "benchmark" / "results" / slug
 
 
 # Tolerances
@@ -50,7 +111,15 @@ COST_TOL   = 0.50  # 50 cents on cost (5000-query budget is $25 baseline)
 
 
 def run_benchmark(timeout_sec: int) -> int:
-    print("Running canonical benchmark: python benchmark/run.py --no-sweep --context")
+    print("=" * 72)
+    print(" TF-IDF REGRESSION CHECK -- NOT THE SHIPPED ENGINE")
+    print(" Running: python3 benchmark/run.py --no-sweep --context")
+    print(" (no --use-sulci: this checks the TF-IDF path for unintended change)")
+    print()
+    print(" Publishable figures require the shipped engine:")
+    print('   pip install -e ".[sqlite]"')
+    print("   python3 benchmark/run.py --use-sulci --fresh --no-sweep --context")
+    print("=" * 72)
     print("(expected wall-clock: 10-20 seconds; TF-IDF engine, no MPS / network)")
     print()
     try:
@@ -209,8 +278,10 @@ def compare(label: str, baseline_val, measured_val, tol, kind: str) -> tuple[boo
 def verify_against_baseline(measured_summary: dict, measured_context: dict,
                             measured_agent: dict | None,
                             baseline: dict) -> bool:
+    _engine = (baseline.get("_meta") or {}).get("engine", DEFAULT_ENGINE)
     print("\n" + "=" * 72)
-    print(" Verifying benchmark output against baseline")
+    print(f" Verifying benchmark output against baseline  [engine: {_engine}]")
+    print(f" results dir: {RESULTS_DIR}")
     print(f" baseline: {baseline['_meta']['source']}")
     # A baseline that has been superseded still runs, and still goes red. Print
     # WHY at the top rather than leaving eight [DRIFT] lines to be interpreted --
@@ -232,7 +303,7 @@ def verify_against_baseline(measured_summary: dict, measured_context: dict,
     all_ok = True
 
     # Stateless headline
-    print("\n  Stateless (5000-query):")
+    print(f"\n  Stateless (5000-query) [{_engine}]:")
     bs = baseline["stateless"]
     for label, key, kind, tol in [
         ("hit_rate",            "hit_rate",            "rate",  PCT_TOL),
@@ -252,7 +323,7 @@ def verify_against_baseline(measured_summary: dict, measured_context: dict,
             all_ok = False
 
     # Context-aware headline
-    print("\n  Context-aware (125-followup):")
+    print(f"\n  Context-aware (125-followup) [{_engine}]:")
     bc = baseline["context_aware"]
     msl = measured_context.get("stateless", {})
     mca = measured_context.get("context_aware", {})
@@ -370,6 +441,9 @@ def main() -> int:
         return 2
     baseline = json.loads(baseline_path.read_text())
 
+    global RESULTS_DIR
+    RESULTS_DIR = results_dir_for((baseline.get("_meta") or {}).get("engine"))
+
     if not args.skip_run:
         run_started_at = time.time()
         rc = run_benchmark(args.timeout)
@@ -380,7 +454,7 @@ def main() -> int:
         # run to be stale relative to. Say so, rather than letting the absence
         # of a warning read as a clean bill of health.
         run_started_at = None
-        print("  ⚠  --skip-run: verifying pre-existing benchmark/results/*.json.")
+        print(f"  ⚠  --skip-run: verifying pre-existing {RESULTS_DIR}/*.json.")
         print("     Their age and engine are not checked.")
 
     measured_summary, measured_context, measured_agent = load_results(
@@ -389,13 +463,25 @@ def main() -> int:
     ok = verify_against_baseline(measured_summary, measured_context,
                                  measured_agent, baseline)
 
+    engine = (baseline.get("_meta") or {}).get("engine", DEFAULT_ENGINE)
     if ok:
-        print("\n  ALL METRICS WITHIN TOLERANCE — no regression")
+        # ⚠️ This line used to read "ALL METRICS WITHIN TOLERANCE — no
+        # regression", in the same green as everything else in `make checkin`,
+        # and it is a statement about an engine nobody runs. Green here means
+        # the TF-IDF path did not change. It does not mean the product is fine,
+        # and it is not evidence for any published number.
+        print(f"\n  TF-IDF PATH UNCHANGED — no regression in '{engine}'")
+        print("  This says nothing about the shipped engine. For figures a")
+        print("  reader could cite, run:")
+        print('    pip install -e ".[sqlite]"')
+        print("    python3 benchmark/run.py --use-sulci --fresh --no-sweep --context")
         print("=" * 72)
         return 0
     else:
-        print("\n  ONE OR MORE METRICS DRIFTED — investigate before merging")
+        print(f"\n  ONE OR MORE METRICS DRIFTED in '{engine}' — investigate "
+              f"before merging")
         print(f"  Baseline: {baseline_path}")
+        print(f"  Measured: {RESULTS_DIR}/")
         print("=" * 72)
         return 1
 

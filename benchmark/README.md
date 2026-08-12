@@ -9,17 +9,17 @@ Three progressive modes: synthetic (no dependencies), real embeddings, and real 
 ## Quick Start
 
 ```bash
-# Zero dependencies — runs anywhere
-python benchmark/run.py
+# THE CANONICAL RUN — shipped engine (MiniLM), the only form worth citing
+pip install -e ".[sqlite]"
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 
-# With real MiniLM embeddings (recommended)
-pip install "sulci[sqlite]"
-python benchmark/run.py --use-sulci
+# Zero dependencies, runs anywhere   # TF-IDF, fast; not the shipped engine, do not cite
+python3 benchmark/run.py
 
 # With real Claude API calls on misses
 pip install "sulci[sqlite]" anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
-python benchmark/run.py --use-sulci --use-claude --fresh
+python3 benchmark/run.py --use-sulci --use-claude --fresh
 ```
 
 ---
@@ -33,9 +33,14 @@ sentence-transformer embeddings across a ~200-word domain vocabulary.
 Correctness is scored by query group labels. Fast (~30s for 5k queries).
 
 ```bash
-python benchmark/run.py
-python benchmark/run.py --no-sweep --queries 1000   # fast CI version (~5s)
+# TF-IDF, fast; not the shipped engine, do not cite
+python3 benchmark/run.py
+python3 benchmark/run.py --no-sweep --queries 1000   # fast CI version (~5s)
 ```
+
+⚠️ **This mode is a regression check, not a measurement.** TF-IDF ships in no
+product. Every figure below that a reader could cite comes from Mode 2 or
+Mode 3. Output lands in `benchmark/results/tfidf/`.
 
 ### Mode 2 — Real embeddings (`--use-sulci`)
 
@@ -45,8 +50,8 @@ No API key required. Takes 2–5 minutes for 5k queries (model load on first run
 
 ```bash
 pip install "sulci[sqlite]"
-python benchmark/run.py --use-sulci
-python benchmark/run.py --use-sulci --context   # + context-aware benchmark
+python3 benchmark/run.py --use-sulci
+python3 benchmark/run.py --use-sulci --context   # + context-aware benchmark
 ```
 
 > **Always use `--fresh` with `--use-sulci`** to prevent stale benchmark DB
@@ -63,7 +68,7 @@ pip install "sulci[sqlite]" anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
 
 # Recommended: full verified run
-python benchmark/run.py --use-sulci --use-claude --fresh \
+python3 benchmark/run.py --use-sulci --use-claude --fresh \
   --queries 1000 --no-sweep --claude-max-calls 1000
 ```
 
@@ -86,17 +91,17 @@ Workload mix (calibrated to public agent-traffic measurements):
 | Novel | 20% | Task-specific reasoning, user-input-derived prompts. Low cacheability — large param pools, novel content per dispatch. |
 
 ```bash
-# Fast synthetic mode (TF-IDF, no dependencies) — CI baseline
-python benchmark/run.py --agent
+# Fast synthetic mode — CI baseline   # TF-IDF; not the shipped engine, do not cite
+python3 benchmark/run.py --agent
 
 # Real-MiniLM mode — produces the conservative number cited externally
 pip install "sulci[sqlite]"
-python benchmark/run.py --agent --use-sulci
+python3 benchmark/run.py --agent --use-sulci
 
 # Real-Anthropic mode — for blog-post / whitepaper anchor
 pip install "sulci[sqlite]" anthropic
 export ANTHROPIC_API_KEY="sk-ant-..."
-python benchmark/run.py --agent --use-sulci --use-claude \
+python3 benchmark/run.py --agent --use-sulci --use-claude \
   --claude-max-calls 5000
 ```
 
@@ -142,7 +147,13 @@ than an artifact of the generator.
 
 ## Results (v0.4.0)
 
-All results produced with `--use-sulci --use-claude --fresh --queries 1000 --no-sweep --claude-max-calls 1000`.
+The stateless block below was produced with `--use-sulci --use-claude --fresh
+--queries 1000 --no-sweep --claude-max-calls 1000` — the shipped MiniLM engine.
+
+⚠️ **This sentence used to cover the whole section, including a context-aware
+table that was in fact TF-IDF output.** Every table in this file must name its
+own engine; a blanket attribution at the top of a section is exactly the kind
+of provenance that sits one level away from the thing being copied.
 
 ### Stateless benchmark
 
@@ -174,34 +185,52 @@ more reliable correctness signal for this corpus.
 
 ### Context-aware benchmark
 
-| Metric | Stateless | Context-Aware | Delta |
-|--------|-----------|---------------|-------|
-| Hit rate | 64.0% | 81.6% | +17.6pp |
-| Resolution accuracy | 56.8% | 77.6% | +20.8pp |
+⛔ **WITHDRAWN 2026-08-11. The tables that stood here are gone, not corrected.**
 
-Domain resolution accuracy:
+They carried `+17.6pp` hit rate, `+20.8pp` resolution accuracy, and a per-domain
+row of `+56pp` / `+16pp` / `+20pp`. They sat under a *Results* heading asserting
+*"All results produced with `--use-sulci --use-claude --fresh ...`"*, which is
+how they came to be read as MiniLM figures. The root `README.md` withdrew them
+on 2026-08-11; this file did not get the same edit, so the repo went on stating
+in its own benchmark README that the retired numbers were measured on the
+shipped engine.
 
-| Domain | Stateless | Context-Aware | Delta |
-|--------|-----------|---------------|-------|
-| customer_support | 32% | 88% | +56pp |
-| developer_qa | 80% | 96% | +16pp |
-| medical_information | 40% | 60% | +20pp |
+Withdrawn because they were measured on the built-in TF-IDF engine rather than
+the shipped MiniLM embedder, carried no `n`, described the corpus as 800 pairs
+when `benchmark/run.py` says 125, and had stopped reproducing even on TF-IDF.
+
+⚠️ **No replacement table is published here, and that is deliberate.** Whether
+this corpus can discriminate on the shipped engine at all is an open question —
+125 follow-ups, one draw, one seed is not a result either way, and the harness
+says so on every run. Run it yourself and read your own output:
+
+```bash
+pip install -e ".[sqlite]"
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
+```
+
+Provenance for the retired figures lives in `sulci-platform/docs/marketing/CLAIMS.md`
+and in git history.
 
 ---
 
 ## All CLI Options
 
 ```
-python benchmark/run.py [OPTIONS]
+python3 benchmark/run.py [OPTIONS]
 
 Core:
   --queries N           Test query count (default: 5000; warmup = equal count)
   --threshold F         Stateless similarity cutoff (default: 0.85)
   --no-sweep            Skip threshold sweep — faster, use for CI
-  --out DIR             Results directory (default: benchmark/results)
+  --out DIR             Results directory. The DEFAULT is suffixed with the
+                        engine: benchmark/results/tfidf/ or .../minilm/, so two
+                        runs cannot overwrite each other. An explicit --out is
+                        used verbatim, unchanged.
 
 Embedding engine:
-  --use-sulci           Use sulci.Cache + MiniLM instead of built-in TF-IDF
+  --use-sulci           Use sulci.Cache + MiniLM — THE SHIPPED ENGINE. Opt-in;
+                        omitting it measures a TF-IDF engine in no product.
   --fresh               Delete existing benchmark DBs before running
                         (prevents stale-cache hit rate inflation with --use-sulci)
   --seed N              Corpus RNG seed (default 42). Varies which groups are
@@ -278,7 +307,8 @@ is a nightly or on-demand job, not a per-PR one.
 
 ## Output Files
 
-All written to `benchmark/results/` (or `--out` directory):
+All written to `benchmark/results/<engine>/` — `tfidf/` or `minilm/` — or to
+an explicit `--out` directory verbatim:
 
 | File | Description |
 |------|-------------|
@@ -299,7 +329,7 @@ contains only a `.gitkeep` in the repository.
 ## Stale DB Warning
 
 When running with `--use-sulci`, the SQLite benchmark database persists
-between runs in `benchmark/results/sulci_bench_db`. If you run the benchmark
+between runs in `benchmark/results/minilm/sulci_bench_db`. If you run the benchmark
 twice without `--fresh`, the second run's warmup phase writes on top of an
 already-populated cache, causing every test query to hit — producing an
 artificially inflated hit rate (100%) and zero misses.
@@ -314,7 +344,7 @@ groups and near-miss pairs fixed it.
 **Always use `--fresh` for canonical benchmark runs:**
 
 ```bash
-python benchmark/run.py --use-sulci --fresh
+python3 benchmark/run.py --use-sulci --fresh
 ```
 
 `--fresh` is safe to use at any time. It prints each removed DB path so you
@@ -332,17 +362,18 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 # Clone
 git clone https://github.com/sulci-io/sulci-oss && cd sulci-oss
 
-# Stateless + context benchmark (synthetic, no API key needed, ~2 min)
-python benchmark/run.py --context
+# Stateless + context benchmark on the SHIPPED engine, no API key (~10 min)
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 
 # Verified run with real embeddings + real Claude API (~25 min, ~$0.90)
-python benchmark/run.py \
+python3 benchmark/run.py \
   --use-sulci --use-claude --fresh \
   --queries 1000 --no-sweep \
   --claude-max-calls 1000
 
 # Fast CI check (~30s, no install needed)
-python benchmark/run.py --no-sweep --queries 500
+#   ⚠️ TF-IDF, fast; not the shipped engine. Reproduces nothing published.
+python3 benchmark/run.py --no-sweep --queries 500
 ```
 
 ---
@@ -428,7 +459,7 @@ run.** The two engines are not interchangeable and this table must not be quoted
 as a MiniLM result. Run:
 
 ```bash
-python benchmark/run.py --use-sulci --fresh --context --context-sweep --no-sweep --queries 500
+python3 benchmark/run.py --use-sulci --fresh --context --context-sweep --no-sweep --queries 500
 ```
 
 ⛔ **Do not change the shipped `query_weight` default on either table alone.**
