@@ -8,6 +8,39 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### `Cache` had one threshold for two kinds of lookup (2026-08-12)
+
+`benchmark/run.py` has calibrated `--context-threshold` separately since it was
+written, with the reason in a comment above the assignment: the 70/30 blended
+vector has structurally lower raw cosine to any stored entry than an exact-match
+lookup. `Cache` never read that, so a user following the class docstring's own
+`Cache(backend="sqlite", context_window=6)` example ran every blended lookup at
+exact-match calibration.
+
+Adds `context_threshold`, unset by default. Unset falls back to `threshold`; all
+17 baseline metrics stay at Δ=0.
+
+The discriminator is `context_depth > 0`, **not** `context_window > 0`.
+`_context_vec` returns the raw embedding when there is no session, no
+`session_id`, or an empty window, and those are exact-match lookups whatever the
+constructor said. Keying off `context_window` would apply the blended threshold
+to all of them — and would pass `make checkin-fast` green while doing it, since
+with `context_threshold` unset the two numbers are equal.
+
+The blended threshold is reassigned onto `eff_threshold` rather than carried in a
+second variable. The backend search, the telemetry payload and the `CacheEvent`
+must be decided by the number that served the answer; that is the v0.8.0 (#34)
+invariant, and two names would recreate the defect it closed.
+
+⚠️ **No default ships and no value is recommended.** 125 synthetic follow-ups
+across 5 domains cannot size a default every context user inherits. The four
+committed draws under `benchmark/results/minilm/seed-{1,2,3,42}` disagree on the
+sign of the accuracy delta (+3, +4, −1, −1) while false-hit rises on every one.
+The supported claim is that the corpus cannot discriminate — **not** that the
+feature does not work.
+
+---
+
 ### The benchmark attributed its numbers to the wrong engine (2026-08-12)
 
 `--use-sulci` is opt-in, so the plain documented invocation of

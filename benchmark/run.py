@@ -1138,14 +1138,34 @@ def run_context_bench(n_followups: int = 5, use_sulci: bool = False,
     _say(_engine_banner(use_sulci))
     _say()
 
-    # Context benchmark uses a slightly lower threshold than the stateless benchmark.
+    # Context benchmark uses a lower threshold than the STATELESS BENCHMARK
+    # (the separate block at the bottom of this file, which uses args.threshold).
     # Reason: the blended query vector (70% query + 30% history) has lower raw cosine
     # similarity to any single stored entry than an exact-match lookup would, so the
-    # threshold is calibrated separately.  Default is 0.72 vs 0.85 for stateless.
+    # threshold is calibrated separately.
+    #
+    # ❌ This comment said "Default is 0.72 vs 0.85 for stateless" until
+    #    2026-08-12. There is no 0.72 anywhere: the argparse default two hundred
+    #    lines up is 0.58, and the next line of this same comment said so. A
+    #    figure contradicted by the line below it survived because nobody reads
+    #    a comment as far as its own second paragraph.
+    #
     # Default 0.58 calibrated for TF-IDF blended vectors.
     # With real sentence-transformer embeddings (--use-sulci), set higher.
     ctx_threshold = args.context_threshold
-    _say(f"  threshold(stateless)={args.threshold}  threshold(context)={ctx_threshold}")
+
+    # ⚠️ BOTH ARMS of the context benchmark run at ctx_threshold -- the stateless
+    # arm below is built with it too, not with args.threshold. That is deliberate
+    # (the two arms differ only in context_window, so a threshold difference would
+    # confound the comparison), but this line printed
+    # `threshold(stateless)={args.threshold}` until 2026-08-12 and named a number
+    # the run never used. Every sweep table's `sl` column was labelled 0.85 while
+    # having been measured at whatever --context-threshold was passed.
+    #
+    # Fixed as a LABEL, not as behaviour: changing which threshold the stateless
+    # arm uses would move every historical context figure in this repo.
+    _say(f"  threshold(both arms)={ctx_threshold}  "
+         f"[--threshold {args.threshold} applies to the stateless benchmark only]")
 
     # Build caches
     if use_sulci:
