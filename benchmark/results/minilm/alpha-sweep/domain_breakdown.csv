@@ -1,0 +1,6 @@
+domain,total,hits,misses,hit_rate_pct,false_positives,fp_rate_pct,avg_sim_hits,saved_usd,cost_reduction_pct
+customer_support,696,76,620,10.9,0,0.0,0.9346,0.38,10.9
+developer_qa,598,102,496,17.1,26,25.49,0.9506,0.51,17.1
+product_faq,598,80,518,13.4,0,0.0,0.9385,0.4,13.4
+medical_information,598,90,508,15.1,3,3.33,0.9417,0.45,15.1
+general_knowledge,598,82,516,13.7,8,9.76,0.9406,0.41,13.7
