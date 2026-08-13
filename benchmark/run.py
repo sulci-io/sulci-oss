@@ -136,6 +136,14 @@ parser.add_argument("--context-followups", type=int, default=5,
                     help="Follow-ups per session (default: 5). CLAMPED by the "
                          "SESSION_FOLLOWUPS pools, which hold 5 each -- raising "
                          "this does not grow the corpus, it prints a warning.")
+parser.add_argument("--context-holdout-strict", action="store_true",
+                    help="Do NOT store the primer->answer for held-out "
+                         "sessions. Default OFF: the context arm normally "
+                         "plants each session's own answer before the lookup, "
+                         "including for rows the hold-out is meant to leave "
+                         "unwarmed, while the stateless arm does not. This "
+                         "measures the size of that confound. Historical "
+                         "figures were all produced with it OFF.")
 parser.add_argument("--context-holdout", type=int, default=1,
                     help="Sessions per domain left UNWARMED (default: 1). Their "
                          "follow-ups have no correct answer cached, so they are "
@@ -240,7 +248,8 @@ os.makedirs(args.out, exist_ok=True)
 # enumerates cannot see what it does not enumerate.
 _CALIBRATION_FLAGS = ("--threshold", "--context-threshold", "--query-weight",
                       "--context-window", "--queries", "--seed",
-                      "--holdout-per-domain")
+                      "--holdout-per-domain", "--context-holdout",
+                      "--context-holdout-strict")
 
 
 def _calibration_of(argv: list) -> dict:
@@ -1193,6 +1202,7 @@ def run_context_bench(n_followups: int = 5, use_sulci: bool = False,
                       query_weight: float = 0.70,
                       holdout_per_domain: int = 1,
                       seed: Optional[int] = None,
+                      strict_holdout: bool = False,
                       quiet: bool = False) -> dict:
     """
     Run the context-aware benchmark.
@@ -1297,6 +1307,13 @@ def run_context_bench(n_followups: int = 5, use_sulci: bool = False,
     _say(f"  Corpus: {len(sessions)} follow-ups  |  held-out sessions: "
           f"{len(held)}/{sum(len(c['sessions']) for c in CONTEXT_SESSIONS.values())}"
           f"  |  should-miss rows: {n_neg} ({n_neg / max(len(sessions), 1):.0%})")
+    if held:
+        _say("  hold-out: STRICT (no primer->answer store for held-out rows)"
+             if strict_holdout else
+             "  ⚠  hold-out: DEFAULT -- the context arm stores each session's "
+             "own answer\n     before the lookup, held-out rows included. "
+             "Its false-hit rate is\n     confounded with the stateless arm, "
+             "which does no such store.")
     if not held:
         _say(f"  ⚠  holdout=0: every follow-up has a correct answer cached, so "
               f"false_hit_rate is unmeasurable and reported as null.")
@@ -1332,20 +1349,37 @@ def run_context_bench(n_followups: int = 5, use_sulci: bool = False,
         ))
 
         # ── Context-aware lookup ──────────────────────────────────────────────
-        # First store the primer in the session
+        # ⚠️ THIS STORE PLANTS THE ANSWER. `item["response"]` is the session's
+        #    canonical answer, and it goes in for EVERY row -- including rows
+        #    with should_hit=False, which held_out_context_keys() exists to
+        #    leave unwarmed. The stateless arm has no corresponding set(), so
+        #    for held-out rows the context arm searches a cache that contains
+        #    the answer and the stateless arm searches one that does not.
+        #    Storing primer->response mid-session is realistic cache behaviour;
+        #    the problem is that it is asymmetric between the arms and silently
+        #    defeats the hold-out. --context-holdout-strict suppresses it for
+        #    held-out rows so the size of the confound can be measured.
+        #    Default is UNCHANGED so historical figures stay comparable.
+        _plant = should or not strict_holdout
+
+        # First store the primer in the session. ⚠️ The LOOKUP is unconditional;
+        # only the STORE is gated. Gating the whole block would leave resp_ctx
+        # unbound on held-out rows.
         if use_sulci:
-            cache_context.set_with_session(
-                primer, item["response"], group=key, domain=domain,
-                session_id=session_id
-            )
+            if _plant:
+                cache_context.set_with_session(
+                    primer, item["response"], group=key, domain=domain,
+                    session_id=session_id
+                )
             t0 = time.perf_counter()
             resp_ctx, sim_ctx, matched_ctx = cache_context.get(followup, session_id=session_id)
             ms_ctx = (time.perf_counter() - t0) * 1000
             depth  = 1
         else:
-            cache_context.set_ctx(primer, item["response"],
-                                   group=key, domain=domain,
-                                   session_id=session_id)
+            if _plant:
+                cache_context.set_ctx(primer, item["response"],
+                                       group=key, domain=domain,
+                                       session_id=session_id)
             t0 = time.perf_counter()
             resp_ctx, sim_ctx, matched_ctx, depth = cache_context.get_ctx(
                 followup, session_id=session_id
@@ -2841,6 +2875,7 @@ def main():
             query_weight       = args.query_weight,
             holdout_per_domain = args.context_holdout,
             seed               = args.seed,
+            strict_holdout     = args.context_holdout_strict,
         )
         save_json(ctx_data["summary"], "context_summary.json")
         save_csv(ctx_data["summary"]["domain_breakdown"], "context_accuracy.csv")
@@ -2878,6 +2913,7 @@ def main():
                     query_weight       = a,
                     holdout_per_domain = args.context_holdout,
                     seed               = args.seed,
+                    strict_holdout     = args.context_holdout_strict,
                     quiet              = True,
                 )["summary"]
                 s_, c_ = d["stateless"], d["context_aware"]

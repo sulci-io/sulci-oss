@@ -1,0 +1,38 @@
+domain,group,matched_group,similarity,query
+general_knowledge,blockchain technology,machine learning,1.0,Blockchain technology explained?
+developer_qa,big o notation,async await python,0.9874748225042934,Please tell me How to calculate Big O thanks?
+developer_qa,big o notation,async await python,0.9809178832269978,I need to know Understanding time complexity?
+developer_qa,big o notation,async await python,0.9783732797920919,Could you tell me Algorithm efficiency Big O thanks?
+general_knowledge,blockchain technology,machine learning,0.9762416490416764,What is a blockchain - need help?
+general_knowledge,blockchain technology,machine learning,0.9756931375111935,I need to know Blockchain technology explained?
+developer_qa,big o notation,async await python,0.9755619266319313,Please tell me Algorithm efficiency Big O thanks?
+developer_qa,big o notation,async await python,0.9746499199460332,Quick question: Big O complexity explained?
+developer_qa,big o notation,async await python,0.9584993706258511,Understanding time complexity
+developer_qa,big o notation,async await python,0.958060248512861,Please tell me Algorithm efficiency Big O - need help?
+general_knowledge,machine learning,blockchain technology,0.9571304408587133,Could you tell me Getting started machine learning?
+developer_qa,big o notation,async await python,0.953016041977371,Algorithm efficiency Big O asap?
+developer_qa,big o notation,async await python,0.952970263961846,Could you tell me What does O(n) mean please?
+developer_qa,big o notation,async await python,0.9519288987807113,Could you tell me Big O complexity explained asap?
+developer_qa,big o notation,async await python,0.9516275399139393,I need to know Big O complexity explained?
+general_knowledge,blockchain technology,machine learning,0.9449079282626446,I need to know How does blockchain work please?
+developer_qa,big o notation,async await python,0.9405124244143945,Help me understand How to calculate Big O asap?
+general_knowledge,blockchain technology,machine learning,0.9302635324085748,Help me understand How does blockchain work please?
+general_knowledge,machine learning,blockchain technology,0.9267702096832916,Can you explain Machine learning overview?
+general_knowledge,blockchain technology,machine learning,0.9261765578790525,Help me understand Blockchain basics asap?
+developer_qa,big o notation,async await python,0.9147985228314894,Please tell me Big O space and time complexity?
+developer_qa,big o notation,async await python,0.9139863466179364,Help me understand Big O space and time complexity?
+developer_qa,big o notation,async await python,0.9139863466179364,Help me understand Big O space and time complexity?
+developer_qa,big o notation,async await python,0.9130031851068966,Could you tell me Big O notation examples please?
+developer_qa,big o notation,async await python,0.9000132437862371,Big O notation examples?
+developer_qa,rest api design,api access,0.8689707998754189,Could you tell me REST API architecture explained asap?
+developer_qa,rest api design,api access,0.8594170494902345,Could you tell me REST API architecture explained?
+developer_qa,rest api design,api access,0.8594170494902345,Could you tell me REST API architecture explained?
+developer_qa,rest api design,api access,0.8594170494902345,Could you tell me REST API architecture explained?
+developer_qa,rest api design,api access,0.8565790459897671,Can you explain REST API architecture explained please?
+developer_qa,rest api design,api access,0.8550294479263896,Can you explain REST API architecture explained?
+developer_qa,rest api design,api access,0.8534740366810204,Please tell me REST API architecture explained?
+developer_qa,rest api design,api access,0.8534740366810204,Please tell me REST API architecture explained?
+developer_qa,big o notation,async await python,0.8532353228836118,Could you tell me Big O notation tutorial?
+medical_information,low blood pressure,high blood pressure,0.8511135708935206,Help me understand Signs of low blood pressure asap?
+medical_information,low blood pressure,high blood pressure,0.8510756467030466,I need to know What causes low blood pressure thanks?
+medical_information,low blood pressure,high blood pressure,0.8510756467030466,I need to know What causes low blood pressure thanks?
