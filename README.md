@@ -1252,6 +1252,14 @@ U.S. Patent Application No. 64/018,452 (pending) covers the
 context-aware semantic caching algorithm. Apache 2.0 grants users
 a royalty-free patent license for use of this code.
 
+## Trademarks
+
+Sulci&trade; and the Sulci logo are trademarks of Sulci Labs Inc. Apache 2.0
+does not grant trademark rights (Section 6). Nominative fair use is fine —
+you may accurately say your product uses Sulci — but the name and marks may
+not be used to imply endorsement, sponsorship, or affiliation without prior
+written permission. See [`NOTICE`](./NOTICE).
+
 ---
 
 ## Links

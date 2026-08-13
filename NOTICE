@@ -6,6 +6,14 @@ See the LICENSE file for full license terms.
 
 This product includes software developed at sulci.io (https://sulci.io).
 
+Trademark Notice:
+Sulci(TM) and the Sulci logo are trademarks of Sulci Labs Inc.
+Apache License 2.0 Section 6 expressly does NOT grant permission to use
+the licensor's trade names, trademarks, service marks, or product names.
+You may accurately state that your product uses Sulci; you may not use
+the Sulci name or marks in a way that implies endorsement, sponsorship,
+or affiliation without prior written permission.
+
 Patent Notice:
 U.S. Patent Application No. 64/018,452 (pending) covers the
 context-aware semantic caching algorithm implemented in this software.
