@@ -23,6 +23,8 @@ Two checks, both cheap:
 
   1. Every place that restates the version agrees with pyproject.toml.
   2. No retired figure appears outside a retraction note.
+  3. Every dependency in the `all` extra can install on the Python floor
+     this package declares.
 
     python3 scripts/check_release_ready.py
 
@@ -78,6 +80,63 @@ VERSION_SITES = [
 ]
 
 
+#: Dependencies whose own requires-python floor exceeds nothing we support,
+#: keyed to the floor they declare. Checked against `all` -- an entry here
+#: that appears UNMARKED in `all` breaks `pip install "sulci[all]"` on any
+#: interpreter below its floor.
+#:
+#: ⚠️ THIS TABLE IS HAND-MAINTAINED AND CANNOT SEE PyPI. It catches the case
+#: we know about, fast and offline. The real test is the
+#: `sulci[all] resolves on the declared Python floor` step in publish.yml,
+#: which resolves against the actual index on the actual floor. **This is not
+#: a substitute for that step.** If you add a dependency to `all`, add its
+#: floor here too -- nothing detects the omission, which is the same defect
+#: this whole class of checker exists to answer.
+DEP_PYTHON_FLOOR = {
+    "mcp":      "3.10",
+    "litellm":  "3.10",
+    "fastapi":  "3.10",
+    "uvicorn":  "3.9",
+}
+
+
+def _ver_tuple(v: str) -> tuple:
+    return tuple(int(x) for x in v.split(".")[:2])
+
+
+def check_all_extra_floor() -> list:
+    """Fail if `all` carries a dep that cannot install on requires-python."""
+    try:
+        import tomllib
+    except ModuleNotFoundError:          # py3.9/3.10
+        return []
+    from packaging.requirements import Requirement
+
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    proj = data.get("project", {})
+    floor_spec = proj.get("requires-python", "")
+    m = re.search(r">=\s*([0-9]+\.[0-9]+)", floor_spec)
+    if not m:
+        return []
+    floor = m.group(1)
+
+    bad = []
+    for raw in proj.get("optional-dependencies", {}).get("all", []):
+        req = Requirement(raw)
+        dep_floor = DEP_PYTHON_FLOOR.get(req.name.lower())
+        if not dep_floor or _ver_tuple(dep_floor) <= _ver_tuple(floor):
+            continue
+        # It needs a newer Python than we claim. A marker excusing it is fine.
+        if req.marker and not req.marker.evaluate({"python_version": floor}):
+            continue
+        bad.append(
+            f"all: {req.name} needs Python >={dep_floor}, "
+            f"pyproject declares requires-python {floor_spec}\n"
+            f'      add a marker: "{raw}; python_version >= \'{dep_floor}\'"'
+        )
+    return bad
+
+
 def pyproject_version() -> str:
     m = re.search(r'^version\s*=\s*"([^"]+)"',
                   (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M)
@@ -122,10 +181,12 @@ def main() -> int:
     ver = pyproject_version()
     versions = check_versions(ver)
     retired = check_retired()
+    floors = check_all_extra_floor()
 
-    if not versions and not retired:
+    if not versions and not retired and not floors:
         print(f"check-release-ready: OK — {ver}, "
-              f"{len(PUBLISHED)} published files carry no retired figure")
+              f"{len(PUBLISHED)} published files carry no retired figure, "
+              f"`all` installs on the declared floor")
         return 0
 
     print("check-release-ready: FAIL\n")
@@ -134,6 +195,15 @@ def main() -> int:
         for b in versions:
             print(f"    {b}")
         print()
+    if floors:
+        print("  `all` cannot install on the Python floor this package claims:\n")
+        for b in floors:
+            print(f"    {b}")
+        print("\n  `pip install \"sulci[all]\"` is the headline install line. "
+              "Breaking it on\n  the declared floor is a silent regression for "
+              "the users least able\n  to diagnose it -- the failure happens in "
+              "pip's resolver, before any\n  Sulci code runs.\n")
+
     if retired:
         print("  Retired figures in files that ship to a reader:\n")
         for b in retired:

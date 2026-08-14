@@ -73,10 +73,26 @@ all      = [
     "httpx>=0.27.0",
     "langchain-core>=0.1.0",
     "llama-index-core>=0.10.0",
-    "mcp>=2.0.0",
-    "litellm>=1.90.0",
-    "fastapi>=0.110.0",
-    "uvicorn>=0.27.0",
+    # ── PEP 508 MARKERS, AND ONLY HERE ───────────────────────────────────────
+    # These four declare requires-python >=3.10 while sulci is >=3.9. Without
+    # the markers `pip install "sulci[all]"` FAILS TO RESOLVE on 3.9 -- it
+    # worked in 0.8.3 and broke in 0.9.0, silently, because nothing installs
+    # `all` in CI. Measured 2026-08-13.
+    #
+    # The markers are on `all` and DELIBERATELY NOT on the individual mcp /
+    # litellm / proxy extras. The asymmetry is the point:
+    #
+    #   sulci[all] on 3.9  -> installs what is installable. Works.
+    #   sulci[mcp] on 3.9  -> resolver error naming the Python requirement.
+    #
+    # A marker on the individual extra would make `pip install "sulci[mcp]"`
+    # SUCCEED on 3.9 having installed nothing, and the user would meet an
+    # ImportError later with no idea why. A loud failure at install time is
+    # the kinder one.
+    "mcp>=2.0.0;        python_version >= '3.10'",
+    "litellm>=1.90.0;   python_version >= '3.10'",
+    "fastapi>=0.110.0;  python_version >= '3.10'",
+    "uvicorn>=0.27.0;   python_version >= '3.10'",
 ]
 dev = [
     "pytest>=7.0",
