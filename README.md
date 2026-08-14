@@ -23,19 +23,42 @@ Sulci Cache is a drop-in Python library that caches LLM responses by **semantic 
 | 1–3 second response time     | Cache hits return in <10ms                               |
 | No memory across sessions    | Context-aware: understands conversation history          |
 
-**Benchmark results (5,000 queries):**
+**Benchmark results — measured on the shipped MiniLM embedder**, 5,000-query
+corpus, `threshold=0.85`. Ranges are across four seeded draws
+(`--seed 1 2 3 42`):
 
-- Overall hit rate: **85.9%**
-- Hit latency p50: **0.74ms** (vs ~1,840ms for a live LLM call)
-- Cost saved on the 5,000-query benchmark: **$21.47** (4,294 hits × $0.005)
+| | measured | range | n |
+|---|---|---|---|
+| Repeat questions served from cache | **99.9%** | `[99.85–99.95%]` | 4,000 |
+| Correctly declined when it has no answer | **98.9%** | `[98.15–99.38%]` | 2,588 |
+| Of all cache hits, share that are correct | **93.8%** | `[92.13–94.69%]` | 4,014 |
+| Cache hit, p50 | **87.19ms** | `[86.96–87.73ms]` | 4,014 |
 
-**Context-aware mode** raises follow-up resolution accuracy from 56.8% to 77.6%
-on the 800-pair context corpus at `context_window=4` — **+20.8pp**. Read the
-qualifier: **that figure is measured on synthetic TF-IDF embeddings.** On the
-shipped MiniLM embedder the same corpus gives a peak Δ of about **+4.0pp** at
-τ=0.65 — roughly five times smaller, and still a real gain, but not the same
-number. Quote the +20.8pp figure only where the TF-IDF basis is stated alongside
-it. See `benchmark/README.md` for both series and the reproduction commands.
+Reproduce:
+
+```bash
+pip install -e ".[sqlite]"
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --seed 1
+```
+
+⚠️ **87.19ms is environment-dependent** — it is a MiniLM forward pass on the
+benchmark machine, not a property of the cache. Measure it on your own hardware
+before planning against it.
+
+**Context-aware mode** blends prior conversation turns into the lookup vector so
+follow-ups resolve against the session rather than the whole cache. How much
+that helps depends entirely on your query mix, and **this README does not carry
+a number for it.** Run `python3 benchmark/run.py --use-sulci --fresh --no-sweep
+--context` and read the harness's own note: the context corpus is 125 follow-ups
+across 25 sessions, which is small.
+
+> Figures previously in this block — `85.9%`, `0.74ms`, `$21.47`, and a
+> `56.8% → 77.6% (+20.8pp)` context claim on an "800-pair" corpus — were
+> **retired 2026-08-12** and replaced above. They were measured on the built-in
+> TF-IDF engine, which ships in no product, and the corpus was 125 follow-ups
+> rather than 800. `pyproject.toml` makes this file the PyPI project page, so
+> they were the most widely-read copy in the estate. See
+> `sulci-platform docs/marketing/CLAIMS.md` for the register.
 
 **Agent workloads** are the headline result, measured on real MiniLM across
 four corpus draws (`--seed 1 2 3 42`, n=10,000):

@@ -205,6 +205,12 @@ checkin-fast: smoke-fast test-per-file examples benchmark-verify check-ci-covera
 
 ## Fail if a suite in tests/ is run by no CI step. See the script header:
 ## the workflow's file list is hand-maintained and has gone wrong twice.
+## Pre-flight before tagging a release. NOT part of checkin: a release is not
+## a check-in, and gating every commit on this trains people to skip it.
+release-check:
+	python3 scripts/check_release_ready.py
+	python3 scripts/check_api_surface.py
+
 check-ci-coverage:
 	python3 scripts/check_ci_test_coverage.py
 
