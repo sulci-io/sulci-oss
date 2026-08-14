@@ -6,7 +6,35 @@ on:
       - "v*" # triggers on v0.1.1, v0.2.0, etc.
 
 jobs:
+  # ── release-guard ──────────────────────────────────────────────────────────
+  # Seconds, ahead of the ~20-minute matrix, and it reads the ONE thing
+  # nothing else in this pipeline reads: the tag name.
+  #
+  # v0.9.0 was first pushed at a commit whose pyproject.toml said 0.8.3. The
+  # release prompt printed `📦 v0.8.3` -- correct for that tree, wrong for that
+  # tag. Branch protection fired specifically on tag creation and `--admin`
+  # went through. A person watching the run caught it; nothing failed.
+  #
+  # 📌 `check_release_ready.py` was GREEN and RIGHT throughout. Every internal
+  # restatement of the version agreed -- with each other and with
+  # pyproject.toml. The tag is not one of the places it reads. Adding a sixth
+  # VERSION restatement would not have caught this; reading the ref name does.
+  release-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      # No pip install: this must run before anything can go wrong installing,
+      # and check_tag_version.py deliberately depends on nothing.
+      - name: Tag name matches pyproject.toml at the tagged commit
+        run: python3 scripts/check_tag_version.py "${GITHUB_REF_NAME}"
+
   test:
+    needs: release-guard
     runs-on: ubuntu-latest
     strategy:
       matrix:
