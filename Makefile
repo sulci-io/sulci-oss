@@ -211,6 +211,13 @@ release-check:
 	python3 scripts/check_release_ready.py
 	python3 scripts/check_api_surface.py
 
+## Does the tag you are about to push match pyproject.toml? Run it BEFORE
+## `git tag`, with the tag you intend to use. CI runs the same script as the
+## release-guard job, but by then the tag exists and deleting it is the fix.
+##   make check-tag TAG=v0.9.1
+check-tag:
+	@python3 scripts/check_tag_version.py "$(TAG)"
+
 check-ci-coverage:
 	python3 scripts/check_ci_test_coverage.py
 

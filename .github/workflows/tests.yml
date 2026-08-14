@@ -281,6 +281,17 @@ jobs:
         if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
         run: pytest tests/test_proxy.py -v --tb=short
 
+      # ── the release guard ────────────────────────────────────────────────
+      # Covers scripts/check_tag_version.py, which gates publish.yml. It has
+      # no runtime dependencies and runs on every matrix leg including 3.9.
+      #
+      # 📌 Its most important assertion is that CANNOT-READ exits 2 and not 0.
+      # A gate that returns green when it cannot read the value it checks is
+      # the failure family §0 records four times over.
+      - name: Release guard (tag vs pyproject)
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_tag_version.py -v --tb=short
+
       # ── suites that CI never ran until 2026-08-11 ────────────────────────
       # These eleven were run by `make checkin` and by NO CI job, some for
       # months -- including all four telemetry suites, which guard the wire
