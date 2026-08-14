@@ -28,6 +28,35 @@ jobs:
       - name: Install test dependencies
         run: pip install ".[sqlite,redis,langchain,llamaindex]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1
 
+      # ── the surfaces this release EXISTS to publish ──────────────────────
+      # Without this the job still went green: `pytest tests/` collects the
+      # three suites, they hit importorskip because the extras are absent, and
+      # 77 tests SKIP silently. The release gate would have published
+      # sulci-mcp, sulci-proxy and the LiteLLM adapter having executed none of
+      # them. Same shape as the 12 green checks over 77 tests that never ran,
+      # except at the point of no return.
+      #
+      # 3.9 is excluded because mcp, litellm and fastapi all declare
+      # requires-python >=3.10. Mirrors the gate in tests.yml -- do not invent
+      # a second pattern for this.
+      - name: Install the v0.9.0 integration surfaces (3.10+)
+        if: matrix.python-version != '3.9'
+        run: pip install ".[mcp,litellm,proxy]"
+
+      # ── the promise, tested on the floor that makes it ───────────────────
+      # pyproject declares requires-python = ">=3.9". `sulci[all]` resolved on
+      # 3.9 in 0.8.3 and stopped resolving in 0.9.0 the moment mcp/litellm/
+      # fastapi were added to it -- invisible, because no job installs `all`.
+      # PEP 508 markers on those four entries fix it; this step is what proves
+      # the fix and catches the next one.
+      #
+      # UNCONDITIONAL on purpose: the 3.9 job is the only one that can fail
+      # here, so skipping it there would remove the entire point.
+      # --dry-run needs pip >= 22.2. If a runner ever ships older, drop the
+      # flag; a real install is slower but tests the same thing.
+      - name: "sulci[all] resolves on the declared Python floor"
+        run: pip install --dry-run ".[all]"
+
       - name: Cache HuggingFace models
         uses: actions/cache@v5
         with:

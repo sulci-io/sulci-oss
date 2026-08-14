@@ -1,6 +1,6 @@
 # Sulci — the measured public API surface
 
-**Measured:** 2026-07-24 against `sulci` **0.8.3**
+**Measured:** 2026-07-24 against `sulci` **0.9.0**
 **Method:** AST parse of `sulci/core.py`, `sulci/async_cache.py`,
 `sulci/integrations/langchain.py` and `sulci/integrations/llamaindex.py`. Not
 memory, not the README.
@@ -435,6 +435,6 @@ PR #114.
 
 ---
 
-*Measured 2026-07-24 at `sulci` 0.8.3; the `SulciLiteLLMCache`, `sulci-mcp` and
+*Measured 2026-07-24 at `sulci` 0.9.0; the `SulciLiteLLMCache`, `sulci-mcp` and
 `sulci-proxy` sections measured 2026-08-11. Re-run the command at the top
 before trusting any line of this.*

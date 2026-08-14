@@ -8,6 +8,47 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-13 — three new integration surfaces, and the figures that ship with them
+
+Sulci is reachable **seven** ways as of this release; three of them are new.
+`sulci-mcp` serves the cache over the Model Context Protocol, `sulci-proxy`
+speaks the OpenAI and Anthropic wire formats so any SDK can be pointed at it
+with no code change, and `SulciLiteLLMCache` supplies the context-aware cache
+LiteLLM does not have.
+
+**Read the two corrections before the features.** This release also retires
+figures that were published for months and were measured on an engine that
+ships in no product — including the ones on this package's own PyPI page. 0.8.3
+is still serving them; upgrading is the fix.
+
+### ⚠️ Retired figures — if you have quoted Sulci's benchmarks, re-read them
+
+`85.9%` hit rate, `0.74ms` hit latency, `$21.47` saved, `56.8% → 77.6%
+(+20.8pp)` context accuracy, `~60–75%` agent hit rate, and the per-domain gain
+table (`32% → 88%`, `+56pp`) are **withdrawn**. Every one came from the built-in
+TF-IDF engine, not the shipped `all-MiniLM-L6-v2` embedder, and the context
+corpus is 125 follow-ups across 25 sessions rather than the "800 pairs" the
+README claimed since v0.2.0.
+
+Replaced with seeded, ranged figures on the shipped engine — see `README.md`.
+The `+56pp` table also shipped inside `sulci/integrations/langchain.py` and
+`llamaindex.py` docstrings, so it reached anyone who read the adapter source or
+installed the package. Those docstrings now carry the withdrawal instead.
+
+### ⚠️ `tenant_id` is enforced by ONE backend of seven
+
+`ENFORCES_TENANT_ISOLATION` is `True` for **qdrant** only. `chroma`, `faiss`,
+`milvus`, `redis` and `sqlite` accept `tenant_id` and **ignore it**; the managed
+`sulci` backend enforces it server-side. This was always true and was never
+stated.
+
+It matters now because all three new surfaces offer scoping as a safety
+property — `sulci-mcp --tenant-id`, `namespace_by_model=True`, the proxy's
+per-model scoping — and **each is a no-op on the default sqlite backend.** They
+now emit `ScopeNotEnforcedWarning` naming the feature and the fix rather than
+failing silently.
+
+
 ### `Cache` had one threshold for two kinds of lookup (2026-08-12)
 
 `benchmark/run.py` has calibrated `--context-threshold` separately since it was
