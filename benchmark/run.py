@@ -2704,13 +2704,38 @@ def run_agent_bench(
     total_hits, total_miss = 0, 0
     cat_hits   = {"structural": 0, "semi_structural": 0, "novel": 0}
     cat_dispatches = {"structural": 0, "semi_structural": 0, "novel": 0}
+    claude_active = _claude is not None
+    claude_calls_start = _claude.call_count if _claude else 0
+    claude_miss_latencies_ms = []
+    claude_miss_costs = []
+    total_llm_seconds_saved = 0.0
+    total_dollars_saved = 0.0
+    claude_cap_reached_session = None
+    claude_fallback_misses = 0
+
+    def _avg_miss_latency_ms() -> float:
+        return (
+            sum(claude_miss_latencies_ms) / len(claude_miss_latencies_ms)
+            if claude_miss_latencies_ms else 0.0
+        )
+
+    def _avg_miss_cost() -> float:
+        return (
+            sum(claude_miss_costs) / len(claude_miss_costs)
+            if claude_miss_costs else 0.0
+        )
 
     print(f"\n  Simulating {n_sessions} sessions × {dispatches} dispatches "
           f"= {n_sessions * dispatches:,} total LLM-call dispatches")
     print(f"  Workload mix: structural 45%, semi-structural 35%, novel 20%")
+    if claude_active:
+        print(f"  Claude agent mode: real responses on misses "
+              f"(cap={_claude.max_calls:,} calls)")
 
     for s in range(n_sessions):
         s_hits, s_miss = 0, 0
+        s_seconds_saved = 0.0
+        s_dollars_saved = 0.0
         for _ in range(dispatches):
             cat, prompt = _generate_agent_prompt(rng)
             resp, sim   = _lookup(prompt)
@@ -2718,25 +2743,61 @@ def run_agent_bench(
             if resp is not None:
                 s_hits += 1
                 cat_hits[cat] += 1
+                if claude_active:
+                    avg_latency_seconds = _avg_miss_latency_ms() / 1000.0
+                    avg_cost = _avg_miss_cost()
+                    s_seconds_saved += avg_latency_seconds
+                    s_dollars_saved += avg_cost
+                    total_llm_seconds_saved += avg_latency_seconds
+                    total_dollars_saved += avg_cost
             else:
                 s_miss += 1
-                # On miss, simulate an LLM response and store it so future
-                # similar prompts can hit. Real text doesn't matter for the
-                # cache contract — only the prompt vector does.
-                _store(prompt, f"<simulated agent response for {cat} prompt>")
+                stored_response = f"<simulated agent response for {cat} prompt>"
+                if claude_active and _claude.call_count < _claude.max_calls:
+                    live_resp, live_ms, live_cost = _claude.call(prompt)
+                    if live_resp:
+                        stored_response = live_resp
+                        claude_miss_latencies_ms.append(live_ms)
+                        claude_miss_costs.append(live_cost)
+                    else:
+                        claude_fallback_misses += 1
+                        if (_claude.call_count >= _claude.max_calls and
+                                claude_cap_reached_session is None):
+                            claude_cap_reached_session = s + 1
+                else:
+                    if claude_active:
+                        claude_fallback_misses += 1
+                        if claude_cap_reached_session is None:
+                            claude_cap_reached_session = s + 1
 
-        per_session.append({
+                # Store the real response when available; otherwise preserve
+                # the synthetic fallback used by the no-Claude benchmark.
+                _store(prompt, stored_response)
+
+        session_row = {
             "session":  s,
             "hits":     s_hits,
             "misses":   s_miss,
             "hit_rate": round(s_hits / dispatches, 4),
-        })
+        }
+        if claude_active:
+            session_row.update({
+                "llm_seconds_saved": round(s_seconds_saved, 3),
+                "dollars_saved":     round(s_dollars_saved, 4),
+            })
+        per_session.append(session_row)
         total_hits += s_hits
         total_miss += s_miss
 
         if (s + 1) % max(1, n_sessions // 10) == 0:
+            extra = ""
+            if claude_active:
+                cap_note = ""
+                if claude_cap_reached_session is not None:
+                    cap_note = f", cap reached at session {claude_cap_reached_session}"
+                extra = f", claude_calls={_claude.call_count}{cap_note}"
             print(f"    Session {s+1}/{n_sessions}: hits={s_hits}, misses={s_miss}, "
-                  f"hit_rate={s_hits/dispatches:.0%}")
+                  f"hit_rate={s_hits/dispatches:.0%}{extra}")
 
     total_dispatches = total_hits + total_miss
     misses_per_session = sorted(p["misses"] for p in per_session)
@@ -2762,6 +2823,25 @@ def run_agent_bench(
         },
         "category_distribution": dict(cat_dispatches),
     }
+
+    if claude_active:
+        avg_latency_ms = _avg_miss_latency_ms()
+        summary.update({
+            "claude_active":              True,
+            "claude_model":               _claude.model,
+            "claude_calls_made":          _claude.call_count - claude_calls_start,
+            "claude_cap":                 _claude.max_calls,
+            "claude_avg_latency_ms":      round(avg_latency_ms, 1),
+            "total_llm_seconds_saved":    round(total_llm_seconds_saved, 3),
+            "total_dollars_saved":        round(total_dollars_saved, 4),
+            "dollars_saved_per_session":  round(total_dollars_saved / n_sessions, 4)
+                                            if n_sessions else 0.0,
+            "seconds_saved_per_session":  round(total_llm_seconds_saved / n_sessions, 3)
+                                            if n_sessions else 0.0,
+            "claude_cap_reached":         claude_cap_reached_session is not None,
+            "claude_cap_reached_session": claude_cap_reached_session,
+            "claude_fallback_misses":     claude_fallback_misses,
+        })
 
     return {"summary": summary, "per_session": per_session}
 
@@ -2795,6 +2875,12 @@ def main():
     corpus = build_corpus(n_test=args.queries)
     print(f"  Done ({sum(len(v) for v in corpus.values()):,} total queries)\n")
 
+    agent_claude_client = _claude if args.agent else None
+    if agent_claude_client:
+        print("  Agent Claude mode requested; reserving Claude calls for "
+              "the agent benchmark.\n")
+        _claude = None
+
     results = run(corpus, args.threshold, args.use_sulci, verbose=True)
 
     print("\n── Saving results ───────────────────────────────────────")
@@ -2803,6 +2889,9 @@ def main():
     save_csv(domain_breakdown(results),       "domain_breakdown.csv")
     save_csv(time_series(results),            "time_series.csv")
     save_csv(false_positives_report(results), "false_positives.csv")
+
+    if agent_claude_client:
+        _claude = agent_claude_client
 
     if not args.no_sweep:
         # Skip threshold sweep in Claude mode — each sweep pass would consume
@@ -2992,6 +3081,24 @@ def main():
               f"measured, not extrapolated)")
         print(f"  ────────────────────────────────────────────────────────")
         print()
+
+        if s_a.get("claude_active"):
+            saved_hours = s_a["total_llm_seconds_saved"] / 3600
+            print(f"  ── Measured savings (vs real Anthropic) ───────────────")
+            print(f"  LLM calls saved        : {s_a['total_hits']:,} hits × "
+                  f"{s_a['claude_avg_latency_ms']:.0f}ms avg = "
+                  f"{saved_hours:.2f} hrs latency saved")
+            print(f"  Dollar cost saved      : ${s_a['total_dollars_saved']:.2f}  "
+                  f"({s_a['claude_model']})")
+            print(f"  Per-session savings    : ${s_a['dollars_saved_per_session']:.2f}  /  "
+                  f"{s_a['seconds_saved_per_session']:.0f}s LLM latency")
+            if s_a.get("claude_cap_reached"):
+                print(f"  Claude call cap reached at session "
+                      f"{s_a['claude_cap_reached_session']}; "
+                      f"{s_a['claude_fallback_misses']} later misses used "
+                      f"synthetic fallback responses.")
+            print(f"  ────────────────────────────────────────────────────────")
+            print()
 
 
 if __name__ == "__main__":
