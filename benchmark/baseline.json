@@ -1,20 +1,20 @@
 {
   "_meta": {
     "STATUS": "CURRENT",
-    "regenerated_on": "2026-08-07",
+    "regenerated_on": "2026-08-19",
     "engine": "builtin-tfidf",
-    "source": "benchmark/run.py --no-sweep --context (stateless + context) and --no-sweep --agent (agent block), run locally on the corpus as of sulci-oss b25077f. Deterministic: the same command reproduced these values byte-identically on two machines and two Python patch levels before they were written here.",
+    "source": "benchmark/run.py --no-sweep --context (stateless + context) and --no-sweep --agent (agent block), run locally on the corpus as of sulci-oss b25077f. Deterministic: the same command reproduced these values byte-identically on two machines and two Python patch levels before they were written here. The agent block is the default seed, 42 as of #145 (previously 1729). Stateless and context blocks are unchanged and still reproduce byte-identically.",
     "description": "Regression baseline for the built-in TF-IDF engine. These are NOT publishable figures and none of them appears on sulci.io. The site publishes MiniLM numbers (recall 0.9990, false-hit 0.0106, precision 0.9377) measured with --use-sulci across four corpus draws; see sulci-platform/docs/marketing/CLAIMS.md. This file exists to detect UNINTENDED CHANGE in the TF-IDF path, which is what CI runs.",
     "replaces": "The pre-2026-08-07 baseline, which described a corpus that no longer exists: it warmed every group, so every test query had a same-group twin cached, a hit was always available, and the hit rate could only be high. It carried hit_rate 0.8588, false_positive_rate 0.3111, saved_cost_usd 21.47 and the context family 0.816 / 0.776 / 20.8 / 0.176 -- i.e. the retired 85.9%, $21, 81.6%, 77.6%, +20.8pp and +17.6pp site claims, at their source. Those values are deliberately GONE from this file rather than kept for provenance: sulci-oss is public, and a retired figure sitting in a file called baseline.json is found by grep long before anyone reads the note beside it. Their provenance lives in CLAIMS.md and in git history.",
-    "agent_block_note": "The agent numbers are UNCHANGED from the previous baseline (0.9497 / 0.43 / 0.9785 / 5 / 31). They never drifted. Every \"drift\" previously reported against them was a stale agent_summary.json left in benchmark/results/ from a --use-sulci run, compared against these TF-IDF numbers. run.py now stamps _provenance.engine and verify_benchmark.py refuses a mismatch.",
+    "agent_block_note": "The agent block was regenerated on 2026-08-19 because the DEFAULT SEED CHANGED, not because the corpus or the algorithm did. run.py fell back to seed 1729 when --seed was absent, and 1729 is the one draw that yields the retired cold 27.0% / warm 99.4% pair on MiniLM (fc701fb) — so the documented publishable-figures command emitted retired figures by default. #145 moved the fallback to 42, matching the module RNG at :86 and the --seed help text. The TF-IDF path defaults through the same line, so these numbers moved with it: cold 0.43 -> 0.49 and p95 31 -> 40 exceeded tolerance; six more moved inside it (aggregate 0.9497 -> 0.9505, warm 0.9785 -> 0.9812, structural 0.9684 -> 0.9711, semi_structural 0.9325 -> 0.9321, novel 0.9378 -> 0.9358, p50 unchanged at 5). All eight were rewritten together — leaving the in-tolerance six would have made this block a mix of two seeds. This is NOT the pre-2026-08-07 false alarm, where reported agent drift was a stale agent_summary.json from a --use-sulci run compared against TF-IDF numbers; run.py now stamps _provenance.engine and verify_benchmark.py refuses a mismatch. Same engine, same corpus, different seed.",
     "not_checked_by_default": "verify_benchmark.py runs `run.py --no-sweep --context` with no --agent, so the agent block is reported as \"not measured this run\" unless you run `run.py --no-sweep --agent` first. That is expected and is not a failure.",
     "regeneration_policy": "Do NOT refresh this file because it went red. A baseline refreshed whenever it drifts is not a baseline -- it records whatever happened last. Regenerate only when the corpus or the algorithm changes DELIBERATELY, and when you do, update STATUS, regenerated_on, source and replaces in the same commit.",
     "verified_stable_across_releases": [
-      "v0.3.4 (run #26)",
-      "v0.3.7 (implicit)",
-      "pre-v040-baseline (run #36)"
+      "v0.3.4 (run #26) — stateless + context only; agent block predates the 2026-08-19 seed change",
+      "v0.3.7 (implicit) — stateless + context only; agent block predates the 2026-08-19 seed change",
+      "pre-v040-baseline (run #36) — stateless + context only; agent block predates the 2026-08-19 seed change"
     ],
-    "tolerance_notes": "Counts may drift by \u00b12 across platforms (Linux vs macOS) due to dict-iteration tie-breaks. Headline percentages match exactly. Latency varies by machine; not part of regression check."
+    "tolerance_notes": "Counts may drift by ±2 across platforms (Linux vs macOS) due to dict-iteration tie-breaks. Headline percentages match exactly. Latency varies by machine; not part of regression check."
   },
   "stateless": {
     "threshold": 0.85,
@@ -68,14 +68,14 @@
   "agent_workload": {
     "n_sessions": 50,
     "dispatches_per_session": 200,
-    "aggregate_hit_rate": 0.9497,
-    "hit_rate_cold_session": 0.43,
-    "hit_rate_warm_session": 0.9785,
+    "aggregate_hit_rate": 0.9505,
+    "hit_rate_cold_session": 0.49,
+    "hit_rate_warm_session": 0.9812,
     "misses_per_session_p50": 5,
-    "misses_per_session_p95": 31,
-    "category_hit_rate_structural": 0.9684,
-    "category_hit_rate_semi_structural": 0.9325,
-    "category_hit_rate_novel": 0.9378,
+    "misses_per_session_p95": 40,
+    "category_hit_rate_structural": 0.9711,
+    "category_hit_rate_semi_structural": 0.9321,
+    "category_hit_rate_novel": 0.9358,
     "_note": "RETRACTED and not restored: the previous note claimed real-MiniLM gives \"~60-75% aggregate vs ~95% TF-IDF\". Never measured. Measured 2026-08-04 it gives 95.0%, the same as TF-IDF, which is therefore not an upper bound on this workload. That sentence is where the 60-75% figure in the site hero, the SI pitch deck and the email signature came from."
   }
 }

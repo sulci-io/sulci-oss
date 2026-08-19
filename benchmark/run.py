@@ -2620,7 +2620,7 @@ def run_agent_bench(
     dispatches:   int   = 200,
     threshold:    float = 0.85,
     use_sulci:    bool  = False,
-    seed:         int   = 1729,
+    seed:         int   = 42,
 ) -> dict:
     """Synthetic agent-workload benchmark.
 
@@ -2637,7 +2637,7 @@ def run_agent_bench(
         use_sulci:   Real MiniLM+SQLite via sulci.Cache. Otherwise the
                      builtin TF-IDF cache (Mode 1). The relative shape of
                      the result is similar; absolute numbers differ.
-        seed:        RNG seed for reproducibility (default 1729).
+        seed:        RNG seed for reproducibility (default 42).
 
     Returns:
         {
@@ -2958,11 +2958,12 @@ def main():
             dispatches = args.agent_dispatches,
             threshold  = args.agent_threshold,
             use_sulci  = args.use_sulci,
-            # --seed was not reaching this call, so every agent run used the
-            # hardcoded 1729 and four --seed draws produced identical output.
-            # None would seed from the OS and make this non-deterministic,
-            # which is worse than one fixed draw.
-            seed       = args.seed if args.seed is not None else 1729,
+            # --seed reaches this call as of fc701fb. Default 42 matches the
+            # module RNG at :86 and the --seed help text. NOT None: this builds
+            # its own random.Random(seed), and Random(None) seeds from the OS.
+            # NOT 1729: that draw alone yields cold 27.0% / warm 99.4%, the pair
+            # retired as a seed artifact (fc701fb + CLAIMS register).
+            seed       = args.seed if args.seed is not None else 42,
         )
         save_json(agent_data["summary"],    "agent_summary.json")
         save_csv(agent_data["per_session"], "agent_per_session.csv")
