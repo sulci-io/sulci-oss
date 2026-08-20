@@ -159,6 +159,15 @@ jobs:
     # ternary, so `&&`/`||` is the idiom — safe here because matrix.os is
     # always a non-empty string and can never be falsy.
     runs-on: ${{ needs.changes.outputs.code == 'true' && matrix.os || 'ubuntu-latest' }}
+
+    # Measured 2026-08-19: an apt-get failover to archive.ubuntu.com stalled
+    # on three ubuntu legs of run 32270792542 and GitHub's 360-minute ceiling
+    # was the only thing that stopped them -- 1,080 runner-minutes on one
+    # transient mirror fault, and 5dd0f16 was left with no completed run.
+    # Successful legs finish in 9-20 minutes. This does not fix apt; it caps
+    # it. See #151.
+    timeout-minutes: 30
+
     strategy:
       fail-fast: false
       matrix:
