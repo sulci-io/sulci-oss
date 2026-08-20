@@ -264,6 +264,58 @@ def _calibration_of(argv: list) -> dict:
     return out
 
 
+#: Subdirectory prefixes that hold PINNED draws -- artifacts something else
+#: declares and reads. Currently the four MiniLM agent draws that
+#: sulci-platform's docs/marketing/rebuild/build_figures.py --seeds 1,2,3,42
+#: aggregates into the published register.
+#:
+#: A PREFIX list, not a blind recurse. build_figures.py v2 recursed and pooled
+#: seven directories including the three alpha-sweep runs, measuring recall
+#: 0.9300 where the four declared draws give 0.9990. The alpha-sweeps are
+#: legitimately at other calibrations and must not be treated as pinned.
+_PINNED_SUBDIR_PREFIXES = ("seed-",)
+
+
+def _check_pinned_siblings(out_dir: str, force: bool = False) -> None:
+    """Refuse to drop loose output into a directory that holds pinned draws.
+
+    NOT the same hazard as _check_variant_collision, and conflating them was
+    the first attempt at #150. That guard is about OVERWRITING: two runs at
+    different calibrations writing the same path. Widening its glob to reach
+    seed-*/ makes every run collide with at least three of the four draws --
+    they are at four different --seed values by construction -- and reports
+    "would overwrite" about a path the run will never touch.
+
+    The real hazard, measured 2026-08-19: a default-seed run wrote
+    agent_summary.json into benchmark/results/minilm/ beside the pinned
+    seed-{1,2,3,42}/ dirs. Nothing was overwritten. What was created is an
+    UNDECLARED FIFTH DRAW, one level up from four declared ones, holding the
+    same filenames and indistinguishable to anything reading the flat path.
+    CLAIMS.md:259 states the rule it breaks: "a single-draw figure and a
+    four-draw mean look identical on a page."
+    """
+    import glob as _glob
+    pinned = []
+    for pre in _PINNED_SUBDIR_PREFIXES:
+        pinned += [d for d in sorted(_glob.glob(os.path.join(out_dir, pre + "*")))
+                   if os.path.isdir(d)]
+    if not pinned:
+        return
+    msg = (
+        f"\n  ⚠️  PINNED DRAWS in {out_dir}/\n"
+        f"      This directory holds {len(pinned)} declared draw(s):\n"
+        + "".join(f"        {os.path.basename(d)}/\n" for d in pinned)
+        + "      Writing loose output here creates an undeclared sibling that\n"
+          "      nothing distinguishes from them. Pass an explicit --out, e.g.\n"
+          f"        --out {os.path.join(out_dir, 'scratch')}\n"
+          "      or --allow-overwrite if a fifth variant here is what you meant.\n"
+    )
+    if force:
+        print(msg + "      --allow-overwrite given; proceeding.\n")
+        return
+    sys.exit(msg)
+
+
 def _check_variant_collision(out_dir: str, force: bool = False) -> None:
     import glob as _glob
     mine = _calibration_of(sys.argv)
@@ -274,9 +326,21 @@ def _check_variant_collision(out_dir: str, force: bool = False) -> None:
         except Exception:
             continue                      # unreadable is not evidence of anything
         prov = blob.get("_provenance") or blob.get("_meta", {}).get("_provenance")
-        if not isinstance(prov, dict) or not isinstance(prov.get("argv"), list):
+        if not isinstance(prov, dict):
             continue                      # predates the guard; say nothing
-        theirs = _calibration_of(prov["argv"])
+        # run.py:2132 writes argv as `" ".join(sys.argv[1:])` -- a STRING.
+        # This test required a LIST, so EVERY file this guard has ever read
+        # took the predates-the-guard exit and the guard has never once
+        # compared a calibration. Measured 2026-08-20 while fixing the glob
+        # (#150): widening the search made no difference until this was
+        # fixed too, because the newly-visible files were skipped here.
+        # Accept both: a list from any future caller, a string as written.
+        raw = prov.get("argv")
+        if isinstance(raw, str):
+            raw = raw.split()
+        elif not isinstance(raw, list):
+            continue                      # genuinely unrecorded
+        theirs = _calibration_of(raw)
         if theirs == mine:
             continue                      # same calibration -- a legitimate re-run
         differing = sorted(set(theirs) | set(mine))
@@ -299,6 +363,7 @@ def _check_variant_collision(out_dir: str, force: bool = False) -> None:
 
 
 _check_variant_collision(args.out, force=getattr(args, "allow_overwrite", False))
+_check_pinned_siblings(args.out, force=getattr(args, "allow_overwrite", False))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 1.  BUILT-IN EMBEDDING ENGINE
