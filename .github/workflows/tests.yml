@@ -335,3 +335,84 @@ jobs:
       - name: Attribution, nudge, thresholds, session-store injection
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_hit_attribution.py tests/test_nudge.py tests/test_per_call_threshold.py tests/test_context_threshold.py tests/test_session_store_injection.py -v --tb=short
+
+  # ── sulci[all] resolution ─────────────────────────────────────────────
+  # A SEPARATE JOB, NOT A MATRIX STEP, and deliberately small.
+  #
+  # pyproject.toml records why this exists, at the `all` extra's PEP 508
+  # marker block: `pip install "sulci[all]"` FAILED TO RESOLVE on 3.9 --
+  # "it worked in 0.8.3 and broke in 0.9.0, silently, because nothing
+  # installs `all` in CI. Measured 2026-08-13." That gap stayed open until
+  # 2026-08-20 and it absorbed a second declaration in the meantime: the
+  # litellm <1.97.0 cap (#148) is written in TWO places, the `litellm`
+  # extra and `all`, and only the first was exercised by anything.
+  #
+  # Two floors, not twelve. 3.9 is where the four markers do their work --
+  # mcp / litellm / fastapi / uvicorn are all requires-python >=3.10 and
+  # must be SKIPPED rather than fail the resolve. 3.12 is where they must
+  # all install. The ten other matrix cells would tell us nothing either
+  # of these two does not.
+  #
+  # Resolution only. It installs and imports; it does not run the suite.
+  # A resolver failure and a test failure are different findings and this
+  # job exists to make the first one unambiguous. See #149.
+  install-all:
+    name: sulci[all] resolves (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    needs: changes
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v5
+        if: needs.changes.outputs.code == 'true'
+
+      - uses: actions/setup-python@v6
+        if: needs.changes.outputs.code == 'true'
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: pip install ".[all]"
+        if: needs.changes.outputs.code == 'true'
+        run: pip install ".[all]"
+
+      - name: Import the core package
+        if: needs.changes.outputs.code == 'true'
+        run: python -c "import sulci; print(sulci.__version__)"
+
+      # On 3.9 the four markered extras must be ABSENT, not merely
+      # uninstalled-and-ignored. `sulci[all]` resolving on 3.9 while
+      # silently installing litellm would mean the markers had stopped
+      # doing their job, and the next 1.97.0-shaped upstream break would
+      # reach 3.9 users through an extra they were never meant to get.
+      - name: 3.9 skips the 3.10+ surfaces
+        if: needs.changes.outputs.code == 'true' && matrix.python-version == '3.9'
+        run: |
+          for pkg in mcp litellm fastapi uvicorn; do
+            if pip show "$pkg" > /dev/null 2>&1; then
+              echo "::error::$pkg is installed on 3.9. The PEP 508 markers on the \`all\` extra are not binding."
+              exit 1
+            fi
+            echo "ok: $pkg correctly absent on 3.9"
+          done
+
+      # And on 3.12 they must all be present, or `all` is quietly partial.
+      - name: 3.12 installs the 3.10+ surfaces
+        if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
+        run: |
+          for pkg in mcp litellm fastapi uvicorn; do
+            pip show "$pkg" > /dev/null 2>&1 || { echo "::error::$pkg missing from sulci[all] on ${{ matrix.python-version }}"; exit 1; }
+            echo "ok: $pkg present"
+          done
+          # #148: the cap lives in the `all` extra as well as the `litellm`
+          # extra, and until this job existed only the latter was checked.
+          python - <<'PY'
+          import litellm, sys
+          v = tuple(int(x) for x in litellm.__version__.split(".")[:2])
+          print("litellm", litellm.__version__)
+          if v >= (1, 97):
+              sys.exit("litellm >=1.97.0 resolved from the `all` extra; the cap is not binding there. See #148, BerriAI/litellm#36384.")
+          PY
