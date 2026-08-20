@@ -174,10 +174,15 @@ benchmark-verify:
 benchmark-agent:
 	$(PYTHON) benchmark/run.py --agent --context --no-sweep
 	$(PYTHON) scripts/verify_benchmark.py --skip-run
+## MiniLM agent draws still aggregate to the published register.
+## No benchmark run: four JSON reads from the committed seed-N dirs, ~0s.
+## The run modes (--default, --seed N) are pre-release; --agent adds ~13min.
+check-agent-draws:
+	$(PYTHON) scripts/check_agent_draws.py --aggregate-only
 
 ## Comprehensive pre-PR check: smoke + tests-per-file + examples
 ## Add 'matrix' manually if you want to also verify provider detection
-checkin: smoke test-per-file examples benchmark-verify check-ci-coverage
+checkin: smoke test-per-file examples benchmark-verify check-ci-coverage check-agent-draws
 	@echo ""
 	@echo "════════════════════════════════════════════════════════════════════"
 	@echo " ✓ checkin verification complete"
@@ -188,7 +193,7 @@ checkin: smoke test-per-file examples benchmark-verify check-ci-coverage
 
 ## Same as checkin but uses smoke-fast (CPU) — recommended on macOS.
 ## See docs/architecture/adrs/0002-smoke-fast-cpu-mode.md for rationale.
-checkin-fast: smoke-fast test-per-file examples benchmark-verify check-ci-coverage
+checkin-fast: smoke-fast test-per-file examples benchmark-verify check-ci-coverage check-agent-draws
 	@echo ""
 	@echo "════════════════════════════════════════════════════════════════════"
 	@echo " ✓ checkin-fast verification complete (CPU smoke mode)"

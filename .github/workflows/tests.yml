@@ -108,6 +108,16 @@ jobs:
       - name: API surface matches the docs
         run: python3 scripts/check_api_surface.py
 
+      # Reads the four committed seed-N draws and re-derives the aggregates
+      # CLAIMS.md publishes. Runs here beside the other cheap consistency
+      # checks rather than in the matrix: four JSON reads, ~0s, and twelve
+      # identical passes would prove nothing extra. Runs on docs-only PRs
+      # too, deliberately — a CLAIMS.md edit that no longer matches the
+      # draws is exactly what this catches. The run modes (--default,
+      # --seed N) are pre-release; --agent adds ~13min.
+      - name: MiniLM agent draws match the register
+        run: python3 scripts/check_agent_draws.py --aggregate-only
+
   # ── Matrix ────────────────────────────────────────────────────────────
   # NOTE THE ABSENCE OF A JOB-LEVEL `if:`. That was the obvious way to write
   # this and it does not work here. Measured on PR #118, a docs-only probe:
