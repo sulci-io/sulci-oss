@@ -58,6 +58,20 @@ from typing import List, Tuple
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TESTS_DIR = REPO_ROOT / "tests"
 
+#: Roots searched for suites. Kept in step BY HAND with SEARCH_ROOTS in
+#: scripts/check_ci_test_coverage.py -- the two scripts answer different
+#: questions (what does this runner execute / what does CI execute) and a
+#: shared import would hide that they can legitimately differ. What they must
+#: not do is differ BY ACCIDENT, which is #135: this script discovered
+#: tests/test_*.py plus a hardcoded `tests/compat/`, so tests/integration/flows
+#: and sulci/tests/compat were run by CI and never by `make checkin`.
+#: Measured 2026-08-20: 26 targets here against 30 suites there.
+#:
+#: Declared, not recursive-from-repo-root -- see the SEARCH_ROOTS note in
+#: check_ci_test_coverage.py for why build_figures.py v2 is the argument
+#: against a blind recurse.
+SEARCH_ROOTS = ("tests", "sulci/tests")
+
 # Order hint — fast files first so failures fail loud and early; slowest last.
 # Files not in this list still get included (after these, alphabetically) —
 # the hint only affects ORDER, not membership. Add or remove freely without
@@ -106,14 +120,26 @@ def discover_targets() -> List[str]:
     """
     discovered: set[str] = set()
 
-    # tests/test_*.py at the top level of tests/
-    for p in TESTS_DIR.glob("test_*.py"):
-        discovered.add(str(p.relative_to(REPO_ROOT)).replace(os.sep, "/"))
+    for rel in SEARCH_ROOTS:
+        root = REPO_ROOT / rel
+        if not root.is_dir():
+            continue
 
-    # tests/compat/ subdirectory — invoke as a directory if it has any test files
-    compat = TESTS_DIR / "compat"
-    if compat.is_dir() and any(compat.glob("test_*.py")):
-        discovered.add("tests/compat/")
+        # Files at the top level of the root, one invocation each.
+        for p in root.glob("test_*.py"):
+            discovered.add(str(p.relative_to(REPO_ROOT)).replace(os.sep, "/"))
+
+        # Subdirectories holding suites, invoked as a DIRECTORY -- one pytest
+        # call for the whole package rather than one per file. tests/compat
+        # and sulci/tests/compat share conftest fixtures, and
+        # tests/integration/flows imports flow_*.py helpers that are not
+        # suites; splitting either per-file breaks them. rglob, so a suite
+        # nested two deep is still found.
+        for sub in sorted(d for d in root.iterdir() if d.is_dir()):
+            if any(sub.rglob("test_*.py")):
+                discovered.add(
+                    str(sub.relative_to(REPO_ROOT)).replace(os.sep, "/") + "/"
+                )
 
     # Order: ORDER_HINT first (in their listed order), then anything left
     # alphabetically. Items in ORDER_HINT that don't actually exist are
