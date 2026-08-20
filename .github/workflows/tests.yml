@@ -391,13 +391,22 @@ jobs:
       - name: 3.9 skips the 3.10+ surfaces
         if: needs.changes.outputs.code == 'true' && matrix.python-version == '3.9'
         run: |
-          for pkg in mcp litellm fastapi uvicorn; do
+          # NOT uvicorn. Measured 2026-08-20, run 32384810353: mcp, litellm
+          # and fastapi are correctly absent on 3.9 -- the markers bind --
+          # but uvicorn is present, pulled in TRANSITIVELY by another member
+          # of `all` (chromadb declares uvicorn). "Not declared by the `all`
+          # extra" and "not installed at all" are different claims and this
+          # step tests the first. Asserting the second failed the job on a
+          # correct install.
+          for pkg in mcp litellm fastapi; do
             if pip show "$pkg" > /dev/null 2>&1; then
               echo "::error::$pkg is installed on 3.9. The PEP 508 markers on the \`all\` extra are not binding."
               exit 1
             fi
             echo "ok: $pkg correctly absent on 3.9"
           done
+          echo "note: uvicorn is not asserted here; it arrives transitively."
+          pip show uvicorn 2>/dev/null | grep -i "^required-by" || true
 
       # And on 3.12 they must all be present, or `all` is quietly partial.
       - name: 3.12 installs the 3.10+ surfaces
@@ -409,10 +418,15 @@ jobs:
           done
           # #148: the cap lives in the `all` extra as well as the `litellm`
           # extra, and until this job existed only the latter was checked.
+          # importlib.metadata, NOT litellm.__version__: litellm defines a
+          # custom module __getattr__ that raises AttributeError for it.
+          # Measured 2026-08-20, run 32384810353 -- the check failed on a
+          # correct install.
           python - <<'PY'
-          import litellm, sys
-          v = tuple(int(x) for x in litellm.__version__.split(".")[:2])
-          print("litellm", litellm.__version__)
-          if v >= (1, 97):
+          import sys
+          from importlib.metadata import version
+          v_str = version("litellm")
+          print("litellm", v_str)
+          if tuple(int(x) for x in v_str.split(".")[:2]) >= (1, 97):
               sys.exit("litellm >=1.97.0 resolved from the `all` extra; the cap is not binding there. See #148, BerriAI/litellm#36384.")
           PY
