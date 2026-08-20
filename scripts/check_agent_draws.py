@@ -72,16 +72,40 @@ REGISTER = {
     "aggregate_hit_rate":     {"mean": 0.950,  "lo": 0.9499, "hi": 0.9505},
     "misses_per_session_p50": {"mean": 2,      "lo": 2,      "hi": 2},
 }
+# The stateless figures the register publishes, also from the four draws.
+# CLAIMS.md:249-251. "Correctly declined" is 1 - false_hit_rate.
+REGISTER_STATELESS = {
+    "recall":         {"mean": 0.999,  "lo": 0.9985, "hi": 0.9995},
+    "false_hit_rate": {"mean": 0.0106, "lo": 0.0062, "hi": 0.0185},
+    "precision":      {"mean": 0.9377, "lo": 0.9213, "hi": 0.9469},
+}
+
 # Rounding slack for the published mean only. The draws themselves are
 # compared exactly.
 MEAN_TOL = 0.0006
+
+#: Excluded from the exact stateless comparison. baseline.json's
+#: tolerance_notes already says it: "Latency varies by machine; not part of
+#: the regression check." Everything else in summary.json IS exact -- a
+#: same-seed, same-flags run reproduces it to the integer.
+#:
+#: This was doubted on 2026-08-19 and the doubt was wrong. Three runs
+#: appeared to give FP 5.61 / 5.61 / 5.62% and $20.13 / $20.13 / $20.10,
+#: which was read as non-determinism. They were different COMMANDS: the
+#: first two carried --context. The --agent-only run reproduced seed-42's
+#: summary.json exactly -- cache_hits 4020, false_positives 226,
+#: fp_rate 0.0562, saved_cost 20.10. See #147.
+LATENCY_KEYS = {
+    "latency_hit_p50_ms", "latency_hit_p95_ms",
+    "latency_miss_p50_ms", "latency_miss_p95_ms",
+}
 
 BENCH_ARGV = ["--use-sulci", "--fresh", "--no-sweep", "--agent",
               "--threshold", "0.85"]
 
 
-def load_draw(seed: int) -> dict | None:
-    p = DRAWS_ROOT / f"seed-{seed}" / "agent_summary.json"
+def load_draw(seed: int, name: str = "agent_summary.json") -> dict | None:
+    p = DRAWS_ROOT / f"seed-{seed}" / name
     if not p.exists():
         return None
     return json.loads(p.read_text())
@@ -107,6 +131,27 @@ def load_all_draws() -> dict[int, dict]:
     return draws
 
 
+def _aggregate_table(draws: dict, register: dict, label: str) -> bool:
+    ok = True
+    print(f"  {label}")
+    for key, want in register.items():
+        vals = [draws[s][key] for s in SEEDS]
+        mean = sum(vals) / len(vals)
+        lo, hi = min(vals), max(vals)
+        good = (abs(mean - want["mean"]) <= MEAN_TOL
+                and abs(lo - want["lo"]) <= MEAN_TOL
+                and abs(hi - want["hi"]) <= MEAN_TOL)
+        ok &= good
+        drawstr = " ".join(f"{v:.4f}" if isinstance(v, float) else str(v)
+                           for v in vals)
+        print(f"    [{'OK   ' if good else 'DRIFT'}]  {key:<24} "
+              f"mean {mean:.4f} [{lo:.4f}-{hi:.4f}]   draws: {drawstr}")
+        if not good:
+            print(f"             register says mean {want['mean']} "
+                  f"[{want['lo']}-{want['hi']}]")
+    return ok
+
+
 def mode_aggregate_only() -> int:
     draws = load_all_draws()
     print("=" * 72)
@@ -116,23 +161,16 @@ def mode_aggregate_only() -> int:
     print("=" * 72)
     print()
 
-    ok = True
-    for key, want in REGISTER.items():
-        vals = [draws[s][key] for s in SEEDS]
-        mean = sum(vals) / len(vals)
-        lo, hi = min(vals), max(vals)
-        dm = abs(mean - want["mean"])
-        good = dm <= MEAN_TOL and abs(lo - want["lo"]) <= MEAN_TOL \
-                               and abs(hi - want["hi"]) <= MEAN_TOL
-        ok &= good
-        tag = "OK   " if good else "DRIFT"
-        drawstr = " ".join(f"{v:.4f}" if isinstance(v, float) else str(v)
-                           for v in vals)
-        print(f"  [{tag}]  {key:<24} mean {mean:.4f} "
-              f"[{lo:.4f}-{hi:.4f}]   draws: {drawstr}")
-        if not good:
-            print(f"           register says mean {want['mean']} "
-                  f"[{want['lo']}-{want['hi']}]")
+    ok = _aggregate_table(draws, REGISTER, "Agent workload:")
+
+    st = {s: load_draw(s, "summary.json") for s in SEEDS}
+    if all(st.values()):
+        print()
+        ok &= _aggregate_table(st, REGISTER_STATELESS, "Stateless:")
+    else:
+        print("\n  ⚠  summary.json missing from one or more draws; "
+              "stateless aggregates NOT checked.")
+        ok = False
 
     print()
     print("=" * 72)
@@ -201,6 +239,14 @@ def mode_compare_run(seed: int | None, timeout: int) -> int:
             return 2
         got = json.loads(produced.read_text())
 
+        # Stateless block, from the same invocation. NOT context_summary.json:
+        # the committed context file came from a --context --agent run 1.5h
+        # earlier and adding --context here would overwrite summary.json with
+        # the context-variant numbers. See #152.
+        st_want = load_draw(expect_seed, "summary.json")
+        st_path = out / "summary.json"
+        st_got = json.loads(st_path.read_text()) if st_path.exists() else None
+
     # Compare every numeric field the draw records, EXACTLY. A same-seed run
     # is deterministic; a tolerance here would hide precisely the class of
     # defect this script exists for.
@@ -220,10 +266,33 @@ def mode_compare_run(seed: int | None, timeout: int) -> int:
         ok &= good
         print(f"  [{'OK   ' if good else 'DIFF '}]  {key:<34} {wv} -> {gv}")
 
+    if st_want is not None and st_got is not None:
+        print()
+        print(f"  Stateless block (latency excluded -- machine-dependent):")
+        for key in sorted(k for k in st_want
+                          if not k.startswith("_") and k not in LATENCY_KEYS):
+            wv, gv = st_want[key], st_got.get(key)
+            good = wv == gv
+            ok &= good
+            print(f"  [{'OK   ' if good else 'DIFF '}]  {key:<34} {wv} -> {gv}")
+        for key in sorted(LATENCY_KEYS & set(st_want)):
+            print(f"  [ --  ]  {key:<34} {st_want[key]} -> "
+                  f"{st_got.get(key)}   (excluded)")
+    elif st_want is None:
+        print(f"\n  ⚠  no committed summary.json at seed-{expect_seed}; "
+              f"stateless block NOT checked.")
+    else:
+        print(f"\n  ⚠  the run wrote no summary.json; "
+              f"stateless block NOT checked.")
+
     print()
     print("=" * 72)
     if ok:
-        print(f"  check:agent-draws  OK -- reproduces seed-{expect_seed} exactly.")
+        print(f"  check:agent-draws  OK -- reproduces seed-{expect_seed} exactly")
+        print(f"                     (agent + stateless; latency excluded).")
+        print()
+        print("                     context_summary.json is NOT checked. It was")
+        print("                     written by a different invocation -- see #152.")
     else:
         print(f"  MISMATCH against seed-{expect_seed}.")
         print()
