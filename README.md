@@ -1269,7 +1269,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for branching model, PR process, and 
 
 Apache License 2.0 — see [`LICENSE`](./LICENSE).
 
-Copyright 2026 Kathiravan Sengodan.
+Copyright 2026 Sulci Labs Inc..
 
 U.S. Patent Application No. 64/018,452 (pending) covers the
 context-aware semantic caching algorithm. Apache 2.0 grants users

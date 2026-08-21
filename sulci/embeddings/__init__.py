@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 
 # sulci/embeddings/__init__.py
 # Embedding models are loaded dynamically by core.py.

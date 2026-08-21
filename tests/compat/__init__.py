@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 
 # tests/compat/__init__.py
 # Conformance test suite for the Backend and Embedder protocols (v0.4.0+).
