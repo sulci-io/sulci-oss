@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 """
 tests/test_session_store_injection.py — v0.5.0 Cache(session_store=, event_sink=) tests.
 

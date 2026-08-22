@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 """
 scripts/check_ci_test_coverage.py
 ──────────────────────────────────

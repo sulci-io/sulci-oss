@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 
 """
 sulci/config.py — persistent SDK config (D14 / v0.5.2)

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 
 """
 sulci/telemetry.py — fingerprint + helpers for the legacy emit pipe (v0.5.2)

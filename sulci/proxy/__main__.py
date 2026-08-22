@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Copyright 2026 Kathiravan Sengodan
+# Copyright 2026 Sulci Labs Inc.
 """Console-script entry point for ``sulci-proxy``."""
 from __future__ import annotations
 
