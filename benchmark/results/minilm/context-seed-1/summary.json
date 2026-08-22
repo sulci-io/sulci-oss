@@ -1,0 +1,40 @@
+{
+  "threshold": 0.85,
+  "total_queries": 6588,
+  "cache_hits": 4014,
+  "cache_misses": 2574,
+  "hit_rate": 0.6093,
+  "false_positives": 316,
+  "false_positive_rate": 0.0787,
+  "recall": 0.9995,
+  "false_hit_rate": 0.0062,
+  "precision": 0.9213,
+  "n_should_hit": 4000,
+  "n_should_miss": 2588,
+  "avg_similarity_hits": 0.9784,
+  "latency_hit_p50_ms": 87.92,
+  "latency_hit_p95_ms": 90.316,
+  "latency_miss_p50_ms": 87.978,
+  "latency_miss_p95_ms": 90.77,
+  "baseline_cost_usd": 32.94,
+  "actual_cost_usd": 12.87,
+  "saved_cost_usd": 20.07,
+  "cost_reduction_pct": 60.93,
+  "_provenance": {
+    "engine": "sulci-minilm",
+    "engine_slug": "minilm",
+    "engine_label": "sulci.Cache (SQLite + MiniLM)",
+    "generated_at": "2026-08-20T22:11:04+00:00",
+    "argv": "--use-sulci --fresh --no-sweep --context --seed 1 --out benchmark/results/minilm/context-seed-1",
+    "out_dir": "benchmark/results/minilm/context-seed-1",
+    "out_default": false,
+    "machine": {
+      "platform": "macOS-26.5.2-arm64-arm-64bit",
+      "processor": "arm",
+      "python": "3.12.13",
+      "torch": "2.11.0",
+      "torch_device": "mps",
+      "sentence_transformers": "5.4.1"
+    }
+  }
+}

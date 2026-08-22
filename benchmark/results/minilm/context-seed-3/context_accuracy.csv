@@ -1,0 +1,6 @@
+domain,sessions_tested,stateless_hit_rate,context_hit_rate,stateless_accuracy,context_accuracy,accuracy_improvement,stateless_avg_sim,context_avg_sim,stateless_latency_ms,context_latency_ms
+customer_support,25,0.84,1.0,1.0,1.0,0.0,0.7844,0.8083,4.82,8.41
+developer_qa,25,0.8,1.0,1.0,1.0,0.0,0.909,0.8779,4.374,8.644
+product_faq,25,0.8,0.8,1.0,1.0,0.0,0.9268,0.9038,4.776,9.442
+medical_information,25,1.0,1.0,0.5,0.4,-0.1,0.7309,0.713,4.706,8.306
+general_knowledge,25,0.76,1.0,0.95,1.0,0.05,0.8204,0.7634,4.996,7.93
