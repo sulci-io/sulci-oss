@@ -8,6 +8,70 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.1] — the two Qdrant cost levers become reachable
+
+`QdrantBackend.__init__` gains `on_disk` and `quantization`. Both were
+documented as Qdrant capabilities and neither was reachable from this class:
+`create_collection` was called with `VectorParams(size, distance)` and nothing
+else, so no caller could configure either without subclassing.
+
+`sulci-platform`'s cost modelling prices them and finds they are
+**interchangeable** at 4M vectors and **compound** when stacked — a configured
+12M-vector cluster costs less than half an unconfigured 4M one. Configuration
+dominates scale. That analysis described a collection nobody using this library
+could produce.
+
+### Added
+
+- **`on_disk: Optional[bool] = None`** — store vectors on disk rather than
+  resident in RAM.
+- **`quantization: Optional[Any] = None`** — `"scalar"`, `"binary"`, or a
+  qdrant-client quantization model forwarded untouched. `"product"` has no
+  shorthand on purpose: it needs a compression ratio this class has no
+  defensible default for, so the model must be passed explicitly.
+
+### ⛔ Both apply at COLLECTION CREATION ONLY
+
+The constructor is a no-op when the collection already exists, so passing
+either kwarg against a live collection does **not** reconfigure it. Nothing
+errors, the cache works, and the cluster is not what the operator believes.
+
+**This release refuses to be silent about that.** When the collection exists
+and its stored config differs from what was requested, a `RuntimeWarning` names
+the live value, the requested value, and the two ways to close the gap
+(`update_collection`, or drop and rebuild). A matching config warns nothing —
+a warning that fires on every restart is a warning people filter, and then it
+is absent on the day it matters.
+
+To actually apply either lever to an existing collection, reconfigure or
+rebuild it. A rebuild is cheap under a short TTL: the resident set is one
+period of traffic, and a cold cache costs an extra upstream call per distinct
+query, not a wrong answer.
+
+### ⚠️ An unrecognised shorthand raises
+
+`quantization="scaler"` is a `ValueError`, not a silent fall-through to "no
+quantization". A typo that disables the lever produces a green run, a working
+cache, and a cost line nobody can account for.
+
+### ❌ Corrected — a latency claim for a configuration nobody could reach
+
+`sulci/backends/qdrant.py`'s module docstring read *"Latency: <5 ms local,
+sub-ms with quantization"*. Quantization was not reachable from this
+constructor when that was written. The figure is withdrawn rather than
+re-stated: these kwargs make the configuration **available**, and its effect on
+latency on the shipped engine is **unmeasured**. Offload in particular buys its
+saving by serving vector reads from disk, and that is a latency cost, not a
+free one. Measure before enabling either in production.
+
+### Unchanged
+
+Omitting both kwargs passes nothing to `VectorParams` and leaves Qdrant's own
+defaults in force, so upgrading does not alter an existing deployment. There is
+a test asserting exactly this, because it is the property that makes the
+release safe to ship.
+
+
 ## [0.9.0] — 2026-08-13 — three new integration surfaces, and the figures that ship with them
 
 Sulci is reachable **seven** ways as of this release; three of them are new.
