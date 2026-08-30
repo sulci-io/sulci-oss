@@ -234,6 +234,10 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_qdrant_tenant_isolation.py -v --tb=short
 
+      - name: Test Qdrant cost levers
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_qdrant_cost_levers.py -v --tb=short
+
       - name: Conformance suite
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/compat/ sulci/tests/compat/ -v --tb=short

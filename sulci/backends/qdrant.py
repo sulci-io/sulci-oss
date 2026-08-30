@@ -7,11 +7,18 @@ Qdrant backend — best performance for production.
 
 Install  : pip install "sulci[qdrant]"
 Free tier: 1 GB cluster free forever at cloud.qdrant.io
-Latency  : <5 ms local, sub-ms with quantization
+Latency  : <5 ms local. `quantization` and `on_disk` change this and the
+           direction is not the same for both — quantization trades a little
+           recall for speed and memory, offload trades latency for cost.
+           ❌ This line previously read "sub-ms with quantization". Neither
+           lever was reachable from this constructor when that was written, so
+           the figure described a configuration nobody using this class could
+           produce. Both are reachable as of v0.9.1; the FIGURE is still
+           unmeasured and is deliberately not restated here.
 """
 from __future__ import annotations
-import time, uuid
-from typing import Optional
+import time, uuid, warnings
+from typing import Any, Optional
 
 
 class QdrantBackend:
@@ -21,13 +28,46 @@ class QdrantBackend:
 
     COLLECTION = "sulci"
 
+    #: Accepted shorthands for the `quantization` kwarg. A raw qdrant-client
+    #: quantization model may be passed instead; it is forwarded untouched.
+    #: `product` is deliberately absent — it needs a compression ratio this
+    #: class has no defensible default for, and inventing one would be worse
+    #: than making the caller pass the model.
+    _QUANTIZATION_SHORTHANDS = ("scalar", "binary")
+
     def __init__(
         self,
         db_path:   str           = "./sulci_qdrant",
         url:       Optional[str] = None,
         api_key:   Optional[str] = None,
         dimension: int           = 384,
+        *,
+        on_disk:      Optional[bool] = None,
+        quantization: Optional[Any]  = None,
     ):
+        """
+        on_disk
+            Store vectors on disk instead of resident in RAM. `None` (the
+            default) passes nothing and leaves Qdrant's own default in force,
+            so an existing deployment is unaffected by upgrading.
+
+        quantization
+            `"scalar"`, `"binary"`, or a qdrant-client quantization model
+            (`ScalarQuantization`, `BinaryQuantization`, `ProductQuantization`)
+            forwarded untouched. `None` leaves quantization off.
+
+        ⛔ **Both apply at COLLECTION CREATION ONLY.** This constructor is a
+        no-op when the collection already exists, so passing either kwarg
+        against a live collection does NOT reconfigure it. That is the
+        fail-open this class is most likely to produce, so it does not stay
+        silent: when the collection exists and the stored config differs from
+        what was asked for, a `RuntimeWarning` names both values. Reconfigure
+        with `update_collection` or rebuild the collection.
+
+        ⚠️ Neither lever's effect on latency has been measured on this engine.
+        They are exposed so the choice is available, not because a number is
+        being claimed for either.
+        """
         try:
             from qdrant_client import QdrantClient
             from qdrant_client.models import Distance, VectorParams
@@ -36,15 +76,106 @@ class QdrantBackend:
                 "qdrant-client not found.\n"
                 "Install with: pip install \"sulci[qdrant]\""
             )
+
+        quantization_config = self._resolve_quantization(quantization)
+
         self._client = (
             QdrantClient(url=url, api_key=api_key) if url
             else QdrantClient(path=db_path)
         )
+
+        # Only pass what the caller actually asked for. Passing on_disk=None
+        # and quantization_config=None is equivalent to omitting them today,
+        # but building the kwargs explicitly keeps that an intentional
+        # property of this call rather than a coincidence of qdrant-client's
+        # current defaults.
+        vector_kwargs: dict = {"size": dimension, "distance": Distance.COSINE}
+        if on_disk is not None:
+            vector_kwargs["on_disk"] = on_disk
+        if quantization_config is not None:
+            vector_kwargs["quantization_config"] = quantization_config
+
         existing = [c.name for c in self._client.get_collections().collections]
         if self.COLLECTION not in existing:
             self._client.create_collection(
                 collection_name = self.COLLECTION,
-                vectors_config  = VectorParams(size=dimension, distance=Distance.COSINE),
+                vectors_config  = VectorParams(**vector_kwargs),
+            )
+        elif on_disk is not None or quantization_config is not None:
+            self._warn_if_config_differs(on_disk, quantization_config)
+
+    @classmethod
+    def _resolve_quantization(cls, quantization: Optional[Any]) -> Optional[Any]:
+        """Map a shorthand to a qdrant-client model, or forward a model.
+
+        Raises ValueError on an unrecognised string. A typo'd shorthand must
+        not silently fall through to "no quantization" — that is a green run
+        with the lever off, which is indistinguishable from a green run with
+        the lever on unless something refuses.
+        """
+        if quantization is None:
+            return None
+        if not isinstance(quantization, str):
+            return quantization          # assume a qdrant-client model
+
+        key = quantization.strip().lower()
+        from qdrant_client.models import (
+            BinaryQuantization, BinaryQuantizationConfig,
+            ScalarQuantization, ScalarQuantizationConfig, ScalarType,
+        )
+        if key == "scalar":
+            # always_ram is left unset. Qdrant's default is what the cost
+            # modelling in sulci-platform's COGS.md priced; setting it here
+            # would change the memory profile the saving was measured against.
+            return ScalarQuantization(
+                scalar=ScalarQuantizationConfig(type=ScalarType.INT8)
+            )
+        if key == "binary":
+            return BinaryQuantization(binary=BinaryQuantizationConfig())
+        raise ValueError(
+            f"quantization={quantization!r} is not recognised. Pass one of "
+            f"{cls._QUANTIZATION_SHORTHANDS}, or a qdrant-client quantization "
+            f"model (e.g. ProductQuantization) to use anything else."
+        )
+
+    def _warn_if_config_differs(
+        self, on_disk: Optional[bool], quantization_config: Optional[Any]
+    ) -> None:
+        """Compare the live collection against what was asked for, and say so.
+
+        The collection already exists, so nothing here changes it. The only
+        useful thing this can do is refuse to be silent about the gap.
+        """
+        try:
+            params = self._client.get_collection(self.COLLECTION).config.params.vectors
+        except Exception:
+            # Named vectors, an older server, or a transient error. Do not
+            # guess; say that the check could not run rather than reporting a
+            # match it never made.
+            warnings.warn(
+                f"QdrantBackend: collection {self.COLLECTION!r} already exists "
+                f"and its vector config could not be read, so the requested "
+                f"on_disk/quantization settings were NOT verified and have "
+                f"NOT been applied.",
+                RuntimeWarning, stacklevel=3,
+            )
+            return
+
+        drift = []
+        if on_disk is not None and getattr(params, "on_disk", None) != on_disk:
+            drift.append(f"on_disk: live={getattr(params, 'on_disk', None)!r} requested={on_disk!r}")
+        if quantization_config is not None:
+            live_q = getattr(params, "quantization_config", None)
+            if live_q != quantization_config:
+                drift.append(f"quantization: live={live_q!r} requested={quantization_config!r}")
+
+        if drift:
+            warnings.warn(
+                f"QdrantBackend: collection {self.COLLECTION!r} already exists and was "
+                f"NOT reconfigured — create_collection is a no-op here. "
+                + "; ".join(drift)
+                + ". Apply with update_collection, or drop and rebuild the collection.",
+                RuntimeWarning, stacklevel=3,
             )
 
     def store(
