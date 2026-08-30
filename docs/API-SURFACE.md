@@ -1,6 +1,13 @@
 # Sulci — the measured public API surface
 
-**Measured:** 2026-07-24 against `sulci` **0.9.0**
+**Measured:** 2026-08-30 against `sulci` **0.9.1**
+
+📌 **Re-verified, not re-measured.** The surface was measured 2026-07-24 at
+version 0.9.0. On 2026-08-30 `check_api_surface.py --show` was run against both
+0.9.0 and 0.9.1 and the outputs diffed: **the only differing line is the version
+banner itself.** No method set, keyword-only parameter or `Cache.__init__`
+default changed. Re-dating this header without that diff would have been a
+restatement, which is the habit this file exists to end.
 **Method:** AST parse of `sulci/core.py`, `sulci/async_cache.py`,
 `sulci/integrations/langchain.py` and `sulci/integrations/llamaindex.py`. Not
 memory, not the README.
@@ -435,6 +442,28 @@ PR #114.
 
 ---
 
-*Measured 2026-07-24 at `sulci` 0.9.0; the `SulciLiteLLMCache`, `sulci-mcp` and
-`sulci-proxy` sections measured 2026-08-11. Re-run the command at the top
-before trusting any line of this.*
+*First measured 2026-07-24 at version 0.9.0; the `SulciLiteLLMCache`,
+`sulci-mcp` and `sulci-proxy` sections measured 2026-08-11; re-verified
+unchanged on 2026-08-30. Re-run the command at the top before trusting any line
+of this.*
+
+⚠️ **`sulci/backends/` is not in `check_api_surface.py`'s `SOURCES`, so backend
+constructors are unguarded.** v0.9.1 added two public keyword arguments to
+`QdrantBackend.__init__` (`on_disk`, `quantization`) and neither this file nor
+its checker observed it — correctly, since backends were never in scope, but the
+gap is worth stating rather than leaving implied. Same shape as the 2026-08-10
+note at the top: the adapter classes an integration user actually imports had no
+drift guard until someone noticed, and a backend a self-hosting user constructs
+by hand is in that category too. Widening `SOURCES` is its own change, not a
+line in a feature PR.
+
+⚠️ **Two checkers read the version out of this file with different patterns.**
+`check_api_surface.py` anchors on `**Measured:**` and the first **bolded**
+version on that line; `check_release_ready.py` matches every `` `sulci` ``
+followed by a version, anywhere in the file, and requires all of them to agree.
+A header that satisfies one can be invisible to the other — and
+`check_api_surface.py` **skips its version check entirely when its pattern finds
+nothing**, so that invisibility reads as a pass. Measured on 2026-08-30: a
+re-worded header made it report green while the doc still said 0.9.0. **If you
+edit the header, run both, and confirm the first still reports a version rather
+than `None`.**
