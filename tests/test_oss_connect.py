@@ -230,6 +230,48 @@ class TestTerminalErrors:
                     sdk_version="0.6.0",
                 )
 
+    # ⏱ The pre-deny gateway left the state `pending`, so this loop did not
+    # FAIL without the fix — it ran to the 15-minute deadline. A hang is worse
+    # than a red test (CI stalls, nobody reads it), so this one is bounded:
+    # pytest-timeout is already a dependency of this suite.
+    @pytest.mark.timeout(10)
+    def test_a_denied_code_stops_on_the_next_poll_not_at_the_deadline(self):
+        """sulci-platform item 99 — the gateway now DENIES the device code when
+        it refuses to authorize (the tenant is at its device-key cap, or the
+        Clerk user has no Sulci account at all). Before that, those refusals
+        left the state `pending` and this loop polled on to the 15-minute
+        deadline with nothing coming: measured on a local gateway 2026-09-22,
+        50 s of that wait before the walk was cut short by hand.
+
+        What this pins is the SDK half of that contract: one poll returning
+        403 access_denied ends the flow. No further request, and no sleeping
+        out the deadline."""
+        from sulci import oss_connect
+        posts = []
+
+        def _record(url, **kwargs):
+            posts.append(url)
+            if len(posts) == 1:
+                return _ok(200, _DEVICE_CODE_BODY)
+            return _ok(403, {"error": "access_denied",
+                             "message": "This account has as many connected "
+                                        "devices as OSS-Connect allows."})
+
+        slept = []
+        with patch("sulci.oss_connect.httpx.post", side_effect=_record), \
+             patch("sulci.oss_connect.time.sleep", side_effect=slept.append):
+            with pytest.raises(RuntimeError, match="access_denied"):
+                oss_connect.run_device_code_flow(
+                    gateway_base="https://api.sulci.io",
+                    sdk_version="0.6.0",
+                )
+
+        assert len(posts) == 2, posts          # device-code, then ONE poll
+        # One interval's wait at most — the gateway's own `interval`, not the
+        # 900-second `expires_in` the pre-deny behaviour ran out.
+        assert sum(slept) <= _DEVICE_CODE_BODY["interval"], slept
+        assert _DEVICE_CODE_BODY["expires_in"] >= 900
+
     def test_terminal_with_unparseable_body_uses_unknown(self):
         """If the gateway returns a terminal status but the body isn't
         parseable JSON, the error message should contain 'unknown'
