@@ -257,9 +257,18 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_qdrant_cost_levers.py -v --tb=short
 
+      # ⏱ --durations: MEASURED 2026-09-22, windows-latest/3.12 — this step
+      # took 455s on image 20260824.214.3 (run 33336605219) and 908s on
+      # 20260907.229.1 (run 35785883951), while Install, the model pre-fetch
+      # and every other step stayed put. `Test sessions` doubled the same way
+      # (182s → 388s). Same label, two-week-newer build; nothing in the repo
+      # between the runs touches either suite.
+      # ⚠️ CORRELATION, NOT CAUSE: one run per image, and Windows runners vary
+      # between allocations. These two steps now name their slowest tests so
+      # the next run answers the question instead of leaving a total behind.
       - name: Conformance suite
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/compat/ sulci/tests/compat/ -v --tb=short
+        run: pytest tests/compat/ sulci/tests/compat/ -v --tb=short --durations=10
 
       - name: Test core
         if: needs.changes.outputs.code == 'true'
@@ -273,9 +282,10 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_context.py -v --tb=short
 
+      # ⏱ --durations: see the note on "Conformance suite" above (182s → 388s).
       - name: Test sessions
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_sessions.py -v --tb=short
+        run: pytest tests/test_sessions.py -v --tb=short --durations=10
 
       - name: Test sinks
         if: needs.changes.outputs.code == 'true'
