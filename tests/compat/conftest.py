@@ -16,6 +16,8 @@ import tempfile
 from typing import Any, Optional, Type
 
 import pytest
+import socket
+from functools import lru_cache
 import uuid
 
 
@@ -28,6 +30,26 @@ import uuid
 # runs against the same Redis daemon. See sulci-io/sulci-oss#29.
 TEST_RUN_ID     = uuid.uuid4().hex[:8]
 TEST_KEY_PREFIX = f"sulci:test:{TEST_RUN_ID}:"
+
+
+_REDIS_PROBE_TIMEOUT = 0.25
+
+
+@lru_cache(maxsize=1)
+def _redis_available() -> bool:
+    """True if something accepts TCP on localhost:6379. Cached per process."""
+    for family, addr in ((socket.AF_INET, ("127.0.0.1", 6379)),
+                         (socket.AF_INET6, ("::1", 6379))):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.settimeout(_REDIS_PROBE_TIMEOUT)
+                if sock.connect_ex(addr) == 0:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 
 
 # -----------------------------------------------------------------------------
@@ -131,6 +153,12 @@ def _try_construct_backend(cls: Type) -> Optional[Any]:
         except ImportError:
             return None
         # Requires a running redis-server on localhost. Probe and skip if absent.
+        # ⛔ The probe itself is the cost on a host WITHOUT redis: constructing
+        # the client carries no connect timeout, and Windows waits ~21s per
+        # address for both ::1 and 127.0.0.1 — measured at ~48s PER TEST on
+        # 2026-09-23. Ask a bounded, cached socket first.
+        if not _redis_available():
+            return None
         try:
             instance = cls(key_prefix=TEST_KEY_PREFIX)
             instance._redis.ping()  # connection check

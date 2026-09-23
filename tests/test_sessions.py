@@ -2,6 +2,8 @@
 # Copyright 2026 Sulci Labs Inc.
 """tests/test_sessions.py — v0.5.0 session store tests."""
 import pytest
+import socket
+from functools import lru_cache
 from sulci.sessions import InMemorySessionStore, RedisSessionStore, SessionStore
 
 
@@ -112,11 +114,34 @@ class TestBackwardCompatShim:
 # RedisSessionStore tests — require Redis; skipped if unavailable
 # ═══════════════════════════════════════════════════════════════════════
 
+# ⛔ MEASURED 2026-09-23 (windows-latest/3.12, Tests #272): every test here
+# paid ~48s in SETUP — 384s for 16 tests — because the probe below had no
+# connect timeout and Windows waits out ~21s per address for BOTH ::1 and
+# 127.0.0.1, with nothing caching the answer. The same suite on ubuntu, where
+# `Install Redis (Linux only)` provides a server, takes 0.16s. See
+# sulci/tests/compat/conftest.py for the full measurement.
+@lru_cache(maxsize=1)
+def _redis_available() -> bool:
+    for family, addr in ((socket.AF_INET, ("127.0.0.1", 6379)),
+                         (socket.AF_INET6, ("::1", 6379))):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.25)
+                if sock.connect_ex(addr) == 0:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 @pytest.fixture
 def redis_client():
+    if not _redis_available():      # ~0.25s once, not ~48s per test
+        pytest.skip("redis-server not running on localhost:6379")
     try:
         import redis
-        client = redis.Redis(host="localhost", port=6379, db=15, decode_responses=True)
+        client = redis.Redis(host="localhost", port=6379, db=15, decode_responses=True,
+                             socket_connect_timeout=0.25, socket_timeout=0.25)
         client.ping()
         client.flushdb()
         yield client

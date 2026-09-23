@@ -21,6 +21,8 @@ conftest.py without modifying this file.
 """
 from __future__ import annotations
 from typing import Any, Optional, Callable, List, Tuple
+import socket
+from functools import lru_cache
 
 import pytest
 
@@ -34,14 +36,55 @@ def _make_in_memory_session() -> Optional[Any]:
     return InMemorySessionStore()
 
 
+# ── Is there a redis-server on localhost? ───────────────────────────────────
+# ⛔ MEASURED 2026-09-23, windows-latest/3.12 (run 35860…, Tests #272): EVERY
+# Redis-backed test paid ~48s in SETUP — 49.21s, 48.94s, 48.92s … ten of them
+# in `slowest 10 durations`, 19 across the two suites. The conformance suite
+# took 908s and test_sessions.py 384s. The SAME suites on ubuntu-latest/3.12:
+# 11.66s and 0.16s, because `Install Redis (Linux only)` gives Linux a server.
+#
+# The cost is the PROBE, not the tests. `redis.Redis(host="localhost", ...)`
+# carries no socket_connect_timeout, so on a host with no Redis the connect
+# waits out the OS default — on Windows ~21s per address, and `localhost`
+# resolves to BOTH ::1 and 127.0.0.1. ~42-48s, paid once PER TEST because
+# nothing cached the answer.
+#
+# ⚠️ This also explains the exact doubling recorded in sulci-platform item 107
+# (455s → 908s, 182s → 388s, while every other step held): a per-test CONSTANT
+# doubling scales both suites by the same factor. A runner image that began
+# trying both address families instead of one would do precisely that.
+#
+# Probe once, with a bound, and skip in milliseconds.
+_REDIS_PROBE_TIMEOUT = 0.25
+
+
+@lru_cache(maxsize=1)
+def _redis_available() -> bool:
+    """True if something accepts TCP on localhost:6379. Cached per process."""
+    for family, addr in ((socket.AF_INET, ("127.0.0.1", 6379)),
+                         (socket.AF_INET6, ("::1", 6379))):
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as s:
+                s.settimeout(_REDIS_PROBE_TIMEOUT)
+                if s.connect_ex(addr) == 0:
+                    return True
+        except OSError:
+            continue
+    return False
+
+
 def _make_redis_session() -> Optional[Any]:
+    if not _redis_available():          # ~0.25s once, not ~48s per test
+        return None
     try:
         import redis
     except ImportError:
         return None
     try:
         client = redis.Redis(
-            host="localhost", port=6379, db=15, decode_responses=True
+            host="localhost", port=6379, db=15, decode_responses=True,
+            socket_connect_timeout=_REDIS_PROBE_TIMEOUT,
+            socket_timeout=_REDIS_PROBE_TIMEOUT,
         )
         client.ping()
         client.flushdb()
@@ -103,12 +146,16 @@ def _make_telemetry_sink() -> Optional[Any]:
 
 
 def _make_redis_stream_sink() -> Optional[Any]:
+    if not _redis_available():          # ~0.25s once, not ~48s per test
+        return None
     try:
         import redis
     except ImportError:
         return None
     try:
-        client = redis.Redis(host="localhost", port=6379, db=15)
+        client = redis.Redis(host="localhost", port=6379, db=15,
+                             socket_connect_timeout=_REDIS_PROBE_TIMEOUT,
+                             socket_timeout=_REDIS_PROBE_TIMEOUT)
         client.ping()
         # Defensive setup clean — drop the test stream if a prior run
         # left entries behind. Redis stream keys persist; without this,
