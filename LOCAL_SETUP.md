@@ -5,10 +5,10 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 ---
 
 > **Fresh-machine run-through (2026-09-25, M2 MacBook Air, macOS, Python 3.12, v0.9.1):**
-> Steps 1–8.5 were followed literally on a clean `~/code` and corrected where they
-> broke; every command in those steps has been run as now written.
-> Steps 9–13 and the reference sections below them have **not** yet been
-> re-verified.
+> Steps 1–8.5 and 11–13 were followed literally on a clean `~/code` and
+> corrected where they broke; every command in those steps has been run as now
+> written. Steps 9–10 (gateway / cloud) and the reference sections from
+> *Troubleshooting* onward have **not** yet been re-verified.
 
 ## Current state — measured 2026-07-22
 
@@ -37,6 +37,12 @@ These are not hypothetical; each has cost real debugging time.
   quotes, because zsh treats `[...]` as a glob. Same reason
   `grep -r --include=*.jsx` fails with "no matches found" — write
   `--include='*.jsx'`.
+- **zsh passes `# comments` to the command unless told otherwise.** Many code
+  blocks here end lines with `# explanation`. Interactive zsh does not treat `#`
+  as a comment by default, so pasting `which python   # should show …` hands
+  `#`, `should`, `show` to `which` as arguments (`gh` fails with
+  `accepts at most 1 arg(s), received 9`). Fix once:
+  `echo 'setopt interactivecomments' >> ~/.zshrc`, then open a new tab.
 - **`find` may be aliased to `fd`.** If `find src -type f` fails with a `--type`
   error, that is the alias. Use `\find`, and likewise `\cat` / `\ls` if `bat` /
   `eza` are aliased.
@@ -1002,7 +1008,7 @@ python -c "from sulci.integrations.langchain import SulciCache; print('✅ Impor
 
 ```bash
 python -m pytest tests/test_integrations_langchain.py -v
-# Expected: 27 passed
+# Expected: 27 passed  (verified 2026-09-25, ~18 s with HF_HUB_OFFLINE=1)
 ```
 
 ### Run the LangChain smoke test
@@ -1028,7 +1034,7 @@ python -c "from sulci.integrations.llamaindex import SulciCacheLLM; print('✅ I
 
 ```bash
 python -m pytest tests/test_integrations_llamaindex.py -v
-# Expected: 29 passed
+# Expected: 29 passed  (verified 2026-09-25, ~12 s with HF_HUB_OFFLINE=1)
 ```
 
 ### Run the LlamaIndex smoke test
@@ -1054,7 +1060,7 @@ python -c "from sulci import AsyncCache; print('✅ Import OK')"
 
 ```bash
 python -m pytest tests/test_async_cache.py -v
-# Expected: 25 passed
+# Expected: 40 passed  (verified 2026-09-25, ~14 s with HF_HUB_OFFLINE=1)
 ```
 
 ### Run the AsyncCache smoke test
