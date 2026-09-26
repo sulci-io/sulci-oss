@@ -4,11 +4,17 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 
 ---
 
+> **Fresh-machine run-through (2026-09-25, M2 MacBook Air, macOS, Python 3.12, v0.9.1):**
+> Steps 1–8.5 were followed literally on a clean `~/code` and corrected where they
+> broke; every command in those steps has been run as now written.
+> Steps 9–13 and the reference sections below them have **not** yet been
+> re-verified.
+
 ## Current state — measured 2026-07-22
 
 | Fact | Value | Re-measure |
 |---|---|---|
-| Version | **0.8.3** (2026-07-24) | `grep '^version' pyproject.toml` |
+| Version | **0.9.1** (re-measured 2026-09-25; CHANGELOG entry undated) | `grep '^version' pyproject.toml` |
 | Public methods on `Cache` | **8** | see [`docs/API-SURFACE.md`](docs/API-SURFACE.md) |
 | Default backend | `"chroma"` | ditto — **not** sqlite |
 | Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
@@ -50,9 +56,27 @@ These are not hypothetical; each has cost real debugging time.
 
 ## Requirements
 
-- Python **3.9, 3.10, 3.11, or 3.12** (all four are tested in CI)
+- Python **3.9, 3.10, 3.11, or 3.12** — all four are tested in CI; nothing
+  newer is. **Use 3.12 for local development.** The `mcp` and `litellm` extras
+  need 3.10+, so 3.9 cannot run the whole suite.
 - `git`
-- A terminal with `pip` available
+
+**macOS: your default `python3` is probably too new.** Homebrew's `python3`
+tracks the latest release (3.14 as of 2026-09), and a stock Mac has no `python`
+command at all. Check, and install 3.12 alongside it if needed:
+
+```bash
+python3 --version              # 3.13 or newer → install 3.12 below
+brew install python@3.12       # provides the python3.12 command
+python3.12 --version           # should print Python 3.12.x
+```
+
+**direnv users:** the repo ships an `.envrc` that activates `.venv`. Until
+Step 2 creates the venv, entering the directory prints
+`.envrc:1: .venv/bin/activate: No such file or directory` (or, on a machine
+that has never allowed it, `.envrc is blocked`). Both are expected — carry on
+and run `direnv allow` at the end of Step 2. If you don't use direnv, ignore
+the file.
 
 ---
 
@@ -72,9 +96,12 @@ to `main` via PR.
 
 Always use a virtual environment. Never install Sulci dependencies into your system Python.
 
+Create the venv with an explicit 3.12 interpreter. On macOS, `python` does
+not exist outside a venv, and plain `python3` may be 3.13+ (see Requirements).
+
 ```bash
-# create
-python -m venv .venv
+# create — name the interpreter explicitly
+python3.12 -m venv .venv
 
 # activate — macOS / Linux
 source .venv/bin/activate
@@ -84,8 +111,19 @@ source .venv/bin/activate
 
 # confirm you're inside the venv
 which python        # should show .venv/bin/python
-python --version    # should be 3.9, 3.10, 3.11, or 3.12  (all four are tested in CI)
+python --version    # should be 3.12 (3.9–3.11 also work; 3.13+ is untested)
 ```
+
+Inside an activated venv, `python` and `pip` point at the venv, so the bare
+`python` / `pip` commands in the rest of this guide work as written.
+
+**direnv users:** run `direnv allow` now. From here on the venv activates
+automatically whenever you `cd` into the repo.
+
+**Every new terminal:** all commands in this guide run from the repo root with
+the venv active. In a fresh tab, first run `cd sulci-oss` (direnv then
+activates the venv) or `cd sulci-oss && source .venv/bin/activate`. If you see
+`command not found: pip` or `python`, you skipped this.
 
 ---
 
@@ -93,41 +131,45 @@ python --version    # should be 3.9, 3.10, 3.11, or 3.12  (all four are tested i
 
 Install in editable mode (`-e`) so any changes you make to `sulci-oss/` source code are reflected immediately without reinstalling.
 
+**New developers: run these two commands and move on to Step 4.**
+
 ```bash
-# base install — editable
-pip install -e .
-
-# with the SQLite backend (zero infra, fully offline — recommended for local dev)
-pip install -e ".[sqlite]"
-
-# with the LangChain integration (langchain-core only, not full langchain)
-pip install -e ".[sqlite,langchain]"
-
-# with the LlamaIndex integration
-pip install -e ".[sqlite,llamaindex]"
-
-# AsyncCache is included in the base install — no extra required
-# pip install -e ".[sqlite]"  ← AsyncCache works with any backend
-
-# with ChromaDB
-pip install -e ".[chroma]"
-
-# with FAISS
-pip install -e ".[faiss]"
-
-# multiple backends at once
-pip install -e ".[sqlite,chroma,faiss]"
-
-# full dev setup — recommended
-pip install -e ".[sqlite,langchain,llamaindex,dev]"
+pip install --upgrade pip        # the venv's bundled pip is often stale
+pip install -e ".[sqlite,redis,qdrant,langchain,llamaindex,mcp,litellm,proxy,dev]" pytest-timeout
 ```
+
+This is the full dev setup, matching what CI installs for the test suite.
+**Don't trim this list.** Some tests fail rather than skip when an extra is
+missing: without `mcp` or `litellm`, `pytest tests/` stops at collection with
+two errors; without `redis`, three `TestRedisStreamSink` tests fail. The
+`redis` extra is needed even though those tests mock the Redis server.
+`pytest-timeout` backs the `@pytest.mark.timeout` markers in the tests.
+
+The install pulls in PyTorch via `sentence-transformers`, so expect a few
+minutes; the resulting `.venv` is about 1.4 GB (measured on an M2 Mac,
+Python 3.12, 2026-09-25). Step 4's import check needs at least the `langchain` and
+`llamaindex` extras.
 
 > **zsh users:** always wrap extras in quotes — `".[sqlite]"` not `.[sqlite]`.
 > Without quotes, zsh treats the brackets as a glob pattern and throws `no matches found`.
 
-> **Why httpx?** The `test_connect.py` and `test_cloud_backend.py` suites mock
-> `httpx.post` to test telemetry and cloud wiring — httpx must be installed even
-> though it is only used in tests.
+### Optional extras (reference — not needed to get started)
+
+Add any of these later with `pip install -e ".[name]"`. Combine several in one
+set of brackets, e.g. `".[sqlite,chroma,faiss]"`.
+
+| Extra | Adds |
+|---|---|
+| `sqlite` | local SQLite backend — zero infra, fully offline |
+| `langchain` | LangChain adapter (`langchain-core` only, not full langchain) |
+| `llamaindex` | LlamaIndex wrapper |
+| `chroma` / `faiss` / `qdrant` / `redis` / `milvus` | other vector backends |
+| `openai` | OpenAI embeddings |
+| `mcp` / `litellm` / `proxy` | v0.9.0 integration surfaces — **Python 3.10+ only** |
+| `dev` | pytest, coverage, build/twine |
+
+`AsyncCache` is part of the base install and works with any backend — no extra
+required. `httpx` is a core dependency (since v0.6.3), so it is always installed.
 
 ---
 
@@ -172,35 +214,53 @@ pip install -e ".[llamaindex]"
 Always use `python -m pytest` rather than bare `pytest` to avoid PATH issues.
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/ -v -rs
 ```
 
-All **473 tests** should be collected across 18 test files (skipped backend tests if optional deps not installed):
+`-rs` prints a summary of *why* each test skipped at the end. Don't pipe the
+run through `| tail`: `tail` shows nothing until pytest exits, which looks
+exactly like a hang. To keep a log and still watch progress, use
+`python -m pytest tests/ -v -rs 2>&1 | tee /tmp/sulci-tests.log`.
+
+### Expected result
+
+Last measured 2026-09-25 (v0.9.1, M2 Mac, Python 3.12, full Step 3 install,
+no Redis or Qdrant server running):
 
 ```
-tests/test_core.py                    — 52 tests  (cache.get/set, thresholds, TTL, stats incl. raw-get/set, personalization, CacheEvent.plan v0.5.6, instance injection v0.6.0, cloud-transport no-local-embedder v0.6.1)
-tests/test_context.py                 — 35 tests  (ContextWindow, SessionStore, integration)
-tests/test_backends.py                —  9 tests  (per-backend contract + persistence; skipped if dep missing)
-tests/test_connect.py                 — 40 tests  (sulci.connect(), _emit(), _flush(), Cache telemetry flag,
-                                                   v0.5.3: TestDeviceCodeFlow integration)
-                                                   requires httpx
-tests/test_oss_connect.py             — 19 tests  (RFC 8628 device-code client; v0.5.3, requires httpx)
-tests/test_cloud_backend.py           — 45 tests  (SulciCloudBackend transport, remote_get/remote_set, canonical gateway paths, cloud-transport short-circuit; rewritten in v0.6.0)
-                                                   requires httpx
-tests/test_integrations_langchain.py  — 27 tests  (SulciCache LangChain adapter)     (v0.3.3)
-tests/test_integrations_llamaindex.py — 29 tests  (SulciCacheLLM LlamaIndex wrapper) (v0.3.6)
-                                                   requires llama-index-core
-tests/test_async_cache.py             — 37 tests  (AsyncCache wrapper + partition/threshold parity)  (v0.3.7+)
-tests/test_qdrant_tenant_isolation.py — 11 tests  (tenant_id partition isolation)    (v0.4.0)
-tests/test_sessions.py                — 24 tests  (SessionStore protocol)            (v0.5.0)
-tests/test_sinks.py                   — 20 tests  (EventSink + plan scrub)           (v0.5.0/v0.5.6)
-tests/test_session_store_injection.py — 12 tests  (session_store=, event_sink= wiring) (v0.5.0)
-tests/test_config.py                  — 20 tests  (~/.sulci/config persistence)      (v0.5.2)
-tests/test_telemetry.py               — 28 tests  (fingerprint + wire shape)         (v0.5.2/v0.5.4)
-tests/test_nudge.py                   — 13 tests  (100-query nudge in stats())       (v0.5.2)
-tests/test_telemetry_gateway_override.py — 6 tests (SULCI_GATEWAY redirect)          (v0.5.5)
-tests/compat/                         — 67 tests  (cross-backend conformance suite; ~21 skip without optional deps)
+689 passed, 41 skipped, 0 failed
 ```
+
+Skips are expected: they're backends whose packages you didn't install
+(chroma, faiss, …) or tests that need a live server. Re-measure the current
+count with `python -m pytest tests/ --collect-only -q | tail -1`.
+
+**Any failure or collection error on a fresh setup is a real problem** — most
+often a missing extra (see the warning in Step 3).
+
+### Runtime and the network
+
+The suite loads the embedding model (`all-MiniLM-L6-v2`) many times, and by
+default each load checks Hugging Face for updates. Runtime therefore depends
+on your connection, not your CPU:
+
+- normal connection: about 7 minutes
+- slow connection: much longer — the full suite took **72 minutes** on in-flight
+  Wi-Fi at ~3% CPU, which looks like a hang but isn't
+
+The **first** run must be online, to download the model (~90 MB, cached in
+`~/.cache/huggingface`). After that, run offline and the network stops mattering:
+
+```bash
+HF_HUB_OFFLINE=1 python -m pytest tests/ -v -rs
+```
+
+On the same slow connection, `tests/test_async_cache.py` dropped from ~30 s
+per test to 40 tests in 17 s with `HF_HUB_OFFLINE=1`.
+
+If one test sits for several minutes at near-0% CPU **with**
+`HF_HUB_OFFLINE=1` set, see the Apple Silicon (MPS) note in the gotchas
+section and use the per-file runner.
 
 ### Targeted test runs
 
@@ -252,7 +312,7 @@ python -m pytest tests/ -v --cov=sulci --cov-report=term-missing
 make test               # core pytest suite (excludes integrations)
 make test-integrations  # LangChain + LlamaIndex integration tests
 make test-async         # AsyncCache tests only
-make test-all           # full suite (187 tests)
+make test-all           # full suite
 make test-cov           # full suite with coverage report
 make verify             # smoke + test-all (run before committing)
 ```
@@ -260,6 +320,11 @@ make verify             # smoke + test-all (run before committing)
 ---
 
 ## Step 6 — Run the Examples
+
+Every example below except `anthropic_example.py` runs fully offline with no
+API keys set (mock LLM), about 7–11 s each — verified
+2026-09-25 on an M2 with `HF_HUB_OFFLINE=1`. Each exits 0 and ends with a
+stats summary (hit rate, cost saved, LLM calls made).
 
 ### No API key required
 
@@ -311,16 +376,25 @@ Priority: OpenAI → Anthropic → mock. To force Anthropic: `unset OPENAI_API_K
 ## Step 7 — Run the Benchmark
 
 ```bash
-# fast run — stateless      # TF-IDF, fast; not the shipped engine, do not cite
-python3 benchmark/run.py --no-sweep --queries 1000
+# regression check — TF-IDF path vs benchmark/baseline.json (~19 s on an M2, no network)
+python scripts/verify_benchmark.py        # or: make benchmark-verify
 
-# fast run — context-aware  # TF-IDF, fast; not the shipped engine, do not cite
-python3 benchmark/run.py --no-sweep --queries 1000 --context
+# fast exploratory runs — TF-IDF, ~10 s each; not the shipped engine, do not cite.
+# Note the --out: see the warning below.
+python3 benchmark/run.py --no-sweep --queries 1000 --out /tmp/sulci-bench-q1000
+python3 benchmark/run.py --no-sweep --queries 1000 --context --out /tmp/sulci-bench-q1000
 
 # THE CANONICAL RUN — shipped engine (MiniLM), stateless + context (~10 min)
-pip install -e ".[sqlite]"
+# (the sqlite extra it needs is already installed if you followed Step 3)
 python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 ```
+
+⚠️ **Give non-default runs their own `--out`.** Without it, a `--queries 1000`
+run writes to `benchmark/results/tfidf/`, the same directory the regression
+check uses at the default 5000 queries. The next `verify_benchmark.py` then
+refuses to overwrite it (`VARIANT COLLISION … --queries: on disk '1000'`) and
+exits with code 2 — `make checkin` included. If that has already happened,
+`rm -rf benchmark/results/tfidf` (nothing in it is tracked by git) and re-run.
 
 ⚠️ **`--use-sulci` is opt-in and everything above it measures a built-in
 TF-IDF engine that ships in no product.** It is kept because a 4-second
@@ -338,7 +412,7 @@ is used verbatim. The `.gitignore` in that directory excludes `*.json` and
 `None`; `run.py:146` reseeds only when the value is not `None`, leaving the
 module RNG at the `random.seed(42)` from `:86`. Running without `--seed` is
 therefore deterministic and reproduces `baseline.json` exactly —
-`verify_benchmark.py` confirms 17 metrics at Δ=0.0000.
+`scripts/verify_benchmark.py` confirms 17 metrics at Δ=0.0000.
 
 📌 The four committed draws behind every published figure are at
 `benchmark/results/minilm/seed-{1,2,3,42}`.
@@ -358,6 +432,7 @@ therefore deterministic and reproduces `baseline.json` exactly —
 | `--seed N`              | 42                  | Corpus RNG seed. `--seed 1 2 3 42` is what every published figure uses. |
 | `--agent`               | off                 | Agent-workload pass: 50 sessions x 200 dispatches |
 | `--fresh`               | off                 | Delete existing benchmark DBs first. Without it the cache is warm from the previous run. |
+| `--allow-overwrite`     | off                 | Replace a results directory that holds a run at a different calibration (e.g. other `--queries`). |
 
 ---
 
@@ -365,6 +440,13 @@ therefore deterministic and reproduces `baseline.json` exactly —
 
 Smoke test scripts live at the repo root. Run individually or together via
 `make smoke` to confirm the full stack is working end-to-end.
+
+Measured 2026-09-25 on an M2 with `HF_HUB_OFFLINE=1`: `make smoke` runs all
+four scripts in **~33 s** and exits 0. **Read the output, not just the exit
+code** — the LangChain and LlamaIndex scripts also exit 0 when they *skip*
+because a package is missing. A full run prints four section headers (Core,
+LangChain, LlamaIndex, AsyncCache), no `✗`, and no "skip" lines:
+`grep -niE 'skip|✗' <log>` should print nothing.
 
 ```bash
 # All smoke tests in sequence (recommended)
@@ -398,6 +480,8 @@ make smoke-core         # core smoke test only (smoke_test.py)
 make smoke-langchain    # LangChain smoke test only (smoke_test_langchain.py)
 make smoke-llamaindex   # LlamaIndex smoke test only (smoke_test_llamaindex.py)
 make smoke-async        # AsyncCache smoke test only (smoke_test_async.py)
+make smoke-fast         # all smoke tests with SENTENCE_TRANSFORMERS_DEVICE=cpu
+                        # (Apple Silicon: sidesteps MPS if `make smoke` stalls)
 ```
 
 ---
@@ -431,8 +515,27 @@ make verify-integration-examples  # full 4-scenario LLM-provider matrix for lang
                                   # + llamaindex (~10-15 min, requires both API keys,
                                   # ~$0.10-0.20 in real LLM calls per run)
 make benchmark-verify           # run TF-IDF benchmark, verify against baseline.json (~15s)
-make checkin                    # smoke + test-per-file + examples + benchmark-verify (pre-PR check)
+make checkin                    # pre-PR check: smoke + test-per-file + examples + benchmark-verify
+                                #   + check-ci-coverage + check-agent-draws
+make checkin-fast               # same, but smoke-fast (CPU) — the Makefile's recommendation on macOS
+                                #   (rationale: docs/architecture/adrs/0002-smoke-fast-cpu-mode.md)
 ```
+
+**`make checkin` needs two more packages than Step 3 installs.** The examples
+runner includes `examples/agent_example_langgraph.py` and
+`examples/agent_example_crewai.py`, which need frameworks that are in no sulci
+extra. Without them, each exits 1 in 0.1 s and the check-in fails
+(`TOTAL: 14/16 passed`, make exit 2). Install them once:
+
+```bash
+pip install langgraph langchain-anthropic crewai
+```
+
+**On an M-series Mac, use `make checkin-fast`.** Before either target, start a
+local Redis if you want the Redis-backed paths covered — see the
+*Redis-dependent tests* note at the end of this guide. Without one, those
+tests skip and the run still passes. Set `HF_HUB_OFFLINE=1` (Step 5) to keep
+the runtime independent of your connection.
 
 ### When to use which
 
@@ -442,7 +545,7 @@ make checkin                    # smoke + test-per-file + examples + benchmark-v
 | `examples/*.py` or `smoke_test*.py` | `make examples` |
 | `examples/langchain_example.py` or `examples/llamaindex_example.py` | `make verify-integration-examples` |
 | `benchmark/` files or anything that touches headline numbers | `make benchmark-verify` |
-| Anything before opening a PR | `make checkin` |
+| Anything before opening a PR | `make checkin` (`make checkin-fast` on macOS) |
 
 ### Direct script invocation
 
@@ -467,9 +570,11 @@ python scripts/run_tests_per_file.py \
 
 ### What `make checkin` produces
 
-A successful run prints a summary like
-`TOTAL: 285 passed, 0 failed, 0 errors, 38 skipped`, then the examples
-summary `TOTAL: 12/12 passed`, then a final banner. If anything fails,
+A successful run prints a per-file test summary, then the examples summary,
+then a final `✓ checkin verification complete` banner. Measured 2026-09-25
+(v0.9.1, M2, `make checkin-fast`, `HF_HUB_OFFLINE=1`, full Step 3 install, no
+Redis): tests `TOTAL: 714 passed, 0 failed, 0 errors, 59 skipped`; examples
+`TOTAL: 16` files (all 16 pass only with the agent packages above). If anything fails,
 the failure log path is printed in the per-file summary table so you
 can `cat` the relevant log rather than re-running with extra flags.
 
