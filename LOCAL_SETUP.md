@@ -531,10 +531,25 @@ make checkin-fast               # same, but smoke-fast (CPU) — the Makefile's 
 runner includes `examples/agent_example_langgraph.py` and
 `examples/agent_example_crewai.py`, which need frameworks that are in no sulci
 extra. Without them, each exits 1 in 0.1 s and the check-in fails
-(`TOTAL: 14/16 passed`, make exit 2). Install them once:
+(`TOTAL: 14/16 passed`, make exit 2). Install them once — **both lines, in
+this order**:
 
 ```bash
 pip install langgraph langchain-anthropic crewai
+pip install "mcp>=2.0.0"
+```
+
+The second line is not optional. `crewai` pins `mcp~=1.28.1` and silently
+downgrades the `mcp` 2.x that sulci's `mcp` extra requires, which brings back
+the `tests/test_integrations_mcp.py` collection error from Step 5. `pip check`
+does **not** catch that (it ignores extras). Re-installing `mcp>=2.0.0` makes
+pip print `crewai 1.15.22 requires mcp~=1.28.1 … incompatible`, and `pip check`
+repeats it — **both are expected**: the crewai example only needs crewai's core
+and runs fine against mcp 2.x (verified 2026-09-27: both agent examples exit 0,
+and `test_integrations_mcp.py` passes 22/22). Confirm with:
+
+```bash
+python -m pytest tests/test_integrations_mcp.py -q
 ```
 
 **On an M-series Mac, use `make checkin-fast`.** Before either target, start a
@@ -577,10 +592,19 @@ python scripts/run_tests_per_file.py \
 ### What `make checkin` produces
 
 A successful run prints a per-file test summary, then the examples summary,
-then a final `✓ checkin verification complete` banner. Measured 2026-09-25
-(v0.9.1, M2, `make checkin-fast`, `HF_HUB_OFFLINE=1`, full Step 3 install, no
-Redis): tests `TOTAL: 714 passed, 0 failed, 0 errors, 59 skipped`; examples
-`TOTAL: 16` files (all 16 pass only with the agent packages above). If anything fails,
+then a final `✓ checkin verification complete` banner (`checkin-fast` prints
+`✓ checkin-fast verification complete (CPU smoke mode)`). Measured 2026-09-28
+(v0.9.1, M2, `make checkin-fast`, `HF_HUB_OFFLINE=1`, full Step 3 install plus
+the agent packages and mcp re-pin above, no Redis), **~5 min end to end**,
+make exit 0:
+
+```
+TOTAL: 719 passed, 0 failed, 0 errors, 54 skipped     (per-file tests)
+TOTAL: 16/16 passed                                    (examples)
+```
+
+The test counts differ slightly from Step 5 because crewai pulls in `chromadb`,
+which un-skips the Chroma backend tests. If anything fails,
 the failure log path is printed in the per-file summary table so you
 can `cat` the relevant log rather than re-running with extra flags.
 
