@@ -8,8 +8,10 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 > Steps 1–8.5 and 11–13 were followed literally on a clean `~/code` and
 > corrected where they broke; every command in those steps has been run as now
 > written. The reference sections from *Troubleshooting* onward were checked
-> against the repo on 2026-09-30. Steps 9–10 (gateway / cloud) have **not** yet
-> been re-verified.
+> against the repo on 2026-09-30. In Steps 9–10, every keyless snippet and test
+> command was run on 2026-10-01; the parts that need a live gateway and a key
+> (`connect()` with a real key, `prompt=True`, the end-to-end staging smoke)
+> are optional checks for account holders and have **not** been re-run.
 
 ## Current state — re-measured 2026-09-30
 
@@ -276,6 +278,15 @@ HF_HUB_OFFLINE=1 python -m pytest tests/ -v -rs
 
 Consider adding `export HF_HUB_OFFLINE=1` to your shell profile once the model
 is cached; unset it only when you need a model you haven't downloaded yet.
+
+**For a fully offline run, also set `LITELLM_LOCAL_MODEL_COST_MAP=True`.**
+Importing `litellm` (the `litellm` extra) otherwise downloads its model price
+list from `raw.githubusercontent.com` during test collection; with this set it
+uses the copy bundled in the package.
+
+```bash
+export HF_HUB_OFFLINE=1 LITELLM_LOCAL_MODEL_COST_MAP=True
+```
 
 If one test sits for several minutes at near-0% CPU **with**
 `HF_HUB_OFFLINE=1` set, see the Apple Silicon (MPS) note in the gotchas
@@ -641,6 +652,66 @@ If you add a new dev-tooling script:
 `sulci.connect()` is the opt-in telemetry gate. The default state
 is **silent** — nothing is sent until you explicitly call `connect()`.
 
+**You don't need a Sulci account or API key to develop or test sulci-oss.**
+Every test of the connected-OSS surface (`connect()`, telemetry, the device-code
+flow, `SulciCloudBackend`) runs against mocks: `tests/conftest.py` strips
+`SULCI_API_KEY` from the environment, each test patches the network and the
+`~/.sulci/config` lookup, and CI injects no Sulci key. The keyless snippets
+below are safe the same way.
+
+> **Known gap (2026-10-01):** a background telemetry flush thread started by one
+> test keeps running for the rest of the session, and can fire during a later
+> test that has telemetry enabled but hasn't yet patched `httpx.post`. That
+> sends a real POST to `https://api.sulci.io/v1/telemetry` carrying a fake test
+> key. In guarded full-suite runs it appeared once, with the flush interval
+> forced down to 50 ms; at the normal 30 s interval the window is tiny, but not
+> zero. Until the suite blocks real HTTP and stops the thread centrally, the only
+> local guarantee is running the tests with no network connection (telemetry
+> failures are swallowed, so results are unaffected). Don't set `SULCI_GATEWAY`
+> for the test run as a workaround: two tests assert the production default URL
+> and fail.
+
+The **live** checks in this step (`connect()` with a real key, `prompt=True`, the
+staging smoke) are optional. They're for account holders who have minted a key,
+by signing up or through the device-code flow, and want to exercise the engine
+against a real gateway.
+
+The repo has exactly **one** automated live check: PROBE 2 in
+`tests/integration/flows/flow_2_routemismatch.py`. `test_flow_contracts.py` runs
+that script as part of a normal `pytest tests/`, and PROBE 2 activates only when
+both `SULCI_LIVE_GATEWAY` and `SULCI_LIVE_KEY` are set. It has no default URL: it
+calls whatever you set. If you enable it, use staging and a staging key, and set
+the variables for that one run only, not in your shell profile:
+
+```bash
+SULCI_LIVE_GATEWAY=https://staging.api.sulci.io SULCI_LIVE_KEY=sk-sulci-<staging-key> \
+  python tests/integration/flows/flow_2_routemismatch.py
+```
+
+(The six flow scripts run as subprocesses; they were checked separately on
+2026-10-01 and make no network calls unless PROBE 2 is enabled.)
+
+> ⚠️ **Never test against production.** `https://api.sulci.io` is the
+> production gateway, and it is the SDK's default. Before running anything in
+> Steps 9–10 that calls `connect()` with a key, uses `prompt=True`, or uses
+> `backend="sulci"` for real, point the SDK elsewhere:
+>
+> ```bash
+> export SULCI_GATEWAY=https://staging.api.sulci.io   # shared staging
+> # or
+> export SULCI_GATEWAY=http://localhost:8000          # local docker gateway (sulci-platform)
+> ```
+>
+> One variable redirects everything: telemetry, the device-code flow, and
+> `SulciCloudBackend`. It is read **when `sulci` is imported**, so set it first,
+> in the shell, not inside an already-running Python session. Use a key issued by
+> that gateway, never a production key. To confirm where traffic will go:
+> `python -c "import sulci; print(sulci._TELEMETRY_URL)"`.
+>
+> The default-state, nudge and gateway-override checks below, all of Step 10's
+> snippets, and every `pytest` command make **no** network calls, so they are
+> safe without it.
+
 ### Verify default state
 
 ```python
@@ -653,6 +724,10 @@ print(sulci._event_buffer)         # []
 ```
 
 ### Test connect() with a real key
+
+Run these with `SULCI_GATEWAY` set to staging or a local gateway (see the
+warning above), using a key from that gateway. A successful `connect()` writes
+the key to `~/.sulci/config`.
 
 ```python
 import sulci
@@ -759,27 +834,25 @@ sulci.connect()
 # → falls through args → env → config; if none yield a key, returns silently
 #   (no telemetry enabled, no network call attempted)
 
-# To opt into the browser-based onboarding flow:
+# To opt into the browser-based onboarding flow (SULCI_GATEWAY set to staging/local!):
 sulci.connect(prompt=True)
 # → if no key found through the first three steps:
 #     [sulci] Visit https://dashboard.sulci.io/oss-connect and enter code: WXYZ-2345
+#     (production shown; the gateway you target decides the real URL)
 #     [sulci] Waiting for authorization (Ctrl+C to cancel)...
 #   On success: SDK gets the api_key, writes to ~/.sulci/config (mode 0600)
 #   On user-deny / 15-min timeout: raises RuntimeError
 ```
 
-> **`prompt=True` against production is fine as of the 2026-05-08 cutover.**
-> The full chain — gateway `/v1/oss-connect/{device-code,authorize,token}`
-> plus the dashboard `/oss-connect` page — has been live end-to-end since
-> then. The v0.5.3-era warning that this block used to carry ("dangerous",
-> "wait for the v0.6.0 announcement") described a chain that had not
-> deployed yet, and no longer applies to `api.sulci.io`.
+> **The device-code chain is live in production** (gateway
+> `/v1/oss-connect/{device-code,authorize,token}` plus the dashboard
+> `/oss-connect` page, since the 2026-05-08 cutover), so end users can run
+> `prompt=True` safely. **Developers still test it against staging or a local
+> gateway, never production** (see the warning at the top of this step).
 >
-> **It still applies to any environment that has not deployed it** — a
-> local docker-compose gateway without the OSS-Connect routes, or a
-> staging stack pointed at by `SULCI_GATEWAY`. There, `prompt=True` on a
-> missing key either 404s immediately or blocks for 15 minutes waiting for
-> an authorization that cannot happen.
+> **Check that your target gateway has deployed the OSS-Connect routes first.**
+> Where it hasn't, `prompt=True` on a missing key either 404s immediately or
+> blocks for 15 minutes waiting for an authorization that cannot happen.
 >
 > **The `prompt` default stays `False` permanently.** v0.6.0 was once going
 > to flip it; that was decided against on 2026-07-06 — see the reasoning in
@@ -828,8 +901,8 @@ sulci-platform LAUNCH-PLAN row C2e):
 python -m venv ~/c2e_venv && source ~/c2e_venv/bin/activate
 pip install "sulci>=0.5.5"   # 0.5.6+ also works; pin if you specifically need 0.5.5 behavior
 
-export SULCI_GATEWAY=https://gateway-production-de5c.up.railway.app
-export SULCI_API_KEY=sk-sulci-<oss-connect-test-key>   # plan='oss_connect'
+export SULCI_GATEWAY=https://staging.api.sulci.io     # never api.sulci.io
+export SULCI_API_KEY=sk-sulci-<staging-oss-connect-test-key>   # plan='oss_connect'
 
 python - <<'PY'
 import sulci, time
@@ -855,7 +928,7 @@ curl -H "X-Sulci-Key: $SULCI_API_KEY" \
 
 The fingerprint that lands here is what powers the `ConnectedOssOverview`
 "Active SDKs" stat card and the `DeploymentsTable` row on the customer
-dashboard at `https://sulci-dashboard.vercel.app`.
+dashboard, in the dashboard deployment that matches the gateway you targeted.
 
 ### Run only the gateway-override tests
 
@@ -954,6 +1027,7 @@ python -m pytest tests/ -v -k "ResolutionPathLogging or ConfigAgeOut or WrittenA
 
 ```bash
 python -m pytest tests/test_connect.py -v
+# Expected: 59 passed (verified 2026-10-01; mocked, no network)
 
 # Run a specific class
 python -m pytest tests/test_connect.py::TestDefaultState -v
@@ -975,7 +1049,11 @@ python -m pytest tests/test_telemetry_gateway_override.py -v
 ## Step 10 — Test SulciCloudBackend Locally
 
 `SulciCloudBackend` is the cloud backend driver. It routes cache operations
-to `api.sulci.io` via httpx.
+over httpx to, in order: the `gateway_url=` argument, else `SULCI_GATEWAY`,
+else the production default `https://api.sulci.io`. **For any live test, set
+`SULCI_GATEWAY` to staging or a local gateway first** (see Step 9). The
+snippets below are safe as they stand: constructing the backend opens no
+connection, and the wiring checks use a mock.
 
 ### Verify the import and basic construction
 
@@ -991,7 +1069,8 @@ except ValueError as e:
 # Confirm repr
 b = SulciCloudBackend(api_key="sk-sulci-testkey1234567")
 print(b)
-# SulciCloudBackend(url='https://api.sulci.io', key_prefix='sk-sulci-testke', timeout=5.0)
+# SulciCloudBackend(url='https://api.sulci.io', key_prefix='sk-sulci-testkey', timeout=5.0)
+# (url shows whatever SULCI_GATEWAY resolves to; nothing is sent)
 ```
 
 ### Verify Cache constructor wiring
@@ -1020,13 +1099,16 @@ del os.environ["SULCI_API_KEY"]
 
 ```bash
 python -m pytest tests/test_cloud_backend.py -v
+# Expected: 55 passed (verified 2026-10-01; all mocked, no network)
 
 # Run a specific class
 python -m pytest tests/test_cloud_backend.py::TestConstruction -v
-python -m pytest tests/test_cloud_backend.py::TestSearch -v
-python -m pytest tests/test_cloud_backend.py::TestUpsert -v
+python -m pytest tests/test_cloud_backend.py::TestRemoteGet -v
+python -m pytest tests/test_cloud_backend.py::TestRemoteSet -v
 python -m pytest tests/test_cloud_backend.py::TestDeleteAndClear -v
 python -m pytest tests/test_cloud_backend.py::TestCacheWiring -v
+python -m pytest tests/test_cloud_backend.py::TestCanonicalGatewayPaths -v
+python -m pytest tests/test_cloud_backend.py::TestCloudTransportShortCircuit -v
 ```
 
 ---
@@ -1122,6 +1204,7 @@ python smoke_test_async.py
 | `ModuleNotFoundError` for `chromadb` / `langchain_core` / `llama_index` / other backend | Extra not installed | Re-run the Step 3 install, or `pip install -e ".[<extra>]"` |
 | `Interrupted: 2 errors during collection` — `ImportError: mcp>=2.0.0 is required` (or litellm) | `mcp` / `litellm` extra missing, **or** `mcp` downgraded to 1.x by `crewai` | Re-run the Step 3 install, then `pip install "mcp>=2.0.0"`. `pip check` will not detect this |
 | 3 `TestRedisStreamSink` tests fail: `redis package not installed` | `redis` extra missing (the tests mock the server but still import the package) | Step 3 install includes `redis` |
+| `TestRedisBackend::test_contract_local` takes ~5 s instead of skipping instantly | `localhost` resolves to a non-loopback address on your machine, so the connection times out rather than being refused | Check `grep localhost /etc/hosts`; it should map to `127.0.0.1` / `::1` only |
 | Test run looks hung — one test for minutes at ~0% CPU | Each embedding-model load checks Hugging Face; slow network | `export HF_HUB_OFFLINE=1` once the model is cached (Step 5) |
 | `VARIANT COLLISION … --queries: on disk '1000'`, `verify_benchmark.py` exit 2 | A non-default benchmark run wrote to `benchmark/results/tfidf/` | `rm -rf benchmark/results/tfidf` (untracked); give exploratory runs their own `--out` (Step 7) |
 | `make checkin`: `agent_example_langgraph.py` / `agent_example_crewai.py` `FAIL exit=1 0.1s` | Agent frameworks not installed | Step 8.5: install them, then re-pin `mcp>=2.0.0` |
@@ -1158,7 +1241,9 @@ checks it for updates unless `HF_HUB_OFFLINE=1` is set (see Step 5).
 
 > **`SULCI_API_KEY`** is the environment variable for the Sulci Cloud managed backend.
 > Get a free key at [sulci.io/signup](https://sulci.io/signup). Setting this variable
-> is optional — the library works fully offline without it.
+> is optional — the library works fully offline without it. That is a
+> **production** key: for development and testing, use a key issued by the
+> staging or local gateway, with `SULCI_GATEWAY` set (Step 9).
 
 ---
 
