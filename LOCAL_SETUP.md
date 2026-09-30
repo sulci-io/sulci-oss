@@ -4,19 +4,29 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 
 ---
 
-## Current state — measured 2026-07-22
+> **Fresh-machine run-through (2026-09-25, M2 MacBook Air, macOS, Python 3.12, v0.9.1):**
+> Steps 1–8.5 and 11–13 were followed literally on a clean `~/code` and
+> corrected where they broke; every command in those steps has been run as now
+> written. The reference sections from *Troubleshooting* onward were checked
+> against the repo on 2026-09-30. In Steps 9–10, every keyless snippet and test
+> command was run on 2026-10-01; the parts that need a live gateway and a key
+> (`connect()` with a real key, `prompt=True`, the end-to-end staging smoke)
+> are optional checks for account holders and have **not** been re-run.
+
+## Current state — re-measured 2026-09-30
 
 | Fact | Value | Re-measure |
 |---|---|---|
-| Version | **0.8.3** (2026-07-24) | `grep '^version' pyproject.toml` |
-| Public methods on `Cache` | **8** | see [`docs/API-SURFACE.md`](docs/API-SURFACE.md) |
+| Version | **0.9.1** (CHANGELOG entry undated) | `grep '^version' pyproject.toml` |
+| Public methods on `Cache` | **8** | `python3 scripts/check_api_surface.py --show` |
 | Default backend | `"chroma"` | ditto — **not** sqlite |
 | Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
 | Default `db_path` | `"./sulci_db"` | ditto |
 | Backends | 6 free + 1 managed | |
 
-[`docs/API-SURFACE.md`](docs/API-SURFACE.md) carries the AST command that
-regenerates the whole surface. **If a document anywhere disagrees with that
+`python3 scripts/check_api_surface.py --show` measures the whole surface by AST
+(no install needed); without `--show` it exits 1 if
+[`docs/API-SURFACE.md`](docs/API-SURFACE.md) has drifted from the code. **If a document anywhere disagrees with that
 command's output, the output wins.** Four of these defaults were documented
 wrongly for months — two of them behaviourally, so a reader believed the default
 backend was SQLite and that entries never expire.
@@ -31,6 +41,12 @@ These are not hypothetical; each has cost real debugging time.
   quotes, because zsh treats `[...]` as a glob. Same reason
   `grep -r --include=*.jsx` fails with "no matches found" — write
   `--include='*.jsx'`.
+- **zsh passes `# comments` to the command unless told otherwise.** Many code
+  blocks here end lines with `# explanation`. Interactive zsh does not treat `#`
+  as a comment by default, so pasting `which python   # should show …` hands
+  `#`, `should`, `show` to `which` as arguments (`gh` fails with
+  `accepts at most 1 arg(s), received 9`). Fix once:
+  `echo 'setopt interactivecomments' >> ~/.zshrc`, then open a new tab.
 - **`find` may be aliased to `fd`.** If `find src -type f` fails with a `--type`
   error, that is the alias. Use `\find`, and likewise `\cat` / `\ls` if `bat` /
   `eza` are aliased.
@@ -50,9 +66,27 @@ These are not hypothetical; each has cost real debugging time.
 
 ## Requirements
 
-- Python **3.9, 3.10, 3.11, or 3.12** (all four are tested in CI)
+- Python **3.9, 3.10, 3.11, or 3.12** — all four are tested in CI; nothing
+  newer is. **Use 3.12 for local development.** The `mcp` and `litellm` extras
+  need 3.10+, so 3.9 cannot run the whole suite.
 - `git`
-- A terminal with `pip` available
+
+**macOS: your default `python3` is probably too new.** Homebrew's `python3`
+tracks the latest release (3.14 as of 2026-09), and a stock Mac has no `python`
+command at all. Check, and install 3.12 alongside it if needed:
+
+```bash
+python3 --version              # 3.13 or newer → install 3.12 below
+brew install python@3.12       # provides the python3.12 command
+python3.12 --version           # should print Python 3.12.x
+```
+
+**direnv users:** the repo ships an `.envrc` that activates `.venv`. Until
+Step 2 creates the venv, entering the directory prints
+`.envrc:1: .venv/bin/activate: No such file or directory` (or, on a machine
+that has never allowed it, `.envrc is blocked`). Both are expected — carry on
+and run `direnv allow` at the end of Step 2. If you don't use direnv, ignore
+the file.
 
 ---
 
@@ -72,9 +106,12 @@ to `main` via PR.
 
 Always use a virtual environment. Never install Sulci dependencies into your system Python.
 
+Create the venv with an explicit 3.12 interpreter. On macOS, `python` does
+not exist outside a venv, and plain `python3` may be 3.13+ (see Requirements).
+
 ```bash
-# create
-python -m venv .venv
+# create — name the interpreter explicitly
+python3.12 -m venv .venv
 
 # activate — macOS / Linux
 source .venv/bin/activate
@@ -84,8 +121,19 @@ source .venv/bin/activate
 
 # confirm you're inside the venv
 which python        # should show .venv/bin/python
-python --version    # should be 3.9, 3.10, 3.11, or 3.12  (all four are tested in CI)
+python --version    # should be 3.12 (3.9–3.11 also work; 3.13+ is untested)
 ```
+
+Inside an activated venv, `python` and `pip` point at the venv, so the bare
+`python` / `pip` commands in the rest of this guide work as written.
+
+**direnv users:** run `direnv allow` now. From here on the venv activates
+automatically whenever you `cd` into the repo.
+
+**Every new terminal:** all commands in this guide run from the repo root with
+the venv active. In a fresh tab, first run `cd sulci-oss` (direnv then
+activates the venv) or `cd sulci-oss && source .venv/bin/activate`. If you see
+`command not found: pip` or `python`, you skipped this.
 
 ---
 
@@ -93,41 +141,45 @@ python --version    # should be 3.9, 3.10, 3.11, or 3.12  (all four are tested i
 
 Install in editable mode (`-e`) so any changes you make to `sulci-oss/` source code are reflected immediately without reinstalling.
 
+**New developers: run these two commands and move on to Step 4.**
+
 ```bash
-# base install — editable
-pip install -e .
-
-# with the SQLite backend (zero infra, fully offline — recommended for local dev)
-pip install -e ".[sqlite]"
-
-# with the LangChain integration (langchain-core only, not full langchain)
-pip install -e ".[sqlite,langchain]"
-
-# with the LlamaIndex integration
-pip install -e ".[sqlite,llamaindex]"
-
-# AsyncCache is included in the base install — no extra required
-# pip install -e ".[sqlite]"  ← AsyncCache works with any backend
-
-# with ChromaDB
-pip install -e ".[chroma]"
-
-# with FAISS
-pip install -e ".[faiss]"
-
-# multiple backends at once
-pip install -e ".[sqlite,chroma,faiss]"
-
-# full dev setup — recommended
-pip install -e ".[sqlite,langchain,llamaindex,dev]"
+pip install --upgrade pip        # the venv's bundled pip is often stale
+pip install -e ".[sqlite,redis,qdrant,langchain,llamaindex,mcp,litellm,proxy,dev]" pytest-timeout
 ```
+
+This is the full dev setup, matching what CI installs for the test suite.
+**Don't trim this list.** Some tests fail rather than skip when an extra is
+missing: without `mcp` or `litellm`, `pytest tests/` stops at collection with
+two errors; without `redis`, three `TestRedisStreamSink` tests fail. The
+`redis` extra is needed even though those tests mock the Redis server.
+`pytest-timeout` backs the `@pytest.mark.timeout` markers in the tests.
+
+The install pulls in PyTorch via `sentence-transformers`, so expect a few
+minutes; the resulting `.venv` is about 1.4 GB (measured on an M2 Mac,
+Python 3.12, 2026-09-25). Step 4's import check needs at least the `langchain` and
+`llamaindex` extras.
 
 > **zsh users:** always wrap extras in quotes — `".[sqlite]"` not `.[sqlite]`.
 > Without quotes, zsh treats the brackets as a glob pattern and throws `no matches found`.
 
-> **Why httpx?** The `test_connect.py` and `test_cloud_backend.py` suites mock
-> `httpx.post` to test telemetry and cloud wiring — httpx must be installed even
-> though it is only used in tests.
+### Optional extras (reference — not needed to get started)
+
+Add any of these later with `pip install -e ".[name]"`. Combine several in one
+set of brackets, e.g. `".[sqlite,chroma,faiss]"`.
+
+| Extra | Adds |
+|---|---|
+| `sqlite` | local SQLite backend — zero infra, fully offline |
+| `langchain` | LangChain adapter (`langchain-core` only, not full langchain) |
+| `llamaindex` | LlamaIndex wrapper |
+| `chroma` / `faiss` / `qdrant` / `redis` / `milvus` | other vector backends |
+| `openai` | OpenAI embeddings |
+| `mcp` / `litellm` / `proxy` | v0.9.0 integration surfaces — **Python 3.10+ only** |
+| `dev` | pytest, coverage, build/twine |
+
+`AsyncCache` is part of the base install and works with any backend — no extra
+required. `httpx` is a core dependency (since v0.6.3), so it is always installed.
 
 ---
 
@@ -172,35 +224,73 @@ pip install -e ".[llamaindex]"
 Always use `python -m pytest` rather than bare `pytest` to avoid PATH issues.
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/ -v -rs
 ```
 
-All **473 tests** should be collected across 18 test files (skipped backend tests if optional deps not installed):
+`-rs` prints a summary of *why* each test skipped at the end. Don't pipe the
+run through `| tail`: `tail` shows nothing until pytest exits, which looks
+exactly like a hang. To keep a log and still watch progress, use
+`python -m pytest tests/ -v -rs 2>&1 | tee /tmp/sulci-tests.log`.
+
+### Expected result
+
+Last measured 2026-09-25 (v0.9.1, M2 Mac, Python 3.12, full Step 3 install,
+no Redis or Qdrant server running):
 
 ```
-tests/test_core.py                    — 52 tests  (cache.get/set, thresholds, TTL, stats incl. raw-get/set, personalization, CacheEvent.plan v0.5.6, instance injection v0.6.0, cloud-transport no-local-embedder v0.6.1)
-tests/test_context.py                 — 35 tests  (ContextWindow, SessionStore, integration)
-tests/test_backends.py                —  9 tests  (per-backend contract + persistence; skipped if dep missing)
-tests/test_connect.py                 — 40 tests  (sulci.connect(), _emit(), _flush(), Cache telemetry flag,
-                                                   v0.5.3: TestDeviceCodeFlow integration)
-                                                   requires httpx
-tests/test_oss_connect.py             — 19 tests  (RFC 8628 device-code client; v0.5.3, requires httpx)
-tests/test_cloud_backend.py           — 45 tests  (SulciCloudBackend transport, remote_get/remote_set, canonical gateway paths, cloud-transport short-circuit; rewritten in v0.6.0)
-                                                   requires httpx
-tests/test_integrations_langchain.py  — 27 tests  (SulciCache LangChain adapter)     (v0.3.3)
-tests/test_integrations_llamaindex.py — 29 tests  (SulciCacheLLM LlamaIndex wrapper) (v0.3.6)
-                                                   requires llama-index-core
-tests/test_async_cache.py             — 37 tests  (AsyncCache wrapper + partition/threshold parity)  (v0.3.7+)
-tests/test_qdrant_tenant_isolation.py — 11 tests  (tenant_id partition isolation)    (v0.4.0)
-tests/test_sessions.py                — 24 tests  (SessionStore protocol)            (v0.5.0)
-tests/test_sinks.py                   — 20 tests  (EventSink + plan scrub)           (v0.5.0/v0.5.6)
-tests/test_session_store_injection.py — 12 tests  (session_store=, event_sink= wiring) (v0.5.0)
-tests/test_config.py                  — 20 tests  (~/.sulci/config persistence)      (v0.5.2)
-tests/test_telemetry.py               — 28 tests  (fingerprint + wire shape)         (v0.5.2/v0.5.4)
-tests/test_nudge.py                   — 13 tests  (100-query nudge in stats())       (v0.5.2)
-tests/test_telemetry_gateway_override.py — 6 tests (SULCI_GATEWAY redirect)          (v0.5.5)
-tests/compat/                         — 67 tests  (cross-backend conformance suite; ~21 skip without optional deps)
+689 passed, 41 skipped, 0 failed
 ```
+
+Skips are expected. Re-measure the current count with
+`python -m pytest tests/ --collect-only -q | tail -1`. With the agent packages
+from Step 8.5 also installed (they pull in `chromadb`), the same run gives
+**694 passed, 36 skipped** (2026-10-01). Those 36 skips break down as:
+
+| Skips | Reason shown by `-rs` | To run them |
+|---|---|---|
+| 14 | `redis-server not running on localhost:6379` / `RedisBackend: no local construction available` | Start a local Redis (see *Redis-dependent tests* at the end of this guide) |
+| 7 | `faiss-cpu not installed` / `FAISSBackend: no local construction available` | `pip install -e ".[faiss]"` |
+| 6 | `pymilvus not installed` / `MilvusBackend: no local construction available` | `pip install -e ".[milvus]"` (runs locally, no server) |
+| 5 | `OpenAIEmbedder: no local construction available` | Set `OPENAI_API_KEY` — makes real, billed API calls |
+| 4 | `SQLiteBackend` / `ChromaBackend does not enforce tenant isolation` | Never — by design, the contract doesn't apply |
+
+**Any failure or collection error on a fresh setup is a real problem** — most
+often a missing extra (see the warning in Step 3).
+
+### Runtime and the network
+
+The suite loads the embedding model (`all-MiniLM-L6-v2`) many times, and by
+default each load checks Hugging Face for updates. Runtime therefore depends
+on your connection, not your CPU:
+
+| Mode | Full suite, M2 MacBook Air |
+|---|---|
+| Offline (`HF_HUB_OFFLINE=1`) | **~70 s** (67.8 s, 2026-10-01) |
+| Online, ordinary connection | ~7 min |
+| Online, in-flight Wi-Fi | 72 min at ~3% CPU — looks like a hang, isn't |
+
+The **first** run must be online, to download the model (~90 MB, cached in
+`~/.cache/huggingface`). After that, always run offline:
+
+```bash
+HF_HUB_OFFLINE=1 python -m pytest tests/ -v -rs
+```
+
+Consider adding `export HF_HUB_OFFLINE=1` to your shell profile once the model
+is cached; unset it only when you need a model you haven't downloaded yet.
+
+**For a fully offline run, also set `LITELLM_LOCAL_MODEL_COST_MAP=True`.**
+Importing `litellm` (the `litellm` extra) otherwise downloads its model price
+list from `raw.githubusercontent.com` during test collection; with this set it
+uses the copy bundled in the package.
+
+```bash
+export HF_HUB_OFFLINE=1 LITELLM_LOCAL_MODEL_COST_MAP=True
+```
+
+If one test sits for several minutes at near-0% CPU **with**
+`HF_HUB_OFFLINE=1` set, see the Apple Silicon (MPS) note in the gotchas
+section and use the per-file runner.
 
 ### Targeted test runs
 
@@ -252,7 +342,7 @@ python -m pytest tests/ -v --cov=sulci --cov-report=term-missing
 make test               # core pytest suite (excludes integrations)
 make test-integrations  # LangChain + LlamaIndex integration tests
 make test-async         # AsyncCache tests only
-make test-all           # full suite (187 tests)
+make test-all           # full suite
 make test-cov           # full suite with coverage report
 make verify             # smoke + test-all (run before committing)
 ```
@@ -260,6 +350,11 @@ make verify             # smoke + test-all (run before committing)
 ---
 
 ## Step 6 — Run the Examples
+
+Every example below except `anthropic_example.py` runs fully offline with no
+API keys set (mock LLM), about 7–11 s each — verified
+2026-09-25 on an M2 with `HF_HUB_OFFLINE=1`. Each exits 0 and ends with a
+stats summary (hit rate, cost saved, LLM calls made).
 
 ### No API key required
 
@@ -311,16 +406,25 @@ Priority: OpenAI → Anthropic → mock. To force Anthropic: `unset OPENAI_API_K
 ## Step 7 — Run the Benchmark
 
 ```bash
-# fast run — stateless      # TF-IDF, fast; not the shipped engine, do not cite
-python3 benchmark/run.py --no-sweep --queries 1000
+# regression check — TF-IDF path vs benchmark/baseline.json (~19 s on an M2, no network)
+python scripts/verify_benchmark.py        # or: make benchmark-verify
 
-# fast run — context-aware  # TF-IDF, fast; not the shipped engine, do not cite
-python3 benchmark/run.py --no-sweep --queries 1000 --context
+# fast exploratory runs — TF-IDF, ~10 s each; not the shipped engine, do not cite.
+# Note the --out: see the warning below.
+python3 benchmark/run.py --no-sweep --queries 1000 --out /tmp/sulci-bench-q1000
+python3 benchmark/run.py --no-sweep --queries 1000 --context --out /tmp/sulci-bench-q1000
 
 # THE CANONICAL RUN — shipped engine (MiniLM), stateless + context (~10 min)
-pip install -e ".[sqlite]"
+# (the sqlite extra it needs is already installed if you followed Step 3)
 python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 ```
+
+⚠️ **Give non-default runs their own `--out`.** Without it, a `--queries 1000`
+run writes to `benchmark/results/tfidf/`, the same directory the regression
+check uses at the default 5000 queries. The next `verify_benchmark.py` then
+refuses to overwrite it (`VARIANT COLLISION … --queries: on disk '1000'`) and
+exits with code 2 — `make checkin` included. If that has already happened,
+`rm -rf benchmark/results/tfidf` (nothing in it is tracked by git) and re-run.
 
 ⚠️ **`--use-sulci` is opt-in and everything above it measures a built-in
 TF-IDF engine that ships in no product.** It is kept because a 4-second
@@ -338,7 +442,7 @@ is used verbatim. The `.gitignore` in that directory excludes `*.json` and
 `None`; `run.py:146` reseeds only when the value is not `None`, leaving the
 module RNG at the `random.seed(42)` from `:86`. Running without `--seed` is
 therefore deterministic and reproduces `baseline.json` exactly —
-`verify_benchmark.py` confirms 17 metrics at Δ=0.0000.
+`scripts/verify_benchmark.py` confirms 17 metrics at Δ=0.0000.
 
 📌 The four committed draws behind every published figure are at
 `benchmark/results/minilm/seed-{1,2,3,42}`.
@@ -358,6 +462,7 @@ therefore deterministic and reproduces `baseline.json` exactly —
 | `--seed N`              | 42                  | Corpus RNG seed. `--seed 1 2 3 42` is what every published figure uses. |
 | `--agent`               | off                 | Agent-workload pass: 50 sessions x 200 dispatches |
 | `--fresh`               | off                 | Delete existing benchmark DBs first. Without it the cache is warm from the previous run. |
+| `--allow-overwrite`     | off                 | Replace a results directory that holds a run at a different calibration (e.g. other `--queries`). |
 
 ---
 
@@ -365,6 +470,13 @@ therefore deterministic and reproduces `baseline.json` exactly —
 
 Smoke test scripts live at the repo root. Run individually or together via
 `make smoke` to confirm the full stack is working end-to-end.
+
+Measured 2026-09-25 on an M2 with `HF_HUB_OFFLINE=1`: `make smoke` runs all
+four scripts in **~33 s** and exits 0. **Read the output, not just the exit
+code** — the LangChain and LlamaIndex scripts also exit 0 when they *skip*
+because a package is missing. A full run prints four section headers (Core,
+LangChain, LlamaIndex, AsyncCache), no `✗`, and no "skip" lines:
+`grep -niE 'skip|✗' <log>` should print nothing.
 
 ```bash
 # All smoke tests in sequence (recommended)
@@ -398,6 +510,8 @@ make smoke-core         # core smoke test only (smoke_test.py)
 make smoke-langchain    # LangChain smoke test only (smoke_test_langchain.py)
 make smoke-llamaindex   # LlamaIndex smoke test only (smoke_test_llamaindex.py)
 make smoke-async        # AsyncCache smoke test only (smoke_test_async.py)
+make smoke-fast         # all smoke tests with SENTENCE_TRANSFORMERS_DEVICE=cpu
+                        # (Apple Silicon: sidesteps MPS if `make smoke` stalls)
 ```
 
 ---
@@ -430,9 +544,43 @@ make examples                   # all examples + smoke tests with timeout (~10-1
 make verify-integration-examples  # full 4-scenario LLM-provider matrix for langchain
                                   # + llamaindex (~10-15 min, requires both API keys,
                                   # ~$0.10-0.20 in real LLM calls per run)
-make benchmark-verify           # run TF-IDF benchmark, verify against baseline.json (~15s)
-make checkin                    # smoke + test-per-file + examples + benchmark-verify (pre-PR check)
+make benchmark-verify           # run TF-IDF benchmark, verify against baseline.json (~19 s on an M2)
+make checkin                    # pre-PR check: smoke + test-per-file + examples + benchmark-verify
+                                #   + check-ci-coverage + check-agent-draws
+make checkin-fast               # same, but smoke-fast (CPU) — the Makefile's recommendation on macOS
+                                #   (rationale: docs/architecture/adrs/0002-smoke-fast-cpu-mode.md)
 ```
+
+**`make checkin` needs two more packages than Step 3 installs.** The examples
+runner includes `examples/agent_example_langgraph.py` and
+`examples/agent_example_crewai.py`, which need frameworks that are in no sulci
+extra. Without them, each exits 1 in 0.1 s and the check-in fails
+(`TOTAL: 14/16 passed`, make exit 2). Install them once — **both lines, in
+this order**:
+
+```bash
+pip install langgraph langchain-anthropic crewai
+pip install "mcp>=2.0.0"
+```
+
+The second line is not optional. `crewai` pins `mcp~=1.28.1` and silently
+downgrades the `mcp` 2.x that sulci's `mcp` extra requires, which brings back
+the `tests/test_integrations_mcp.py` collection error from Step 5. `pip check`
+does **not** catch that (it ignores extras). Re-installing `mcp>=2.0.0` makes
+pip print `crewai 1.15.22 requires mcp~=1.28.1 … incompatible`, and `pip check`
+repeats it — **both are expected**: the crewai example only needs crewai's core
+and runs fine against mcp 2.x (verified 2026-09-27: both agent examples exit 0,
+and `test_integrations_mcp.py` passes 22/22). Confirm with:
+
+```bash
+python -m pytest tests/test_integrations_mcp.py -q
+```
+
+**On an M-series Mac, use `make checkin-fast`.** Before either target, start a
+local Redis if you want the Redis-backed paths covered — see the
+*Redis-dependent tests* note at the end of this guide. Without one, those
+tests skip and the run still passes. Set `HF_HUB_OFFLINE=1` (Step 5) to keep
+the runtime independent of your connection.
 
 ### When to use which
 
@@ -442,7 +590,7 @@ make checkin                    # smoke + test-per-file + examples + benchmark-v
 | `examples/*.py` or `smoke_test*.py` | `make examples` |
 | `examples/langchain_example.py` or `examples/llamaindex_example.py` | `make verify-integration-examples` |
 | `benchmark/` files or anything that touches headline numbers | `make benchmark-verify` |
-| Anything before opening a PR | `make checkin` |
+| Anything before opening a PR | `make checkin` (`make checkin-fast` on macOS) |
 
 ### Direct script invocation
 
@@ -467,9 +615,20 @@ python scripts/run_tests_per_file.py \
 
 ### What `make checkin` produces
 
-A successful run prints a summary like
-`TOTAL: 285 passed, 0 failed, 0 errors, 38 skipped`, then the examples
-summary `TOTAL: 12/12 passed`, then a final banner. If anything fails,
+A successful run prints a per-file test summary, then the examples summary,
+then a final `✓ checkin verification complete` banner (`checkin-fast` prints
+`✓ checkin-fast verification complete (CPU smoke mode)`). Measured 2026-09-28
+(v0.9.1, M2, `make checkin-fast`, `HF_HUB_OFFLINE=1`, full Step 3 install plus
+the agent packages and mcp re-pin above, no Redis), **~5 min end to end**,
+make exit 0:
+
+```
+TOTAL: 719 passed, 0 failed, 0 errors, 54 skipped     (per-file tests)
+TOTAL: 16/16 passed                                    (examples)
+```
+
+The test counts differ slightly from Step 5 because crewai pulls in `chromadb`,
+which un-skips the Chroma backend tests. If anything fails,
 the failure log path is printed in the per-file summary table so you
 can `cat` the relevant log rather than re-running with extra flags.
 
@@ -493,6 +652,66 @@ If you add a new dev-tooling script:
 `sulci.connect()` is the opt-in telemetry gate. The default state
 is **silent** — nothing is sent until you explicitly call `connect()`.
 
+**You don't need a Sulci account or API key to develop or test sulci-oss.**
+Every test of the connected-OSS surface (`connect()`, telemetry, the device-code
+flow, `SulciCloudBackend`) runs against mocks: `tests/conftest.py` strips
+`SULCI_API_KEY` from the environment, each test patches the network and the
+`~/.sulci/config` lookup, and CI injects no Sulci key. The keyless snippets
+below are safe the same way.
+
+> **Known gap (2026-10-01):** a background telemetry flush thread started by one
+> test keeps running for the rest of the session, and can fire during a later
+> test that has telemetry enabled but hasn't yet patched `httpx.post`. That
+> sends a real POST to `https://api.sulci.io/v1/telemetry` carrying a fake test
+> key. In guarded full-suite runs it appeared once, with the flush interval
+> forced down to 50 ms; at the normal 30 s interval the window is tiny, but not
+> zero. Until the suite blocks real HTTP and stops the thread centrally, the only
+> local guarantee is running the tests with no network connection (telemetry
+> failures are swallowed, so results are unaffected). Don't set `SULCI_GATEWAY`
+> for the test run as a workaround: two tests assert the production default URL
+> and fail.
+
+The **live** checks in this step (`connect()` with a real key, `prompt=True`, the
+staging smoke) are optional. They're for account holders who have minted a key,
+by signing up or through the device-code flow, and want to exercise the engine
+against a real gateway.
+
+The repo has exactly **one** automated live check: PROBE 2 in
+`tests/integration/flows/flow_2_routemismatch.py`. `test_flow_contracts.py` runs
+that script as part of a normal `pytest tests/`, and PROBE 2 activates only when
+both `SULCI_LIVE_GATEWAY` and `SULCI_LIVE_KEY` are set. It has no default URL: it
+calls whatever you set. If you enable it, use staging and a staging key, and set
+the variables for that one run only, not in your shell profile:
+
+```bash
+SULCI_LIVE_GATEWAY=https://staging.api.sulci.io SULCI_LIVE_KEY=sk-sulci-<staging-key> \
+  python tests/integration/flows/flow_2_routemismatch.py
+```
+
+(The six flow scripts run as subprocesses; they were checked separately on
+2026-10-01 and make no network calls unless PROBE 2 is enabled.)
+
+> ⚠️ **Never test against production.** `https://api.sulci.io` is the
+> production gateway, and it is the SDK's default. Before running anything in
+> Steps 9–10 that calls `connect()` with a key, uses `prompt=True`, or uses
+> `backend="sulci"` for real, point the SDK elsewhere:
+>
+> ```bash
+> export SULCI_GATEWAY=https://staging.api.sulci.io   # shared staging
+> # or
+> export SULCI_GATEWAY=http://localhost:8000          # local docker gateway (sulci-platform)
+> ```
+>
+> One variable redirects everything: telemetry, the device-code flow, and
+> `SulciCloudBackend`. It is read **when `sulci` is imported**, so set it first,
+> in the shell, not inside an already-running Python session. Use a key issued by
+> that gateway, never a production key. To confirm where traffic will go:
+> `python -c "import sulci; print(sulci._TELEMETRY_URL)"`.
+>
+> The default-state, nudge and gateway-override checks below, all of Step 10's
+> snippets, and every `pytest` command make **no** network calls, so they are
+> safe without it.
+
 ### Verify default state
 
 ```python
@@ -505,6 +724,10 @@ print(sulci._event_buffer)         # []
 ```
 
 ### Test connect() with a real key
+
+Run these with `SULCI_GATEWAY` set to staging or a local gateway (see the
+warning above), using a key from that gateway. A successful `connect()` writes
+the key to `~/.sulci/config`.
 
 ```python
 import sulci
@@ -611,27 +834,25 @@ sulci.connect()
 # → falls through args → env → config; if none yield a key, returns silently
 #   (no telemetry enabled, no network call attempted)
 
-# To opt into the browser-based onboarding flow:
+# To opt into the browser-based onboarding flow (SULCI_GATEWAY set to staging/local!):
 sulci.connect(prompt=True)
 # → if no key found through the first three steps:
 #     [sulci] Visit https://dashboard.sulci.io/oss-connect and enter code: WXYZ-2345
+#     (production shown; the gateway you target decides the real URL)
 #     [sulci] Waiting for authorization (Ctrl+C to cancel)...
 #   On success: SDK gets the api_key, writes to ~/.sulci/config (mode 0600)
 #   On user-deny / 15-min timeout: raises RuntimeError
 ```
 
-> **`prompt=True` against production is fine as of the 2026-05-08 cutover.**
-> The full chain — gateway `/v1/oss-connect/{device-code,authorize,token}`
-> plus the dashboard `/oss-connect` page — has been live end-to-end since
-> then. The v0.5.3-era warning that this block used to carry ("dangerous",
-> "wait for the v0.6.0 announcement") described a chain that had not
-> deployed yet, and no longer applies to `api.sulci.io`.
+> **The device-code chain is live in production** (gateway
+> `/v1/oss-connect/{device-code,authorize,token}` plus the dashboard
+> `/oss-connect` page, since the 2026-05-08 cutover), so end users can run
+> `prompt=True` safely. **Developers still test it against staging or a local
+> gateway, never production** (see the warning at the top of this step).
 >
-> **It still applies to any environment that has not deployed it** — a
-> local docker-compose gateway without the OSS-Connect routes, or a
-> staging stack pointed at by `SULCI_GATEWAY`. There, `prompt=True` on a
-> missing key either 404s immediately or blocks for 15 minutes waiting for
-> an authorization that cannot happen.
+> **Check that your target gateway has deployed the OSS-Connect routes first.**
+> Where it hasn't, `prompt=True` on a missing key either 404s immediately or
+> blocks for 15 minutes waiting for an authorization that cannot happen.
 >
 > **The `prompt` default stays `False` permanently.** v0.6.0 was once going
 > to flip it; that was decided against on 2026-07-06 — see the reasoning in
@@ -680,8 +901,8 @@ sulci-platform LAUNCH-PLAN row C2e):
 python -m venv ~/c2e_venv && source ~/c2e_venv/bin/activate
 pip install "sulci>=0.5.5"   # 0.5.6+ also works; pin if you specifically need 0.5.5 behavior
 
-export SULCI_GATEWAY=https://gateway-production-de5c.up.railway.app
-export SULCI_API_KEY=sk-sulci-<oss-connect-test-key>   # plan='oss_connect'
+export SULCI_GATEWAY=https://staging.api.sulci.io     # never api.sulci.io
+export SULCI_API_KEY=sk-sulci-<staging-oss-connect-test-key>   # plan='oss_connect'
 
 python - <<'PY'
 import sulci, time
@@ -707,7 +928,7 @@ curl -H "X-Sulci-Key: $SULCI_API_KEY" \
 
 The fingerprint that lands here is what powers the `ConnectedOssOverview`
 "Active SDKs" stat card and the `DeploymentsTable` row on the customer
-dashboard at `https://sulci-dashboard.vercel.app`.
+dashboard, in the dashboard deployment that matches the gateway you targeted.
 
 ### Run only the gateway-override tests
 
@@ -806,6 +1027,7 @@ python -m pytest tests/ -v -k "ResolutionPathLogging or ConfigAgeOut or WrittenA
 
 ```bash
 python -m pytest tests/test_connect.py -v
+# Expected: 59 passed (verified 2026-10-01; mocked, no network)
 
 # Run a specific class
 python -m pytest tests/test_connect.py::TestDefaultState -v
@@ -827,7 +1049,11 @@ python -m pytest tests/test_telemetry_gateway_override.py -v
 ## Step 10 — Test SulciCloudBackend Locally
 
 `SulciCloudBackend` is the cloud backend driver. It routes cache operations
-to `api.sulci.io` via httpx.
+over httpx to, in order: the `gateway_url=` argument, else `SULCI_GATEWAY`,
+else the production default `https://api.sulci.io`. **For any live test, set
+`SULCI_GATEWAY` to staging or a local gateway first** (see Step 9). The
+snippets below are safe as they stand: constructing the backend opens no
+connection, and the wiring checks use a mock.
 
 ### Verify the import and basic construction
 
@@ -843,7 +1069,8 @@ except ValueError as e:
 # Confirm repr
 b = SulciCloudBackend(api_key="sk-sulci-testkey1234567")
 print(b)
-# SulciCloudBackend(url='https://api.sulci.io', key_prefix='sk-sulci-testke', timeout=5.0)
+# SulciCloudBackend(url='https://api.sulci.io', key_prefix='sk-sulci-testkey', timeout=5.0)
+# (url shows whatever SULCI_GATEWAY resolves to; nothing is sent)
 ```
 
 ### Verify Cache constructor wiring
@@ -872,13 +1099,16 @@ del os.environ["SULCI_API_KEY"]
 
 ```bash
 python -m pytest tests/test_cloud_backend.py -v
+# Expected: 55 passed (verified 2026-10-01; all mocked, no network)
 
 # Run a specific class
 python -m pytest tests/test_cloud_backend.py::TestConstruction -v
-python -m pytest tests/test_cloud_backend.py::TestSearch -v
-python -m pytest tests/test_cloud_backend.py::TestUpsert -v
+python -m pytest tests/test_cloud_backend.py::TestRemoteGet -v
+python -m pytest tests/test_cloud_backend.py::TestRemoteSet -v
 python -m pytest tests/test_cloud_backend.py::TestDeleteAndClear -v
 python -m pytest tests/test_cloud_backend.py::TestCacheWiring -v
+python -m pytest tests/test_cloud_backend.py::TestCanonicalGatewayPaths -v
+python -m pytest tests/test_cloud_backend.py::TestCloudTransportShortCircuit -v
 ```
 
 ---
@@ -897,7 +1127,7 @@ python -c "from sulci.integrations.langchain import SulciCache; print('✅ Impor
 
 ```bash
 python -m pytest tests/test_integrations_langchain.py -v
-# Expected: 27 passed
+# Expected: 27 passed  (verified 2026-09-25, ~18 s with HF_HUB_OFFLINE=1)
 ```
 
 ### Run the LangChain smoke test
@@ -923,7 +1153,7 @@ python -c "from sulci.integrations.llamaindex import SulciCacheLLM; print('✅ I
 
 ```bash
 python -m pytest tests/test_integrations_llamaindex.py -v
-# Expected: 29 passed
+# Expected: 29 passed  (verified 2026-09-25, ~12 s with HF_HUB_OFFLINE=1)
 ```
 
 ### Run the LlamaIndex smoke test
@@ -949,7 +1179,7 @@ python -c "from sulci import AsyncCache; print('✅ Import OK')"
 
 ```bash
 python -m pytest tests/test_async_cache.py -v
-# Expected: 25 passed
+# Expected: 40 passed  (verified 2026-09-25, ~14 s with HF_HUB_OFFLINE=1)
 ```
 
 ### Run the AsyncCache smoke test
@@ -963,19 +1193,25 @@ python smoke_test_async.py
 
 ## Troubleshooting
 
-| Symptom                                   | Cause                      | Fix                                                                                                        |
-| ----------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `pytest: command not found`               | pytest not on `PATH`       | Use `python -m pytest`                                                                                     |
-| `zsh: no matches found: .[sqlite]`        | zsh glob expansion         | Use quotes: `".[sqlite]"`                                                                                  |
-| `ModuleNotFoundError: sulci`              | Not installed              | Run `pip install -e .` first                                                                               |
-| `ModuleNotFoundError: chromadb`           | Backend extra missing      | `pip install -e ".[chroma]"`                                                                               |
-| `ModuleNotFoundError: langchain_core`     | LangChain extra missing    | `pip install -e ".[langchain]"`                                                                            |
-| `ModuleNotFoundError: llama_index`        | LlamaIndex extra missing   | `pip install -e ".[llamaindex]"`                                                                           |
-| `ModuleNotFoundError: httpx`              | httpx not installed        | `pip install httpx` — needed for test_connect.py                                                           |
-| `ValueError: not enough values to unpack` | v0.1 unpacking style       | `cache.get()` returns a **3-tuple** in v0.2+ — always unpack as `response, sim, ctx_depth = cache.get(...)` |
-| MiniLM takes 2–3s on first call           | Model cold load            | Normal — subsequent embeds run at ~14ms. Warm the model at app startup, not per-request.                   |
-| `git push` returns 403                    | Token auth expired         | `git remote set-url origin https://YOUR_USER:TOKEN@github.com/sulci-io/sulci-oss.git`                      |
-| `_telemetry_enabled` is True unexpectedly | connect() called elsewhere | Check if `sulci.connect()` is being called in app code or test fixtures — telemetry is opt-in only         |
+| Symptom | Cause | Fix |
+|---|---|---|
+| `.envrc:1: .venv/bin/activate: No such file or directory` on `cd` | direnv runs the repo's `.envrc` before Step 2 created the venv | Expected — do Step 2, then `direnv allow` |
+| `command not found: pip` / `python` | venv not active (new terminal tab, or outside the repo) | `cd` into the repo (direnv activates it) or `source .venv/bin/activate` |
+| `zsh: no matches found: .[sqlite]` | zsh glob expansion | Quote extras: `".[sqlite]"` |
+| Pasted command gets extra arguments (`accepts at most 1 arg(s), received 9`) | zsh passing trailing `# comments` as arguments | `echo 'setopt interactivecomments' >> ~/.zshrc`, new tab |
+| `pytest: command not found` | pytest not on `PATH` | `python -m pytest` |
+| `ModuleNotFoundError: sulci` | Not installed | Run the Step 3 install |
+| `ModuleNotFoundError` for `chromadb` / `langchain_core` / `llama_index` / other backend | Extra not installed | Re-run the Step 3 install, or `pip install -e ".[<extra>]"` |
+| `Interrupted: 2 errors during collection` — `ImportError: mcp>=2.0.0 is required` (or litellm) | `mcp` / `litellm` extra missing, **or** `mcp` downgraded to 1.x by `crewai` | Re-run the Step 3 install, then `pip install "mcp>=2.0.0"`. `pip check` will not detect this |
+| 3 `TestRedisStreamSink` tests fail: `redis package not installed` | `redis` extra missing (the tests mock the server but still import the package) | Step 3 install includes `redis` |
+| `TestRedisBackend::test_contract_local` takes ~5 s instead of skipping instantly | `localhost` resolves to a non-loopback address on your machine, so the connection times out rather than being refused | Check `grep localhost /etc/hosts`; it should map to `127.0.0.1` / `::1` only |
+| Test run looks hung — one test for minutes at ~0% CPU | Each embedding-model load checks Hugging Face; slow network | `export HF_HUB_OFFLINE=1` once the model is cached (Step 5) |
+| `VARIANT COLLISION … --queries: on disk '1000'`, `verify_benchmark.py` exit 2 | A non-default benchmark run wrote to `benchmark/results/tfidf/` | `rm -rf benchmark/results/tfidf` (untracked); give exploratory runs their own `--out` (Step 7) |
+| `make checkin`: `agent_example_langgraph.py` / `agent_example_crewai.py` `FAIL exit=1 0.1s` | Agent frameworks not installed | Step 8.5: install them, then re-pin `mcp>=2.0.0` |
+| `ValueError: not enough values to unpack` | v0.1 unpacking style | `cache.get()` returns a **3-tuple** — `response, sim, ctx_depth = cache.get(...)` |
+| MiniLM takes 2–3 s on first call | Model cold load | Normal. Warm the model at app startup, not per request |
+| `git push` returns 403 | GitHub credentials missing or expired | `gh auth login`, then `gh auth setup-git`. Don't put a token in the remote URL — it is stored in plain text in `.git/config` |
+| `_telemetry_enabled` is True unexpectedly | `connect()` called elsewhere | Check app code and test fixtures for `sulci.connect()` — telemetry is opt-in only |
 
 ---
 
@@ -989,129 +1225,113 @@ require a key:
 | `examples/anthropic_example.py`                     | `ANTHROPIC_API_KEY`                                               |
 | `examples/langchain_example.py`                     | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (optional — mock fallback)|
 | `examples/llamaindex_example.py`                    | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (optional — mock fallback)|
+| `examples/async_example.py`                         | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` (optional — mock fallback)|
+| `examples/agent_example_langgraph.py`, `agent_example_crewai.py` | `ANTHROPIC_API_KEY` (optional — mock fallback)       |
+| `examples/litellm_example.py`                       | `OPENAI_API_KEY` (optional — mock fallback)                       |
+| `examples/proxy_example.py`                         | `OPENAI_API_KEY` **required**, plus a running `sulci-proxy` on :8787 — so it is not in `make examples` |
 | `sulci/embeddings/openai.py`                        | `OPENAI_API_KEY`                                                  |
 | `sulci.connect()` / `Cache(backend="sulci")`        | `SULCI_API_KEY` (Sulci Cloud — optional)                          |
 | All other code                                      | None                                                              |
 
-The default embedding model (`minilm`) runs fully locally via `sentence-transformers`.
-No network calls are made unless you explicitly configure `embedding_model="openai"`
-or use `backend="sulci"` with `sulci.connect()`.
+The default embedding model (`minilm`) runs locally via `sentence-transformers`.
+Sulci itself makes no network calls unless you configure `embedding_model="openai"`
+or use `backend="sulci"` / `sulci.connect()`. **The model loader does:** the first
+load downloads `all-MiniLM-L6-v2` (~90 MB) from Hugging Face, and every later load
+checks it for updates unless `HF_HUB_OFFLINE=1` is set (see Step 5).
 
 > **`SULCI_API_KEY`** is the environment variable for the Sulci Cloud managed backend.
 > Get a free key at [sulci.io/signup](https://sulci.io/signup). Setting this variable
-> is optional — the library works fully offline without it.
+> is optional — the library works fully offline without it. That is a
+> **production** key: for development and testing, use a key issued by the
+> staging or local gateway, with `SULCI_GATEWAY` set (Step 9).
 
 ---
 
 ## What a Clean Run Looks Like
 
+Tail of a clean run (2026-09-25, v0.9.1, M2, full Step 3 install, no Redis or
+Qdrant server):
+
 ```
-$ python -m pytest tests/ -v
-
-tests/test_backends.py::TestSQLiteBackend::test_contract PASSED
-tests/test_backends.py::TestSQLiteBackend::test_persistence PASSED
-tests/test_backends.py::TestChromaBackend::test_contract SKIPPED (chromadb not installed)
-tests/test_backends.py::TestFAISSBackend::test_contract SKIPPED (faiss-cpu not installed)
-tests/test_backends.py::TestQdrantBackend::test_contract SKIPPED (qdrant-client not installed)
-tests/test_backends.py::TestRedisBackend::test_contract_local SKIPPED (redis not installed)
-tests/test_backends.py::TestMilvusBackend::test_contract SKIPPED (pymilvus not installed)
-tests/test_connect.py::TestDefaultState::test_telemetry_disabled_by_default PASSED
+$ HF_HUB_OFFLINE=1 python -m pytest tests/ -v -rs
 ...
-tests/test_connect.py::TestThreadSafety::test_concurrent_emits_do_not_lose_events PASSED
-tests/test_context.py::TestContextWindow::test_empty_window_returns_query_vec PASSED
+tests/test_telemetry_lifecycle.py::TestAtexitFlush::test_flush_thread_is_daemon PASSED
 ...
-tests/test_context.py::TestCacheContextIntegration::test_clear_context_resets_depth PASSED
-tests/test_core.py::TestBasicOperations::test_import PASSED
-...
-tests/test_core.py::TestPersonalization::test_user_scoped_miss_for_other_user PASSED
-tests/test_integrations_langchain.py::TestContract::test_miss_on_empty_cache PASSED
-...
-tests/test_integrations_langchain.py::TestGlobalRegistration::test_set_and_get_llm_cache PASSED
-tests/test_integrations_llamaindex.py::TestConstruction::test_wraps_llm PASSED
-...
-tests/test_integrations_llamaindex.py::TestStats::test_repr_contains_hit_rate PASSED
-
-========== 205 passed, 7 skipped in ~380s ==========
+=========== 689 passed, 41 skipped, 5 warnings in … ===========
 ```
 
-> **Backend tests are skipped — not failed — when the dependency isn't installed.** This is expected.
-> Install a backend extra (e.g. `pip install -e ".[chroma]"`) to run its tests.
+(With the Step 8.5 agent packages installed: `694 passed, 36 skipped, 5 warnings
+in 67.79s` offline, 2026-10-01.)
+
+- **The 5 warnings are expected.** They are `UserWarning`s from tests that
+  deliberately leave `context_threshold` unset (see `docs/context-threshold.md`).
+- **Skips are expected** for backends whose packages you didn't install, tests
+  that need a live server, and four permanent by-design skips. Step 5 breaks
+  them down; `-rs` lists the reason for each.
+- **Failures and collection errors are not expected.** Not every missing extra
+  produces a skip — some fail or error instead (Step 3, Troubleshooting).
 
 ---
 
 ## Project Structure (Reference)
 
+Generated from the repo on 2026-09-30 (v0.9.1). Per-file test counts are
+deliberately left out — they go stale with every release. For the current total,
+run `python -m pytest tests/ --collect-only -q | tail -1` (689 at v0.9.1).
+
 ```
 .
-├── CHANGELOG.md
-├── CONTRIBUTING.md
-├── LICENSE
-├── LOCAL_SETUP.md
-├── Makefile                    ← make smoke, make test, make test-all, make verify
-├── NOTICE
-├── README.md
-├── benchmark
-│   ├── README.md               ← benchmark methodology and results
-│   └── run.py                  ← benchmark CLI (--context for context-aware pass)
-├── examples
-│   ├── anthropic_example.py    ← Anthropic Claude + context-aware (ANTHROPIC_API_KEY)
-│   ├── basic_usage.py          ← stateless cache demo, no API key needed
-│   ├── context_aware.py        ← 4-demo walkthrough, fully offline
-│   ├── context_aware_example.py← additional context-aware patterns
-│   ├── langchain_example.py    ← LangChain demo, OpenAI/Anthropic/mock  (v0.3.5)
-│   └── llamaindex_example.py   ← LlamaIndex demo, OpenAI/Anthropic/mock (v0.3.5)
-├── pyproject.toml              ← name="sulci", version="0.5.6"
+├── .envrc                      ← direnv: activates .venv (tracked in git)
+├── .github/workflows/          ← CI: tests.yml (3 OS × Python 3.9–3.12), publish.yml, benchmark.yml
+├── CHANGELOG.md  CONTRIBUTING.md  LICENSE  NOTICE  README.md  SECURITY.md
+├── LOCAL_SETUP.md              ← this guide
+├── Makefile                    ← smoke, test-*, checkin / checkin-fast, benchmark-verify, …
+├── pyproject.toml              ← name="sulci", version, extras, console scripts
 ├── setup.py
-├── setup.sh                    ← one-shot setup: venv + install + smoke tests
-├── smoke_test.py               ← core smoke test
-├── smoke_test_langchain.py     ← LangChain integration smoke test           (v0.3.3)
-├── smoke_test_llamaindex.py    ← LlamaIndex integration smoke test          (v0.3.5)
-├── sulci
-│   ├── __init__.py             ← exports Cache, ContextWindow, SessionStore, connect()
-│   │                              _SDK_VERSION = __version__   # derived from pyproject.toml
-│   ├── backends
-│   │   ├── __init__.py         ← empty — core.py loads backends via importlib
-│   │   ├── chroma.py
-│   │   ├── cloud.py            ← SulciCloudBackend (backend="sulci")
-│   │   ├── faiss.py
-│   │   ├── milvus.py
-│   │   ├── qdrant.py
-│   │   ├── redis.py
-│   │   └── sqlite.py
-│   ├── async_cache.py          ← AsyncCache non-blocking wrapper   (v0.3.7)
-│   ├── context.py              ← ContextWindow + SessionStore
+├── setup.sh                    ← quick start only: installs a SUBSET of the Step 3 extras
+│                                 and uses plain `python3` — follow Steps 2–3 for development
+├── smoke_test.py  smoke_test_async.py  smoke_test_langchain.py  smoke_test_llamaindex.py
+├── benchmark/
+│   ├── README.md               ← methodology and results
+│   ├── baseline.json           ← pinned TF-IDF regression baseline
+│   ├── run.py                  ← benchmark CLI (Step 7)
+│   └── results/                ← tfidf/ (scratch) and minilm/ (committed published draws)
+├── docs/
+│   ├── API-SURFACE.md          ← public API, checked by scripts/check_api_surface.py
+│   ├── context-threshold.md    ← why context_threshold has no default
+│   ├── protocols.md  multi_tenancy_and_isolation.md  OSS_BOUNDARY_POLICY.md
+│   └── architecture/           ← ADRs (e.g. 0002 smoke-fast CPU mode)
+├── examples/                   ← see Step 6 and API Key Notes
+│   ├── basic_usage.py  context_aware.py  context_aware_example.py
+│   ├── anthropic_example.py  langchain_example.py  llamaindex_example.py  async_example.py
+│   ├── agent_example_langgraph.py  agent_example_crewai.py
+│   ├── mcp_example.py  litellm_example.py  proxy_example.py  gh_aw_sulci_mcp.md
+│   └── extending_sulci/        ← reference implementations of the protocols
+├── scripts/                    ← see scripts/README.md
+│   ├── run_tests_per_file.py  run_examples.py  verify_integration_examples.py
+│   ├── verify_benchmark.py  check_agent_draws.py  check_api_surface.py
+│   └── check_ci_test_coverage.py  check_release_ready.py  check_tag_version.py
+├── sulci/
+│   ├── __init__.py             ← exports Cache, AsyncCache, ContextWindow, SessionStore, connect()
 │   ├── core.py                 ← Cache engine (context-aware)
-│   │                              telemetry= param, api_key= param
-│   ├── embeddings
-│   │   ├── __init__.py
-│   │   ├── minilm.py           ← default: all-MiniLM-L6-v2 (free, local)
-│   │   └── openai.py           ← requires OPENAI_API_KEY
-│   └── integrations
-│       ├── __init__.py
-│       ├── langchain.py        ← SulciCache(BaseCache) for LangChain  (v0.3.3)
-│       └── llamaindex.py       ← SulciCacheLLM(LLM) for LlamaIndex    (v0.3.6)
-└── tests
-    ├── test_backends.py                —  9 tests: per-backend contract + persistence
-    ├── test_cloud_backend.py           — 28 tests: SulciCloudBackend + Cache wiring
-    ├── test_connect.py                 — 32 tests: sulci.connect(), _emit(), _flush()
-    ├── test_context.py                 — 35 tests: ContextWindow, SessionStore, integration
-    ├── test_core.py                    — 35 tests: cache.get/set, TTL, stats incl. raw-get/set, personalization
-    ├── test_integrations_langchain.py  — 27 tests: SulciCache LangChain adapter        (v0.3.3)
-    ├── test_integrations_llamaindex.py — 29 tests: SulciCacheLLM LlamaIndex wrapper     (v0.3.5)
-    ├── test_async_cache.py             — 37 tests: AsyncCache wrapper + partition/threshold parity (v0.3.7+)
-    ├── test_qdrant_tenant_isolation.py — 11 tests: tenant_id partition isolation         (v0.4.0)
-    ├── test_sessions.py                — 24 tests: SessionStore protocol + tenant isol.  (v0.5.0)
-    ├── test_sinks.py                   — 15 tests: EventSink protocol + privacy allowlist (v0.5.0)
-    ├── test_session_store_injection.py — 12 tests: Cache(session_store=, event_sink=)    (v0.5.0)
-    ├── test_config.py                  — 20 tests: ~/.sulci/config — load/save/0600 perms (v0.5.2)
-    ├── test_telemetry.py               — 28 tests: fingerprint helper + flush wire shape (incl. startup-events) (v0.5.2 / v0.5.4)
-    ├── test_nudge.py                   — 13 tests: 100-query nudge in Cache.stats()       (v0.5.2)
-    └── compat/                         —  Backend + Embedder conformance suites
-
-Plus: sulci/tests/compat/ — SessionStore + EventSink conformance suites (v0.5.0)
-
-Total: ~347 tests at v0.5.2 (varies with optional deps installed)
+│   ├── async_cache.py          ← AsyncCache wrapper
+│   ├── context.py              ← ContextWindow + in-process session handling
+│   ├── config.py               ← ~/.sulci/config persistence
+│   ├── telemetry.py  oss_connect.py   ← opt-in telemetry, device-code flow (Step 9)
+│   ├── backends/               ← chroma, faiss, milvus, qdrant, redis, sqlite (free)
+│   │                             + cloud (backend="sulci", managed); protocol.py
+│   ├── embeddings/             ← minilm (default, local), openai; protocol.py
+│   ├── integrations/           ← langchain, llamaindex, litellm, mcp_server
+│   ├── proxy/                  ← sulci-proxy (OpenAI-compatible caching proxy)
+│   ├── sessions/               ← SessionStore: memory, redis; protocol.py
+│   ├── sinks/                  ← EventSink: null, telemetry, redis_stream; protocol.py
+│   └── tests/compat/           ← SessionStore + EventSink conformance suites
+└── tests/                      ← test_*.py per feature, plus compat/ (backend + embedder
+                                  conformance) and integration/flows/
 ```
+
+Console scripts installed by the package: `sulci-mcp` (MCP server) and
+`sulci-proxy` (caching proxy).
 
 > **Redis-dependent tests:** the per-file runner exercises `RedisBackend`,
 > `RedisSessionStore`, and `RedisStreamSink` against a real Redis daemon. Make sure
@@ -1125,17 +1345,19 @@ Total: ~347 tests at v0.5.2 (varies with optional deps installed)
 > brew install redis && brew services start redis
 > ```
 >
-> Without Redis up, the relevant tests skip gracefully via the fixture, so the
-> suite still completes — but you lose coverage of the new v0.5.0 sessions/sinks
-> Redis paths.
+> Without Redis up, the relevant tests skip via the fixture (it probes once,
+> with a short timeout), so the suite still completes — but you lose coverage of
+> the Redis-backed sessions and sinks paths.
 
 ---
 
 ## Related Docs
 
-- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — branching model, PR process, coding standards
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md) — adding a backend, pre-publish review, releasing
 - [`CHANGELOG.md`](./CHANGELOG.md) — version history
 - [`benchmark/README.md`](./benchmark/README.md) — benchmark methodology and results
+- [`docs/API-SURFACE.md`](./docs/API-SURFACE.md) — public API reference
+- [`scripts/README.md`](./scripts/README.md) — the verification and runner scripts
 - [PyPI: sulci](https://pypi.org/project/sulci/)
 - [GitHub: sulci-io/sulci-oss](https://github.com/sulci-io/sulci-oss)
 
@@ -1143,12 +1365,11 @@ Total: ~347 tests at v0.5.2 (varies with optional deps installed)
 
 ## Branch Reference
 
-| Branch                            | Purpose                          | Status                      |
-| --------------------------------- | -------------------------------- | --------------------------- |
-| `main`                            | Stable release — v0.5.0          | All work merges here via PR |
-| `feature/context-aware`           | v0.2.0 context-aware library     | Merged                      |
-| `feature/benchmark-context-aware` | v0.2.5 benchmark suite           | Merged                      |
-| `feature/saas-onramp`             | v0.3.0 cloud backend + telemetry | Merged                      |
-| `feat/langchain-integration`      | v0.3.3 LangChain integration     | Merged                      |
-| `feat/llamaindex-integration`     | v0.3.5 LlamaIndex + examples     | Merged                      |
-| `feat/async-cache`                | v0.3.7 AsyncCache wrapper        | Merged                      |
+- **`main`** is the current release line (v0.9.1 as of 2026-09-30 — check
+  `pyproject.toml`). All work merges here via PR.
+- Work happens on short-lived branches. Prefixes in use: `feat/` or `feature/`,
+  `fix/`, `docs/`, `chore/`, `test/`, and `release/vX.Y.Z` for releases.
+- Merged branches are not always deleted, so `git branch -r` lists many that are
+  merged or stale; don't read anything into them.
+- Release steps (version bump, CHANGELOG, merge-commit rule) are in
+  [`CONTRIBUTING.md`](./CONTRIBUTING.md#releasing).
