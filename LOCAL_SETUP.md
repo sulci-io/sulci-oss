@@ -239,9 +239,18 @@ no Redis or Qdrant server running):
 689 passed, 41 skipped, 0 failed
 ```
 
-Skips are expected: they're backends whose packages you didn't install
-(chroma, faiss, …) or tests that need a live server. Re-measure the current
-count with `python -m pytest tests/ --collect-only -q | tail -1`.
+Skips are expected. Re-measure the current count with
+`python -m pytest tests/ --collect-only -q | tail -1`. With the agent packages
+from Step 8.5 also installed (they pull in `chromadb`), the same run gives
+**694 passed, 36 skipped** (2026-10-01). Those 36 skips break down as:
+
+| Skips | Reason shown by `-rs` | To run them |
+|---|---|---|
+| 14 | `redis-server not running on localhost:6379` / `RedisBackend: no local construction available` | Start a local Redis (see *Redis-dependent tests* at the end of this guide) |
+| 7 | `faiss-cpu not installed` / `FAISSBackend: no local construction available` | `pip install -e ".[faiss]"` |
+| 6 | `pymilvus not installed` / `MilvusBackend: no local construction available` | `pip install -e ".[milvus]"` (runs locally, no server) |
+| 5 | `OpenAIEmbedder: no local construction available` | Set `OPENAI_API_KEY` — makes real, billed API calls |
+| 4 | `SQLiteBackend` / `ChromaBackend does not enforce tenant isolation` | Never — by design, the contract doesn't apply |
 
 **Any failure or collection error on a fresh setup is a real problem** — most
 often a missing extra (see the warning in Step 3).
@@ -252,19 +261,21 @@ The suite loads the embedding model (`all-MiniLM-L6-v2`) many times, and by
 default each load checks Hugging Face for updates. Runtime therefore depends
 on your connection, not your CPU:
 
-- normal connection: about 7 minutes
-- slow connection: much longer — the full suite took **72 minutes** on in-flight
-  Wi-Fi at ~3% CPU, which looks like a hang but isn't
+| Mode | Full suite, M2 MacBook Air |
+|---|---|
+| Offline (`HF_HUB_OFFLINE=1`) | **~70 s** (67.8 s, 2026-10-01) |
+| Online, ordinary connection | ~7 min |
+| Online, in-flight Wi-Fi | 72 min at ~3% CPU — looks like a hang, isn't |
 
 The **first** run must be online, to download the model (~90 MB, cached in
-`~/.cache/huggingface`). After that, run offline and the network stops mattering:
+`~/.cache/huggingface`). After that, always run offline:
 
 ```bash
 HF_HUB_OFFLINE=1 python -m pytest tests/ -v -rs
 ```
 
-On the same slow connection, `tests/test_async_cache.py` dropped from ~30 s
-per test to 40 tests in 17 s with `HF_HUB_OFFLINE=1`.
+Consider adding `export HF_HUB_OFFLINE=1` to your shell profile once the model
+is cached; unset it only when you need a model you haven't downloaded yet.
 
 If one test sits for several minutes at near-0% CPU **with**
 `HF_HUB_OFFLINE=1` set, see the Apple Silicon (MPS) note in the gotchas
@@ -1164,10 +1175,14 @@ tests/test_telemetry_lifecycle.py::TestAtexitFlush::test_flush_thread_is_daemon 
 =========== 689 passed, 41 skipped, 5 warnings in … ===========
 ```
 
+(With the Step 8.5 agent packages installed: `694 passed, 36 skipped, 5 warnings
+in 67.79s` offline, 2026-10-01.)
+
 - **The 5 warnings are expected.** They are `UserWarning`s from tests that
   deliberately leave `context_threshold` unset (see `docs/context-threshold.md`).
-- **Skips are expected** for backends whose packages you didn't install and for
-  tests that need a live server. `-rs` lists the reason for each.
+- **Skips are expected** for backends whose packages you didn't install, tests
+  that need a live server, and four permanent by-design skips. Step 5 breaks
+  them down; `-rs` lists the reason for each.
 - **Failures and collection errors are not expected.** Not every missing extra
   produces a skip — some fail or error instead (Step 3, Troubleshooting).
 
