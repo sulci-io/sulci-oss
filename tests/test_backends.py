@@ -131,6 +131,159 @@ class TestSQLiteBackend:
         assert result == "Python is a language."
 
 
+class TestSQLiteScopeKey:
+    """
+    Cache.set derives the backend key from the query text alone. The
+    SQLite row must therefore be unique on (key, tenant_id, user_id):
+    the same query stored under two scopes is two rows, each served
+    only its own response.
+    """
+
+    QUERY = "what is my account balance"
+
+    def _cache(self, tmp_path, fake_embedder):
+        from sulci import Cache
+        return Cache(
+            backend="sqlite", db_path=str(tmp_path / "scope"),
+            embedding_model=fake_embedder, personalized=True,
+            telemetry=False,
+        )
+
+    def test_same_query_two_users_each_get_their_own(self, tmp_path, fake_embedder):
+        cache = self._cache(tmp_path, fake_embedder)
+        cache.set(self.QUERY, "alice: $10", user_id="alice")
+        cache.set(self.QUERY, "bob: $99",   user_id="bob")
+
+        assert cache.get(self.QUERY, user_id="alice")[0] == "alice: $10"
+        assert cache.get(self.QUERY, user_id="bob")[0]   == "bob: $99"
+
+    def test_same_query_two_tenants_each_get_their_own(self, tmp_path, fake_embedder):
+        cache = self._cache(tmp_path, fake_embedder)
+        cache.set(self.QUERY, "acme: $10",   tenant_id="acme",   user_id="u-acme")
+        cache.set(self.QUERY, "globex: $99", tenant_id="globex", user_id="u-globex")
+
+        assert cache.get(self.QUERY, tenant_id="acme",   user_id="u-acme")[0]   == "acme: $10"
+        assert cache.get(self.QUERY, tenant_id="globex", user_id="u-globex")[0] == "globex: $99"
+
+    def test_same_key_two_tenants_is_two_rows(self, tmp_path):
+        """
+        Backend level, same user: a second tenant's write must not
+        replace the first tenant's row. (search() does not filter on
+        tenant_id — ENFORCES_TENANT_ISOLATION is False — so this is
+        asserted on the stored rows, not on a lookup.)
+        """
+        from sulci.backends.sqlite import SQLiteBackend
+        b = SQLiteBackend(db_path=str(tmp_path / "rows"))
+        b.store("k", self.QUERY, "acme",   [1.0, 0.0], tenant_id="acme",   user_id="u")
+        b.store("k", self.QUERY, "globex", [1.0, 0.0], tenant_id="globex", user_id="u")
+
+        rows = b._conn.execute(
+            "SELECT tenant_id, user_id, response FROM cache ORDER BY id"
+        ).fetchall()
+        assert [tuple(r) for r in rows] == [
+            ("acme", "u", "acme"), ("globex", "u", "globex"),
+        ]
+
+    def test_same_scope_rewrite_still_updates_in_place(self, tmp_path):
+        from sulci.backends.sqlite import SQLiteBackend
+        b = SQLiteBackend(db_path=str(tmp_path / "upsert"))
+        b.store("k", self.QUERY, "old", [1.0, 0.0], tenant_id="t", user_id="u")
+        b.store("k", self.QUERY, "new", [1.0, 0.0], tenant_id="t", user_id="u")
+
+        rows = b._conn.execute("SELECT response FROM cache").fetchall()
+        assert [r[0] for r in rows] == ["new"]
+        assert b.search([1.0, 0.0], 0.85, user_id="u")[0] == "new"
+
+
+class TestSQLiteSchemaMigration:
+    """A database written by 0.9.1 (user_version 0) opens under 0.9.2."""
+
+    V0_SCHEMA = """
+        CREATE TABLE cache (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            key       TEXT UNIQUE NOT NULL,
+            query     TEXT NOT NULL,
+            response  TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            user_id   TEXT NOT NULL DEFAULT 'global',
+            expires   REAL NOT NULL DEFAULT 0,
+            created   REAL NOT NULL,
+            metadata  TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE INDEX idx_user    ON cache(user_id);
+        CREATE INDEX idx_expires ON cache(expires);
+    """
+
+    def _write_v0(self, db_dir):
+        import sqlite3, struct
+        os.makedirs(db_dir)
+        conn = sqlite3.connect(os.path.join(db_dir, "sulci.db"))
+        conn.executescript(self.V0_SCHEMA)
+        vec = struct.pack("2f", 1.0, 0.0)
+        conn.executemany(
+            "INSERT INTO cache (key, query, response, embedding, user_id, created)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            [
+                ("g1", "shared q",   "shared answer", vec, "global", 1.0),
+                ("p1", "personal q", "someone's",     vec, "alice",  2.0),
+                ("p2", "other q",    "someone else's", vec, "bob",   3.0),
+            ],
+        )
+        conn.commit()
+        conn.close()
+
+    def test_discards_every_pre_upgrade_row(self, tmp_path):
+        """No pre-0.9.2 row survives — with or without a user_id."""
+        from sulci.backends.sqlite import SQLiteBackend, SCHEMA_VERSION
+        db_dir = str(tmp_path / "v091")
+        self._write_v0(db_dir)
+
+        with pytest.warns(RuntimeWarning, match="discarded 3 entries written before 0.9.2"):
+            b = SQLiteBackend(db_path=db_dir)
+
+        assert b._conn.execute("SELECT COUNT(*) FROM cache").fetchone()[0] == 0
+        assert b._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert b.search([1.0, 0.0], 0.85)[0] is None
+        cols = [r[1] for r in b._conn.execute("PRAGMA table_info(cache)")]
+        assert "tenant_id" in cols
+        # The old single-column UNIQUE is gone: two users can now hold the key.
+        b.store("p1", "personal q", "alice's", [1.0, 0.0], user_id="alice")
+        b.store("p1", "personal q", "bob's",   [1.0, 0.0], user_id="bob")
+        assert b.search([1.0, 0.0], 0.85, user_id="alice")[0] == "alice's"
+        assert b.search([1.0, 0.0], 0.85, user_id="bob")[0]   == "bob's"
+
+    def test_reopen_after_migration_is_a_no_op(self, tmp_path):
+        import warnings
+        from sulci.backends.sqlite import SQLiteBackend
+        db_dir = str(tmp_path / "v091")
+        self._write_v0(db_dir)
+        with pytest.warns(RuntimeWarning):
+            b1 = SQLiteBackend(db_path=db_dir)
+        b1.store("k", "q", "written after the upgrade", [1.0, 0.0])
+        b1._conn.close()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            b = SQLiteBackend(db_path=db_dir)
+        assert b.search([1.0, 0.0], 0.85)[0] == "written after the upgrade"
+
+    def test_empty_v0_database_migrates_silently(self, tmp_path):
+        import sqlite3, warnings
+        from sulci.backends.sqlite import SQLiteBackend
+        db_dir = str(tmp_path / "v091")
+        self._write_v0(db_dir)
+        conn = sqlite3.connect(os.path.join(db_dir, "sulci.db"))
+        conn.execute("DELETE FROM cache")
+        conn.commit()
+        conn.close()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            b = SQLiteBackend(db_path=db_dir)
+        cols = [r[1] for r in b._conn.execute("PRAGMA table_info(cache)")]
+        assert "tenant_id" in cols
+
+
 # ── ChromaDB ──────────────────────────────────────────────────
 
 class TestChromaBackend:
@@ -225,3 +378,40 @@ class TestMilvusBackend:
         from sulci.backends.milvus import MilvusBackend
         backend = MilvusBackend(db_path=str(tmp_path / "milvus_test.db"))
         _run_backend_contract(backend)
+
+    # Values a caller might pass as user_id. Each must match only the entry
+    # stored under exactly that value.
+    SCOPE_VALUES = [
+        "alice", 'x" or user_id != "x', 'a\\" or user_id != "', "a\\",
+        "o'neil", "line\nbreak", "cr\rx", "tab\tx", "nul\x00x", "uni \u00fc", "",
+    ]
+
+    def test_filter_literal_is_a_single_quoted_string(self):
+        """Runs without pymilvus: the expression must not depend on the value."""
+        from sulci.backends.milvus import _filter_literal
+        for value in self.SCOPE_VALUES:
+            lit = _filter_literal(value)
+            assert lit[0] == lit[-1] == '"'
+            body = lit[1:-1]
+            # Every quote and backslash in the body is escaped, so the
+            # literal cannot close early and nothing after it is parsed.
+            i = 0
+            while i < len(body):
+                if body[i] == "\\":
+                    assert body[i + 1] in '\\"nrt'
+                    i += 2
+                    continue
+                assert body[i] not in '"\n\r'
+                i += 1
+
+    @skip_milvus
+    def test_user_scope_matches_exactly(self, tmp_path):
+        from sulci.backends.milvus import MilvusBackend
+        b = MilvusBackend(db_path=str(tmp_path / "milvus_scope.db"))
+        vec = [1.0, 0.0]
+        for i, value in enumerate(self.SCOPE_VALUES[:-1]):
+            b.store(f"k{i}", "q", f"resp-{i}", vec, user_id=value)
+
+        for i, value in enumerate(self.SCOPE_VALUES[:-1]):
+            assert b.search(vec, 0.85, user_id=value)[0] == f"resp-{i}", value
+        assert b.search(vec, 0.85, user_id="nobody")[0] is None

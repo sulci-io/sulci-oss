@@ -124,10 +124,10 @@ implementation honors it (or doesn't, declared via the
 |---|---|---|
 | QdrantBackend | Yes | Qdrant payload `Filter(must=[FieldCondition(...)])` applied at query time |
 | ChromaBackend | No (label-only) | `tenant_id` stored in metadata; not filtered on read |
-| SQLiteBackend | No | `tenant_id` accepted but currently dropped (schema migration deferred) |
-| RedisBackend | No | Same as SQLite |
-| FAISSBackend | No | Same |
-| MilvusBackend | No | Same |
+| SQLiteBackend | No | `tenant_id` stored and part of the row's identity since 0.9.2 (the same query in two tenants is two rows); not filtered on read |
+| RedisBackend | No | `tenant_id` accepted and ignored — not stored |
+| FAISSBackend | No | Same as Redis |
+| MilvusBackend | No | Same as Redis |
 | SulciCloudBackend | (gateway-side) | Cloud gateway enforces via API key → tenant mapping; OSS conformance opts out because there's no local gateway to verify against |
 
 Backends with `ENFORCES_TENANT_ISOLATION = False` accept the

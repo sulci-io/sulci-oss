@@ -1,12 +1,13 @@
 # Sulci — the measured public API surface
 
-**Measured:** 2026-08-30 against `sulci` **0.9.1**
+**Measured:** 2026-10-01 against `sulci` **0.9.2**
 
 📌 **Re-verified, not re-measured.** The surface was measured 2026-07-24 at
 version 0.9.0. On 2026-08-30 `check_api_surface.py --show` was run against both
-0.9.0 and 0.9.1 and the outputs diffed: **the only differing line is the version
-banner itself.** No method set, keyword-only parameter or `Cache.__init__`
-default changed. Re-dating this header without that diff would have been a
+0.9.0 and 0.9.1, and on 2026-10-01 against 0.9.1 (a clean `HEAD` worktree) and
+0.9.2, and the outputs diffed: **each time the only differing line is the
+version banner itself.** No method set, keyword-only parameter or
+`Cache.__init__` default changed. Re-dating this header without that diff would have been a
 restatement, which is the habit this file exists to end.
 **Method:** AST parse of `sulci/core.py`, `sulci/async_cache.py`,
 `sulci/integrations/langchain.py` and `sulci/integrations/llamaindex.py`. Not

@@ -110,7 +110,8 @@ class SulciCache(BaseCache):
                 api_key         Sulci Cloud key (backend="sulci")
                 gateway_url     Custom gateway for Enterprise VPC deployments
                                 (default: https://api.sulci.io)
-                personalized    Partition per user_id  (default False)
+                personalized    No effect here: this adapter never
+                                passes a user_id  (default False)
                 db_path         On-disk path for SQLite/FAISS backends
 
     Examples:

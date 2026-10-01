@@ -8,6 +8,79 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.2] — SQLite and Milvus: enforce cache scope
+
+### Security
+
+Two separate issues, both in self-hosted backends and both present in every
+release from 0.1.1 through 0.9.1.
+
+#### SQLite: entries for different users were not kept apart
+
+**Who is affected:** self-hosted deployments using `backend="sqlite"` with
+`personalized=True`, through `Cache` or `AsyncCache`. The SQLite backend
+identified a row by the query text alone, so the same query stored for two
+different `user_id`s did not reliably stay separate: a lookup scoped to one
+user could return the response stored for another.
+
+**What to do:** upgrade to 0.9.2. Until you can, set `personalized=False`
+(and keep per-user responses out of the shared cache), or give each user their
+own `db_path`.
+
+#### Milvus: `user_id` was not escaped in the lookup filter
+
+**Who is affected:** self-hosted deployments using `backend="milvus"` with
+`personalized=True`. The Milvus backend placed `user_id` into its filter
+expression without escaping it, so some `user_id` values could change the
+filter and match entries outside that user's scope.
+
+**What to do:** upgrade to 0.9.2. Until you can, pass only `user_id` values
+your application generates itself (for example UUIDs), never values taken from
+user input, or set `personalized=False`.
+
+#### Not affected
+
+- The hosted Sulci service (`backend="sulci"`) was never affected — that path
+  uses neither backend.
+- `personalized=False` (the default), and any deployment that never passes
+  `user_id`.
+- The `chroma`, `faiss`, `qdrant` and `redis` backends (but see *Known
+  limitations* below).
+- The LangChain, LlamaIndex, LiteLLM, MCP and proxy integrations, which do not
+  pass `user_id`.
+
+#### `tenant_id` isolation is unchanged
+
+It is enforced by `qdrant` only (and server-side by the hosted service). On
+`sqlite` a `tenant_id` is now stored and is part of what makes a row unique,
+so two tenants no longer overwrite each other's entry, but lookups are still
+not filtered by it. `milvus` does not store or filter on `tenant_id`.
+
+### Changed
+
+- **`SQLiteBackend` rows are unique on `(key, tenant_id, user_id)`**, and a
+  write upserts only within the same scope. New `tenant_id` column.
+- **Existing SQLite databases are migrated in place on first open** (one
+  transaction, guarded against concurrent openers; tracked with
+  `PRAGMA user_version`, now `1`). **Every row written before the upgrade is
+  discarded** — with or without a `user_id` — because no old row's scope can be
+  reliably determined. The cache starts cold and re-populates on misses; a
+  `RuntimeWarning` reports how many entries were discarded.
+- **Downgrading is not supported** for a migrated database: 0.9.1 cannot write
+  to the new schema. Point 0.9.1 at a fresh `db_path` if you must roll back.
+- **`MilvusBackend` escapes every value it places in a filter expression.**
+- `docs/protocols.md`: `store()` must upsert by `(key, tenant_id, user_id)`,
+  not by `key` — `Cache.set` derives the key from the query text alone.
+- Docs now say that `user_id` is ignored unless `personalized=True`, and that
+  a lookup without `user_id` is unscoped on every backend except `qdrant`.
+
+### Known limitations
+
+- **`chroma` and `redis` still upsert by `key` alone**, contrary to the
+  updated protocol. The same query stored for a second user or tenant replaces
+  the first one's entry. That entry is lost, not served to the wrong user: the
+  first user's next lookup misses. To be fixed in a later release.
+
 ## [0.9.1] — the two Qdrant cost levers become reachable
 
 `QdrantBackend.__init__` gains `on_disk` and `quantization`. Both were
