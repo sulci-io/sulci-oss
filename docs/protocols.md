@@ -60,7 +60,7 @@ Insert or replace one cache entry.
 
 | Parameter | Semantics |
 |---|---|
-| `key` | Deterministic identifier (typically a hash of tenant + user + query). Used for upsert. |
+| `key` | Deterministic identifier. `Cache.set` derives it from the query text alone, so it does **not** identify the scope — see the upsert requirement below. |
 | `query` | Original query text. Stored for debugging only — not used in retrieval. |
 | `response` | The LLM response text being cached. |
 | `embedding` | L2-normalized vector representation of `query`. Length must match the embedder's `dimension`. |
@@ -75,8 +75,12 @@ the protocol level so callers can't accidentally swap arguments.
 
 **Behavioral requirements:**
 
-- MUST upsert by `key` — calling `store` twice with the same `key`
-  replaces the existing entry rather than creating duplicates.
+- MUST upsert by `(key, tenant_id, user_id)` — calling `store` twice
+  with the same key **and** the same scope replaces the existing entry
+  rather than creating a duplicate. The same key under a different
+  `tenant_id` or `user_id` is a different entry and MUST NOT replace
+  or be merged with the first. (Before 0.9.2 this said "upsert by
+  `key`".)
 - MUST normalize `tenant_id=None` and `user_id=None` to `"global"`
   before storage, so that subsequent searches with `None` find them.
 - SHOULD log, not raise, on transient backend errors. A failed write

@@ -14,6 +14,18 @@ import time
 from typing import Optional
 
 
+# Escapes for a value placed inside a double-quoted Milvus filter literal.
+# Milvus accepts these sequences and no \uXXXX form; every other character
+# (control characters and non-ASCII included) is matched verbatim when left
+# as is. Measured against milvus-lite 3.2.1.
+_FILTER_ESCAPES = {"\\": "\\\\", '"': '\\"', "\n": "\\n", "\r": "\\r", "\t": "\\t"}
+
+
+def _filter_literal(value: str) -> str:
+    """Quote a caller-supplied value as a Milvus filter string literal."""
+    return '"' + "".join(_FILTER_ESCAPES.get(ch, ch) for ch in str(value)) + '"'
+
+
 class MilvusBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
@@ -79,7 +91,9 @@ class MilvusBackend:
         if not self._ready:
             return None, 0.0
         now     = now or time.time()
-        filter_ = f'user_id == "{user_id}"' if user_id else ""
+        # Every caller-supplied value goes through _filter_literal: an
+        # interpolated value could otherwise change the expression itself.
+        filter_ = f"user_id == {_filter_literal(user_id)}" if user_id else ""
         results = self._client.search(
             collection_name = self.COLLECTION,
             data            = [embedding],

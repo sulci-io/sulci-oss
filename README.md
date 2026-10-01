@@ -319,6 +319,14 @@ default `sqlite` backend **each of those is a no-op**, and each will emit a
 If you need real isolation today: use `backend="qdrant"` or the managed `sulci` backend, or give each scope
 its own `db_path`, or turn the feature off and share deliberately.
 
+**`user_id` is a separate scope.** It takes effect only with `personalized=True`
+— with the default `personalized=False` it is ignored on every backend. With
+`personalized=True`, pass `user_id` on both `set` and `get`: a lookup with a
+`user_id` matches only that user's entries, while a lookup without one is
+unscoped and, on every backend except `qdrant`, can match any user's entry.
+On `sqlite` and `milvus`, versions before 0.9.2 did not reliably keep users
+apart; see the [CHANGELOG](CHANGELOG.md).
+
 ---
 
 ## AsyncCache — non-blocking async wrapper
@@ -628,7 +636,7 @@ cache = Cache(
     threshold       = 0.85,         # cosine similarity cutoff (0–1)
     embedding_model = "minilm",     # minilm | mpnet | bge | openai
     ttl_seconds     = 86400,        # 24h. None = no expiry
-    personalized    = False,        # partition cache per user_id
+    personalized    = False,        # scope lookups to the user_id passed on get/set
     db_path         = "./sulci_db", # on-disk path for sqlite / faiss
     context_window  = 0,            # turns to remember; 0 = stateless
     query_weight    = 0.70,         # α in blending formula

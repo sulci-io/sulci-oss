@@ -236,7 +236,8 @@ class Cache:
         embedding_model: Local: "minilm" (default), "mpnet", "bge"
                          API:   "openai" (requires OPENAI_API_KEY)
         ttl_seconds:     Cache entry time-to-live. None = no expiry.
-        personalized:    Scope cache per user_id (prevents cross-user hits).
+        personalized:    Scope lookups to the user_id passed on get/set/
+                         cached_call. A call without user_id is unscoped.
         db_path:         Local storage path (ChromaDB, SQLite, FAISS).
         context_window:  Number of recent turns to remember per session.
                          0  = stateless (default, original behaviour).
