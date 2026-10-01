@@ -4,7 +4,8 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 
 ---
 
-> **Fresh-machine run-through (2026-09-25, M2 MacBook Air, macOS, Python 3.12, v0.9.1):**
+> **Fresh-machine run-through (2026-09-25, M2 MacBook Air, macOS, Python 3.12, v0.9.1;
+> test and check-in counts re-measured on v0.9.2, 2026-10-01):**
 > Steps 1–8.5 and 11–13 were followed literally on a clean `~/code` and
 > corrected where they broke; every command in those steps has been run as now
 > written. The reference sections from *Troubleshooting* onward were checked
@@ -17,7 +18,7 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 
 | Fact | Value | Re-measure |
 |---|---|---|
-| Version | **0.9.1** (CHANGELOG entry undated) | `grep '^version' pyproject.toml` |
+| Version | **0.9.2** (tag `v0.9.2`, on PyPI) | `grep '^version' pyproject.toml` |
 | Public methods on `Cache` | **8** | `python3 scripts/check_api_surface.py --show` |
 | Default backend | `"chroma"` | ditto — **not** sqlite |
 | Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
@@ -234,23 +235,24 @@ exactly like a hang. To keep a log and still watch progress, use
 
 ### Expected result
 
-Last measured 2026-09-25 (v0.9.1, M2 Mac, Python 3.12, full Step 3 install,
-no Redis or Qdrant server running):
+v0.9.2, M2 Mac, Python 3.12, offline, no Redis or Qdrant server running.
+The suite collects **739** tests.
 
 ```
-689 passed, 41 skipped, 0 failed
+702 passed, 37 skipped, 0 failed     # Step 3 install + Step 8.5 agent packages (measured 2026-10-01)
+697 passed, 42 skipped, 0 failed     # Step 3 install only (derived: see below)
 ```
 
 Skips are expected. Re-measure the current count with
-`python -m pytest tests/ --collect-only -q | tail -1`. With the agent packages
-from Step 8.5 also installed (they pull in `chromadb`), the same run gives
-**694 passed, 36 skipped** (2026-10-01). Those 36 skips break down as:
+`python -m pytest tests/ --collect-only -q | tail -1`. The Step 8.5 agent
+packages pull in `chromadb`, which turns 5 Chroma skips into passes; without
+them, expect the second line. The 37 skips in the measured run break down as:
 
 | Skips | Reason shown by `-rs` | To run them |
 |---|---|---|
 | 14 | `redis-server not running on localhost:6379` / `RedisBackend: no local construction available` | Start a local Redis (see *Redis-dependent tests* at the end of this guide) |
 | 7 | `faiss-cpu not installed` / `FAISSBackend: no local construction available` | `pip install -e ".[faiss]"` |
-| 6 | `pymilvus not installed` / `MilvusBackend: no local construction available` | `pip install -e ".[milvus]"` (runs locally, no server) |
+| 7 | `pymilvus not installed` / `MilvusBackend: no local construction available` | `pip install -e ".[milvus]"` (runs locally, no server) |
 | 5 | `OpenAIEmbedder: no local construction available` | Set `OPENAI_API_KEY` — makes real, billed API calls |
 | 4 | `SQLiteBackend` / `ChromaBackend does not enforce tenant isolation` | Never — by design, the contract doesn't apply |
 
@@ -265,7 +267,7 @@ on your connection, not your CPU:
 
 | Mode | Full suite, M2 MacBook Air |
 |---|---|
-| Offline (`HF_HUB_OFFLINE=1`) | **~70 s** (67.8 s, 2026-10-01) |
+| Offline (`HF_HUB_OFFLINE=1`) | **~70–85 s** (67.8 s at v0.9.1, 83.1 s at v0.9.2) |
 | Online, ordinary connection | ~7 min |
 | Online, in-flight Wi-Fi | 72 min at ~3% CPU — looks like a hang, isn't |
 
@@ -617,13 +619,13 @@ python scripts/run_tests_per_file.py \
 
 A successful run prints a per-file test summary, then the examples summary,
 then a final `✓ checkin verification complete` banner (`checkin-fast` prints
-`✓ checkin-fast verification complete (CPU smoke mode)`). Measured 2026-09-28
-(v0.9.1, M2, `make checkin-fast`, `HF_HUB_OFFLINE=1`, full Step 3 install plus
-the agent packages and mcp re-pin above, no Redis), **~5 min end to end**,
-make exit 0:
+`✓ checkin-fast verification complete (CPU smoke mode)`). Measured 2026-10-01
+(v0.9.2, M2, `make checkin-fast`, `HF_HUB_OFFLINE=1`, full Step 3 install plus
+the agent packages and mcp re-pin above, no Redis), make exit 0, about 5 minutes
+end to end:
 
 ```
-TOTAL: 719 passed, 0 failed, 0 errors, 54 skipped     (per-file tests)
+TOTAL: 727 passed, 0 failed, 0 errors, 55 skipped     (per-file tests)
 TOTAL: 16/16 passed                                    (examples)
 ```
 
@@ -1210,6 +1212,8 @@ python smoke_test_async.py
 | `make checkin`: `agent_example_langgraph.py` / `agent_example_crewai.py` `FAIL exit=1 0.1s` | Agent frameworks not installed | Step 8.5: install them, then re-pin `mcp>=2.0.0` |
 | `ValueError: not enough values to unpack` | v0.1 unpacking style | `cache.get()` returns a **3-tuple** — `response, sim, ctx_depth = cache.get(...)` |
 | MiniLM takes 2–3 s on first call | Model cold load | Normal. Warm the model at app startup, not per request |
+| `RuntimeWarning: sulci: upgraded the SQLite cache schema … discarded N entries written before 0.9.2` | First open of a pre-0.9.2 SQLite cache under 0.9.2. The schema is migrated in place and every old row is dropped, because its scope can't be determined | Expected, once per database. The cache starts cold and refills on misses |
+| `sqlite3.OperationalError: ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint` | A 0.9.1 (or older) checkout writing to a SQLite cache that 0.9.2 has already migrated. Downgrading a migrated database isn't supported | Point the older version at a fresh `db_path`, or delete that cache directory |
 | `git push` returns 403 | GitHub credentials missing or expired | `gh auth login`, then `gh auth setup-git`. Don't put a token in the remote URL — it is stored in plain text in `.git/config` |
 | `_telemetry_enabled` is True unexpectedly | `connect()` called elsewhere | Check app code and test fixtures for `sulci.connect()` — telemetry is opt-in only |
 
@@ -1249,19 +1253,19 @@ checks it for updates unless `HF_HUB_OFFLINE=1` is set (see Step 5).
 
 ## What a Clean Run Looks Like
 
-Tail of a clean run (2026-09-25, v0.9.1, M2, full Step 3 install, no Redis or
-Qdrant server):
+Tail of a clean run (2026-10-01, v0.9.2, M2, Step 3 install plus the Step 8.5
+agent packages, offline, no Redis or Qdrant server):
 
 ```
 $ HF_HUB_OFFLINE=1 python -m pytest tests/ -v -rs
 ...
 tests/test_telemetry_lifecycle.py::TestAtexitFlush::test_flush_thread_is_daemon PASSED
 ...
-=========== 689 passed, 41 skipped, 5 warnings in … ===========
+=========== 702 passed, 37 skipped, 5 warnings in 83.12s ===========
 ```
 
-(With the Step 8.5 agent packages installed: `694 passed, 36 skipped, 5 warnings
-in 67.79s` offline, 2026-10-01.)
+(Step 3 install alone: expect `697 passed, 42 skipped` — 5 Chroma tests skip
+without `chromadb`.)
 
 - **The 5 warnings are expected.** They are `UserWarning`s from tests that
   deliberately leave `context_threshold` unset (see `docs/context-threshold.md`).
@@ -1275,9 +1279,9 @@ in 67.79s` offline, 2026-10-01.)
 
 ## Project Structure (Reference)
 
-Generated from the repo on 2026-09-30 (v0.9.1). Per-file test counts are
+Generated from the repo on 2026-09-30 (v0.9.1); unchanged in 0.9.2. Per-file test counts are
 deliberately left out — they go stale with every release. For the current total,
-run `python -m pytest tests/ --collect-only -q | tail -1` (689 at v0.9.1).
+run `python -m pytest tests/ --collect-only -q | tail -1` (739 at v0.9.2).
 
 ```
 .
@@ -1365,7 +1369,7 @@ Console scripts installed by the package: `sulci-mcp` (MCP server) and
 
 ## Branch Reference
 
-- **`main`** is the current release line (v0.9.1 as of 2026-09-30 — check
+- **`main`** is the current release line (v0.9.2 as of 2026-10-01 — check
   `pyproject.toml`). All work merges here via PR.
 - Work happens on short-lived branches. Prefixes in use: `feat/` or `feature/`,
   `fix/`, `docs/`, `chore/`, `test/`, and `release/vX.Y.Z` for releases.

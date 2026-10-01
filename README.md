@@ -669,7 +669,7 @@ cache = Cache(
 
 **That is the whole public surface — eight methods, not nine.** The constructor
 defaults and method signatures above match an AST measurement of `sulci/core.py`
-at 0.9.1 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
+at 0.9.2 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
 before trusting any restatement of this table found elsewhere; the full measured
 surface is in [`docs/API-SURFACE.md`](docs/API-SURFACE.md).
 
@@ -889,7 +889,8 @@ export HF_HUB_OFFLINE=1 LITELLM_LOCAL_MODEL_COST_MAP=True   # after the first, o
 python -m pytest tests/ -q -rs
 ```
 
-At v0.9.1 that is 689 passed and 41 skipped. Skips are backends or servers you
+At v0.9.2 the suite collects 739 tests; with this install expect 697 passed and
+42 skipped. Skips are backends or servers you
 don't have; failures or collection errors are not expected. Some missing extras
 cause failures rather than skips, which is why the install line is long.
 
