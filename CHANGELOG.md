@@ -8,6 +8,35 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security
+
+#### Sulci Cloud: `delete_user` could erase the wrong user, or the tenant's whole cache
+
+**Who is affected:** applications on the managed backend (`backend="sulci"`) that call
+`SulciCloudBackend.delete_user(user_id)` with an id that can contain `/`, `.`, `?`, `#` or `%` — for example
+an id chosen by end users. The id was placed into the request path without encoding: `"../clear"` was sent
+as `DELETE /v1/cache/clear` and erased every entry of the tenant; `"a?b"` and `"a#b"` erased the user `"a"`;
+`"x/../bob"` erased the user `"bob"`; any other id containing `/` erased nothing. The method returned
+normally in every case.
+
+**What to do:** upgrade to 0.9.3. Until you can, pass only ids made of letters, digits, `-` and `_`. Ids
+containing `/` are erasable from 0.9.3 together with the managed gateway release that precedes it; against an
+older gateway they answer `404`, which 0.9.3 now reports (below) instead of ignoring.
+
+### Fixed
+
+- `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503
+  erasure_incomplete` from the gateway produced no exception and no log line. Now both log a WARNING with the
+  status and the gateway's error code and return `None`; with `raise_on_error=True` they raise the new
+  `SulciErasureError` (from `sulci.backends.cloud`). They still never raise by default, including for an id
+  that cannot be encoded; raising becomes the default in 0.10.0.
+
+### Changed
+
+- On success `SulciCloudBackend.delete_user` and `clear` return the gateway's answer
+  (`{"status": "ok", "deleted": N, ...}`) instead of `None`; `None` now means the erasure was not confirmed.
+  Only a 2xx answer whose JSON says `"status": "ok"` counts as success.
+
 ## [0.9.2] — SQLite and Milvus: enforce cache scope
 
 ### Security

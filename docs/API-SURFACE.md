@@ -150,6 +150,10 @@ cache._backend.delete_user(user_id)  # works — cloud backend only, private att
 ```
 
 - `delete_user` is defined in exactly one place: `sulci/backends/cloud.py:233`.
+  📌 0.9.3: `delete_user(user_id, *, raise_on_error=False)` and `clear(*, raise_on_error=False)` (the line
+  number above has moved). The id is percent-encoded, `/` and `.` included. Both return the gateway's answer
+  on success; on failure they log a WARNING and return `None`, or raise `SulciErasureError` with
+  `raise_on_error=True`.
 - `class Cache:` (`core.py:140`) has no base class and inherits nothing.
 - There is no `__getattr__` or delegation anywhere in `core.py`.
 - It is not re-exported from `sulci/__init__.py`.

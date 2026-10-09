@@ -680,6 +680,10 @@ raises `AttributeError` — and the six self-hosted backends do not implement it
 because it is not in the `Backend` protocol. Whole-cache erasure via
 `cache.clear()` works on every backend and is the portable path.
 
+From 0.9.3 both `delete_user` and `clear` on the managed backend report failure: a non-2xx answer logs a
+WARNING and returns `None`, or raises `SulciErasureError` with `raise_on_error=True`; success returns the
+gateway's answer, including the number of entries deleted.
+
 ### Advanced constructor options
 
 **Custom session store and event sink.** `session_store=` accepts any
