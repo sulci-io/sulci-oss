@@ -139,6 +139,10 @@ Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `metadata` exists on `set` and `aset`. **It is not on `cached_call`** and never
 has been, despite having been documented there. It is also not on `get`.
 
+📌 0.9.3: `metadata` may not use the names of the entry's own fields — `key`, `query`, `response`,
+`tenant_id`, `user_id`, `expires`, `created` (`sulci._metadata.RESERVED_METADATA_KEYS`). They are dropped,
+with one WARNING naming them, and the entry keeps its own values; every other key is stored as before.
+
 ### `delete_user` is not a `Cache` method
 
 This one has caused real damage, so it gets its own section.

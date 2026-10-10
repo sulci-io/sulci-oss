@@ -23,6 +23,29 @@ normally in every case.
 containing `/` are erasable from 0.9.3 together with the managed gateway release that precedes it; against an
 older gateway they answer `404`, which 0.9.3 now reports (below) instead of ignoring.
 
+#### Qdrant, Chroma, FAISS: `metadata` could replace an entry's user, tenant, expiry or answer
+
+**Who is affected:** self-hosted applications on the Qdrant, Chroma or FAISS backend that pass `metadata` to
+`Cache.set` / `AsyncCache.aset` (or to a backend's `store`) built from input they do not fully control. Those
+backends wrote `metadata` into the entry *after* the entry's own fields, so a key with the same name replaced
+the field: `{"user_id": "bob"}` filed the entry under another user, `{"user_id": "global"}` moved it to the
+shared scope, `{"tenant_id": "t2"}` planted it in another tenant (Qdrant), `{"expires": 0}` made it never
+expire, `{"response": ...}` replaced the answer served (Qdrant, FAISS), and `query`, `key` and `created` could
+be rewritten. SQLite (which stores `metadata` in its own column), Redis and Milvus (which do not store it) and
+the managed backend (`backend="sulci"`, which does not send `metadata` to the gateway) were not affected.
+
+**What changed:** `key`, `query`, `response`, `tenant_id`, `user_id`, `expires` and `created` are reserved.
+They are dropped from `metadata` — by `Cache.set` and again by each backend's `store` — and one WARNING on the
+`sulci` logger names the keys that were dropped, never their values. The entry keeps its own values; every
+other `metadata` key is stored exactly as before. ⚠️ This applies on **every** backend, SQLite included: a
+SQLite application that stored one of those seven names in `metadata` for its own use no longer stores it
+(the WARNING says which).
+
+**What to do:** upgrade to 0.9.3. Until you can, do not pass any of those seven names in `metadata`. Entries
+stored before upgrading keep what was written — an entry planted with `{"expires": 0}` never expires, and
+FAISS keeps its records on disk — so if a Qdrant, Chroma or FAISS cache may have been written with untrusted
+`metadata`, call `clear()` on it after upgrading.
+
 ### Fixed
 
 - `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503

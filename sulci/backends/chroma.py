@@ -13,6 +13,8 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from sulci._metadata import without_reserved
+
 
 class ChromaBackend:
     #: True if this backend enforces tenant_id partition isolation.
@@ -46,11 +48,12 @@ class ChromaBackend:
             embeddings = [embedding],
             documents  = [response],
             metadatas  = [{
+                # 0.9.3: metadata first and without reserved names; the entry's fields win.
+                **without_reserved(metadata),
                 "query":     query,
                 "expires":   expires or 0.0,
                 "user_id":   user_id or "global",
                 "tenant_id": tenant_id or "global",
-                **(metadata or {}),
             }],
         )
 

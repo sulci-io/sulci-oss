@@ -31,6 +31,7 @@ from sulci.sinks.protocol import query_hash as _query_hash
 # dispatch; runtime behavior is duck-typed against the protocol's methods.
 from sulci.embeddings.protocol import Embedder
 from sulci.backends.protocol   import Backend
+from sulci._metadata import without_reserved
 
 
 # ── v0.5.2 nudge state (D15) ──────────────────────────────────────────────────
@@ -888,7 +889,8 @@ class Cache:
                 tenant_id = tenant_id,
                 user_id   = user_id if self.personalized else None,
                 expires   = expires,
-                metadata  = metadata or {},
+                # 0.9.3: reserved names (the entry's own fields) are dropped, with a WARNING.
+                metadata  = without_reserved(metadata),
             )
         if session_id and self._sessions and raw_vec is not None:
             self._record_turn(session_id, query, response, raw_vec)

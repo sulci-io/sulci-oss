@@ -13,6 +13,8 @@ from __future__ import annotations
 import os, pickle, time
 from typing import Optional
 
+from sulci._metadata import without_reserved
+
 
 class FAISSBackend:
     #: True if this backend enforces tenant_id partition isolation.
@@ -68,10 +70,11 @@ class FAISSBackend:
         vec = self._np.array([embedding], dtype="float32")
         self._index.add(vec)
         self._meta.append({
+            # 0.9.3: metadata first and without reserved names; the entry's fields win.
+            **without_reserved(metadata),
             "key": key, "query": query, "response": response,
             "user_id": user_id or "global",
             "expires": expires or 0.0,
-            **(metadata or {}),
         })
         self._save()
 
