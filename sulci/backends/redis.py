@@ -21,6 +21,8 @@ from __future__ import annotations
 import time, struct, math
 from typing import Optional
 
+from sulci.backends._scope import scoped_id
+
 
 class RedisBackend:
     #: True if this backend enforces tenant_id partition isolation.
@@ -71,7 +73,9 @@ class RedisBackend:
         user_id: Optional[str] = None, expires: Optional[float] = None,
         metadata: Optional[dict] = None,
     ) -> None:
-        rkey = self._key(key)
+        # 0.9.3: scoped to tenant and user. `key` comes from the query alone, so naming the hash by it let
+        # another tenant or user storing the same question replace this entry.
+        rkey = self._key(scoped_id(key, tenant_id, user_id))
         self._redis.hset(rkey, mapping={
             "query":    query.encode(),
             "response": response.encode(),

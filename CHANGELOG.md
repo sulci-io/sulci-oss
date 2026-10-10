@@ -46,6 +46,26 @@ stored before upgrading keep what was written — an entry planted with `{"expir
 FAISS keeps its records on disk — so if a Qdrant, Chroma or FAISS cache may have been written with untrusted
 `metadata`, call `clear()` on it after upgrading.
 
+#### Chroma, Redis: storing a question could erase another tenant's or user's entry for it
+
+**Who is affected:** self-hosted applications on the Chroma or Redis backend that keep more than one tenant
+(`tenant_id`) or user (`personalized=True` with `user_id`) in one store. An entry's key is derived from the
+query text alone, and these two backends stored it under that key, so when a second tenant or user stored the
+same question, its entry **replaced** the first: the first tenant's or user's next lookup missed. Anyone able
+to store a question could erase other tenants' and users' entries for it. Qdrant, FAISS and Milvus never store
+by key, and SQLite was fixed in 0.9.2; they were not affected, nor was the managed backend.
+
+**What changed:** Chroma and Redis store each entry under an id scoped to its tenant and user
+(`sulci.backends._scope.scoped_id`). Other tenants and users keep their entries; the same tenant and user
+storing a question again still replaces its own.
+
+**What to do:** upgrade to 0.9.3, then call `clear()` on every Chroma or Redis store written before the
+upgrade. Entries stored before upgrading keep their old ids, so storing a question again after upgrading does
+**not** replace the old entry: Chroma keeps serving the old answer, and Redis serves either one, until the old
+entry expires — never, if the cache was built with `ttl_seconds=None`. The example backend in
+`examples/extending_sulci/custom_backend.py` had the same flaw and now upserts by key, tenant and user, as
+`docs/protocols.md` requires of every backend.
+
 ### Fixed
 
 - `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503

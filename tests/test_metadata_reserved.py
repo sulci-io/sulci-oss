@@ -246,7 +246,8 @@ def test_chroma_store_keeps_its_own_fields(caplog):
         meta, doc, key = _chroma_written(dict(PLANT, source="docs"))
     assert meta == {"query": "real question", "expires": 4102444800.0, "user_id": "alice",
                     "tenant_id": "t1", "source": "docs"}
-    assert (doc, key) == ("real answer", "k1")
+    from sulci.backends._scope import scoped_id     # 0.9.3 (oss-0003): Chroma ids are scoped to tenant and user
+    assert (doc, key) == ("real answer", scoped_id("k1", "t1", "alice"))
     assert _dropped(caplog) == sorted(SEVEN)
 
 

@@ -14,6 +14,7 @@ import time
 from typing import Optional
 
 from sulci._metadata import without_reserved
+from sulci.backends._scope import scoped_id
 
 
 class ChromaBackend:
@@ -44,7 +45,9 @@ class ChromaBackend:
         metadata: Optional[dict] = None,
     ) -> None:
         self._col.upsert(
-            ids        = [key],
+            # 0.9.3: scoped to tenant and user. `key` comes from the query alone, so upserting by it let
+            # another tenant or user storing the same question replace this entry.
+            ids        = [scoped_id(key, tenant_id, user_id)],
             embeddings = [embedding],
             documents  = [response],
             metadatas  = [{
