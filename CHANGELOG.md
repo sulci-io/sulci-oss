@@ -66,6 +66,26 @@ entry expires — never, if the cache was built with `ttl_seconds=None`. The exa
 `examples/extending_sulci/custom_backend.py` had the same flaw and now upserts by key, tenant and user, as
 `docs/protocols.md` requires of every backend.
 
+#### Every backend: `user_id` or `tenant_id` `"global"` or `""` addressed the shared scope
+
+**Who is affected:** self-hosted applications that pass a `user_id` (with `personalized=True`) or a `tenant_id`
+taken from input they do not fully control. Every backend files entries stored without a tenant or user under
+the sentinel `"global"` — the shared scope — so a caller passing `"global"` read and wrote the shared scope as
+if it were its own, and `""` was stored there too. On Qdrant a lookup with `""` could not even read back what
+it had stored.
+
+**What changed — and it can break a caller:** `Cache.get` and `Cache.set` (and so `cached_call`, `AsyncCache`
+and the integrations built on them) raise `ValueError` for a `tenant_id`, or a `user_id` when
+`personalized=True` (otherwise `Cache` ignores `user_id`, as before), that is `"global"` or any falsy value
+other than `None` — `""`, `0`, `False`, `b""`, which every backend also filed under `"global"`. Nothing is read,
+written or sent first. This applies on every backend, the managed one (`backend="sulci"`) included, where a
+`tenant_id` is not sent at all and used to be ignored. Omit the argument (`None`) to mean "no tenant" or
+"no user". The proxy, MCP server and LiteLLM adapter treat a cache error as a miss, so there such a request is
+answered without the cache; the proxy now treats an empty `x-sulci-tenant-id` header as no tenant, and the MCP
+server refuses a reserved default tenant (`--tenant-id`, `SULCI_MCP_TENANT_ID`) when it is built.
+
+**What to do:** upgrade to 0.9.3, and map empty or zero ids to `None` before calling `Cache`.
+
 ### Fixed
 
 - `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503

@@ -134,6 +134,10 @@ Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
 (v0.4.0).
 
+📌 0.9.3: `get` and `set` raise `ValueError` for a `tenant_id`, or a `user_id` when `personalized=True`,
+that is `"global"` or falsy but not `None` (`""`, `0`, ...) — all of them named the shared scope. Pass
+`None` for no tenant or user.
+
 ### `metadata` is on `set` only
 
 `metadata` exists on `set` and `aset`. **It is not on `cached_call`** and never

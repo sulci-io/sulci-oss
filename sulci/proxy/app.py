@@ -250,7 +250,7 @@ def build_app(
     router = APIRouter()
 
     def _scope(request: Request, body: dict) -> tuple:
-        tenant = request.headers.get("x-sulci-tenant-id")
+        tenant = request.headers.get("x-sulci-tenant-id") or None   # 0.9.3: an empty header is no tenant
         if not share_across_models:
             model = str(body.get("model") or "")
             tenant = f"{tenant}::{model}" if tenant else model or None

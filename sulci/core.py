@@ -32,6 +32,7 @@ from sulci.sinks.protocol import query_hash as _query_hash
 from sulci.embeddings.protocol import Embedder
 from sulci.backends.protocol   import Backend
 from sulci._metadata import without_reserved
+from sulci._scope_ids import refuse_reserved_scope
 
 
 # ── v0.5.2 nudge state (D15) ──────────────────────────────────────────────────
@@ -634,6 +635,8 @@ class Cache:
             response is None on cache miss.
             context_depth = number of prior turns that influenced lookup.
         """
+        # 0.9.3: "global" and "" address the shared scope; refused before anything is read or sent.
+        refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         _t0 = _time.time()
         self._query_count += 1
         matched_query: Optional[str] = None
@@ -860,6 +863,8 @@ class Cache:
         ``plan`` (v0.5.6, sulci-oss #36) is forwarded onto the emitted
         CacheEvent.plan; see ``Cache.get`` for the rationale.
         """
+        # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
+        refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         _t0 = _time.time()
         if self._is_remote_transport:
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.

@@ -131,6 +131,9 @@ def build_server(
         read_only = os.environ.get("SULCI_MCP_READ_ONLY") == "1"
     if default_tenant_id is None:
         default_tenant_id = os.environ.get("SULCI_MCP_TENANT_ID") or None
+    # 0.9.3: a reserved default tenant ("global", "") would make every tool call fail; refuse it at build.
+    from sulci._scope_ids import refuse_reserved_scope
+    refuse_reserved_scope(default_tenant_id, None, personalized=False)
 
     if default_tenant_id is not None:
         warn_if_scope_unenforced(cache, feature="default_tenant_id")

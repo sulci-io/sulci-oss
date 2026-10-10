@@ -211,3 +211,21 @@ def test_cli_defaults_to_sqlite_not_chroma():
 def test_cli_accepts_the_documented_transports():
     for t in ("stdio", "sse", "streamable-http"):
         assert mcp_server._build_arg_parser().parse_args(["--transport", t]).transport == t
+
+
+# ── 0.9.3: a reserved default tenant is refused when the server is built ───────
+@pytest.mark.parametrize("value", ["global", ""])
+def test_a_reserved_default_tenant_is_refused_at_build(cache, value):
+    with pytest.raises(ValueError, match="tenant_id=.* is reserved"):
+        build_server(cache, default_tenant_id=value)
+
+
+def test_a_reserved_default_tenant_from_the_environment_is_refused_at_build(cache, monkeypatch):
+    monkeypatch.setenv("SULCI_MCP_TENANT_ID", "global")
+    with pytest.raises(ValueError, match="tenant_id=.* is reserved"):
+        build_server(cache)
+
+
+def test_an_empty_tenant_environment_variable_means_no_tenant(cache, monkeypatch):
+    monkeypatch.setenv("SULCI_MCP_TENANT_ID", "")
+    build_server(cache)

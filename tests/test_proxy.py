@@ -333,3 +333,22 @@ def test_stats_endpoint_reports_hits(cache):
 def test_build_app_rejects_cache_and_kwargs_together(cache):
     with pytest.raises(TypeError):
         build_app(cache, backend="sqlite")
+
+
+# ── 0.9.3: an empty tenant header is no tenant; a reserved one is answered without the cache ──
+def test_an_empty_tenant_header_is_no_tenant(cache):
+    up = Upstream()
+    c = make(cache, up)
+    c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": ""})
+    r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": ""})
+    assert r.headers["x-sulci-cache"] == "hit"
+    assert len(up.calls) == 1
+
+
+def test_a_reserved_tenant_header_is_answered_without_the_cache(cache):
+    up = Upstream()
+    c = make(cache, up)
+    for _ in range(2):
+        r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "global"})
+        assert r.status_code == 200 and r.headers["x-sulci-cache"] == "miss"
+    assert len(up.calls) == 2
