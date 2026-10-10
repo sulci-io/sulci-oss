@@ -14,6 +14,8 @@ from __future__ import annotations
 import os, sqlite3, json, struct, time, math, warnings
 from typing import Optional
 
+from sulci._metadata import checked_metadata
+
 
 # PRAGMA user_version of the current schema.
 #   0 — through 0.9.1: `key` alone was UNIQUE, and no tenant_id column.
@@ -154,7 +156,7 @@ class SQLiteBackend:
             user_id or "global",
             expires or 0.0,
             time.time(),
-            json.dumps(metadata or {}),
+            json.dumps(checked_metadata(metadata)),   # 0.9.3: the same rule as Cache.set
         ))
         self._conn.commit()
 

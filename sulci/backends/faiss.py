@@ -14,7 +14,7 @@ from __future__ import annotations
 import os, pickle, time
 from typing import Optional
 
-from sulci._metadata import without_reserved
+from sulci._metadata import checked_metadata
 
 
 class FAISSBackend:
@@ -76,12 +76,13 @@ class FAISSBackend:
         user_id: Optional[str] = None, expires: Optional[float] = None,
         metadata: Optional[dict] = None,
     ) -> None:
+        metadata = checked_metadata(metadata)     # 0.9.3: before anything — _ensure creates the index
         self._ensure(len(embedding))
         vec = self._np.array([embedding], dtype="float32")
         self._index.add(vec)
         self._meta.append({
-            # 0.9.3: metadata first and without reserved names; the entry's fields win.
-            **without_reserved(metadata),
+            # 0.9.3: metadata is refused if it uses a reserved name, and goes first; the entry's fields win.
+            **checked_metadata(metadata),
             "key": key, "query": query, "response": response,
             "tenant_id": tenant_id or "global",
             "user_id": user_id or "global",

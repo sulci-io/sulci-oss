@@ -31,7 +31,7 @@ from sulci.sinks.protocol import query_hash as _query_hash
 # dispatch; runtime behavior is duck-typed against the protocol's methods.
 from sulci.embeddings.protocol import Embedder
 from sulci.backends.protocol   import Backend
-from sulci._metadata import without_reserved
+from sulci._metadata import checked_metadata
 from sulci._scope_ids import refuse_reserved_scope
 
 
@@ -862,9 +862,16 @@ class Cache:
 
         ``plan`` (v0.5.6, sulci-oss #36) is forwarded onto the emitted
         CacheEvent.plan; see ``Cache.get`` for the rationale.
+
+        ``metadata`` (0.9.3) must be a mapping (``TypeError``) whose keys do not
+        name the entry's own fields — ``sulci._metadata.RESERVED_METADATA_KEYS``
+        (``ValueError``). Nothing is embedded, stored or sent when either fails.
         """
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
+        # 0.9.3: metadata may not use the entry's own field names (ValueError, as the gateway's 422) and
+        # must be a mapping (TypeError) — checked here, on every backend, before anything is embedded or sent.
+        metadata = checked_metadata(metadata)
         _t0 = _time.time()
         if self._is_remote_transport:
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.
@@ -894,8 +901,7 @@ class Cache:
                 tenant_id = tenant_id,
                 user_id   = user_id if self.personalized else None,
                 expires   = expires,
-                # 0.9.3: reserved names (the entry's own fields) are dropped, with a WARNING.
-                metadata  = without_reserved(metadata),
+                metadata  = metadata,
             )
         if session_id and self._sessions and raw_vec is not None:
             self._record_turn(session_id, query, response, raw_vec)

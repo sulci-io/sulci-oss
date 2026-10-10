@@ -149,6 +149,8 @@ has been, despite having been documented there. It is also not on `get`.
 📌 0.9.3: `metadata` may not use the names of the entry's own fields — `key`, `query`, `response`,
 `tenant_id`, `user_id`, `expires`, `created` (`sulci._metadata.RESERVED_METADATA_KEYS`). They are dropped,
 with one WARNING naming them, and the entry keeps its own values; every other key is stored as before.
+📌 Superseded before release: such a `metadata` raises `ValueError` naming the keys (the gateway answers
+`422`), and one that is not a mapping raises `TypeError` — on every backend, before anything is stored.
 
 ### `delete_user` is not a `Cache` method
 

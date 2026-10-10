@@ -182,7 +182,8 @@ class AsyncCache:
             Customer plan tier, forwarded onto the emitted ``CacheEvent.plan``.
             Mirrors ``Cache.set`` (v0.5.6). v0.8.1.
         metadata : dict, optional
-            Arbitrary metadata persisted alongside the entry. Mirrors
+            Metadata persisted alongside the entry (0.9.3: a mapping whose keys are not
+            ``sulci._metadata.RESERVED_METADATA_KEYS``, else TypeError/ValueError). Mirrors
             ``Cache.set``. v0.8.1.
         """
         return await asyncio.to_thread(

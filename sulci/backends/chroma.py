@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
-from sulci._metadata import without_reserved
+from sulci._metadata import checked_metadata
 from sulci.backends._scope import scoped_id
 
 
@@ -51,8 +51,8 @@ class ChromaBackend:
             embeddings = [embedding],
             documents  = [response],
             metadatas  = [{
-                # 0.9.3: metadata first and without reserved names; the entry's fields win.
-                **without_reserved(metadata),
+                # 0.9.3: metadata is refused if it uses a reserved name, and goes first; the entry's fields win.
+                **checked_metadata(metadata),
                 "query":     query,
                 "expires":   expires or 0.0,
                 "user_id":   user_id or "global",

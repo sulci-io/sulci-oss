@@ -20,7 +20,7 @@ from __future__ import annotations
 import time, uuid, warnings
 from typing import Any, Optional
 
-from sulci._metadata import without_reserved
+from sulci._metadata import checked_metadata
 
 
 class QdrantBackend:
@@ -195,9 +195,9 @@ class QdrantBackend:
                 id      = str(uuid.uuid4()),
                 vector  = embedding,
                 payload = {
-                    # 0.9.3: the caller's metadata FIRST and without reserved names, so the
-                    # entry's own fields below always win (it used to come last and replace them).
-                    **without_reserved(metadata),
+                    # 0.9.3: the caller's metadata is refused if it uses a reserved name, and goes
+                    # FIRST, so the entry's own fields below always win (it used to come last).
+                    **checked_metadata(metadata),
                     "key": key, "query": query, "response": response,
                     "tenant_id": tenant_id or "global",
                     "user_id": user_id or "global",

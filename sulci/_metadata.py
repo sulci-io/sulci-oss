@@ -14,9 +14,13 @@ bob, ``{"tenant_id": "t2"}`` planted it in another tenant (Qdrant),
 ``{"expires": 0}`` made it permanent, ``{"response": ...}`` replaced the
 answer served (Qdrant, FAISS).
 
-The entry's own fields now always win. These names are dropped from
-``metadata``, with one WARNING that names the dropped keys (never their
-values); every other key is stored exactly as before.
+A ``metadata`` that uses one of these names is refused with ``ValueError`` —
+by ``Cache.set`` before anything is embedded, written or sent, on every
+backend, and again by each backend's ``store`` that keeps ``metadata`` — as
+the managed gateway refuses it with ``422``. The error names the keys, never
+their values. A ``metadata`` that is not a mapping is refused with
+``TypeError``. The backends that merge ``metadata`` into the entry also write
+it first, so the entry's own fields would win even without the refusal.
 
 ``RESERVED_METADATA_KEYS`` is every entry field written by the backends that
 store ``metadata`` beside it (Qdrant, Chroma, FAISS).
@@ -28,38 +32,35 @@ is listed here. The managed backend (``backend="sulci"``) does not send
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from typing import Any
 
-log = logging.getLogger(__name__)
-
-#: Fields of the cache entry itself. A metadata key with one of these names is ignored.
+#: Fields of the cache entry itself. A metadata key with one of these names is refused.
 RESERVED_METADATA_KEYS = frozenset({
     "key", "query", "response", "tenant_id", "user_id", "expires", "created",
 })
 
 
-def without_reserved(metadata: Any) -> Any:
-    """Return ``metadata`` as a new dict without the reserved keys.
+def checked_metadata(metadata: Any) -> dict:
+    """Return ``metadata`` as a new dict, or raise.
 
     ``None`` and an empty mapping give ``{}``. An object that ``**`` can unpack
-    (it has ``keys()`` and ``__getitem__``) is filtered like a mapping, whether or
-    not it is registered as one. Anything else is returned unchanged, so a backend
-    fails on it exactly as it did before 0.9.3. The caller's object is never
-    modified.
+    (it has ``keys()`` and ``__getitem__``) is read like a mapping, whether or not
+    it is registered as one; anything else raises ``TypeError``. A key that names
+    a field of the entry itself raises ``ValueError`` naming every such key (never
+    a value). The caller's object is never modified.
     """
-    if not metadata:
+    if metadata is None:
         return {}
     if not isinstance(metadata, Mapping):
         if not (hasattr(metadata, "keys") and hasattr(metadata, "__getitem__")):
-            return metadata
-        metadata = {k: metadata[k] for k in metadata.keys()}
-    dropped = sorted(k for k in metadata if isinstance(k, str) and k in RESERVED_METADATA_KEYS)
-    if dropped:
-        log.warning(
-            "metadata keys %s name fields of the cache entry itself and were ignored; "
-            "the entry keeps its own values (reserved: %s)",
-            ", ".join(dropped), ", ".join(sorted(RESERVED_METADATA_KEYS)),
+            raise TypeError(f"metadata must be a mapping, not {type(metadata).__name__}")
+    out = {k: metadata[k] for k in metadata.keys()}
+    # str.__str__ reads the text itself: a str subclass cannot hide a reserved name behind its own __eq__/__hash__.
+    reserved = sorted(str.__str__(k) for k in out if isinstance(k, str) and str.__str__(k) in RESERVED_METADATA_KEYS)
+    if reserved:
+        raise ValueError(
+            f"metadata keys {', '.join(reserved)} name fields of the cache entry itself; rename them "
+            f"(reserved: {', '.join(sorted(RESERVED_METADATA_KEYS))})"
         )
-    return {k: v for k, v in metadata.items() if not (isinstance(k, str) and k in RESERVED_METADATA_KEYS)}
+    return out

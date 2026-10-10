@@ -73,6 +73,11 @@ The kwargs after `*` are **keyword-only**. Calling code must use
 `store(..., tenant_id=...)`, never positional. This is enforced at
 the protocol level so callers can't accidentally swap arguments.
 
+📌 0.9.3: `metadata` must be a mapping whose keys are not the entry's own field names
+(`sulci._metadata.RESERVED_METADATA_KEYS`). `Cache.set` refuses both before calling `store`; a backend that keeps
+`metadata` also calls `sulci._metadata.checked_metadata(metadata)` before it writes anything and lets the
+`ValueError` / `TypeError` propagate, so a direct `store` cannot hold what `Cache.set` refuses.
+
 **Behavioral requirements:**
 
 - MUST upsert by `(key, tenant_id, user_id)` — calling `store` twice

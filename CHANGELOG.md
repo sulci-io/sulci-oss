@@ -40,6 +40,10 @@ They are dropped from `metadata` — by `Cache.set` and again by each backend's 
 other `metadata` key is stored exactly as before. ⚠️ This applies on **every** backend, SQLite included: a
 SQLite application that stored one of those seven names in `metadata` for its own use no longer stores it
 (the WARNING says which).
+📌 Superseded before release: such a `metadata` is **refused** — `ValueError` naming the keys (never their
+values), from `Cache.set` / `AsyncCache.aset` on every backend including the managed one, before anything is
+embedded, stored or sent, and from the `store` of Qdrant, Chroma, FAISS and SQLite — as the managed gateway
+answers `422`. Nothing is dropped and nothing is logged. See *Changed*.
 
 **What to do:** upgrade to 0.9.3. Until you can, do not pass any of those seven names in `metadata`. Entries
 stored before upgrading keep what was written — an entry planted with `{"expires": 0}` never expires, and
@@ -130,6 +134,12 @@ raised on backends that ignored the scope is gone.
   stats as if the erasure had happened. Code that must not stop on a failed erasure catches
   `SulciErasureError`. `sulci.integrations.langchain.SulciCache.clear()` (and `aclear()`) no longer log and
   ignore a failure either: it propagates, and a namespace partition that failed to clear is kept.
+- **Breaking:** a `metadata` key named `key`, `query`, `response`, `tenant_id`, `user_id`, `expires` or
+  `created` raises `ValueError` (it was dropped with a WARNING), and a `metadata` that is not a mapping raises
+  `TypeError` (SQLite, Redis, Milvus and the managed backend stored or ignored a list; the others failed with
+  an unrelated `TypeError`). Both are checked by `Cache.set` before anything is embedded, stored or sent, and
+  by the `store` of every backend that keeps `metadata`. `sulci._metadata.without_reserved` is replaced by
+  `checked_metadata`, which returns a new dict or raises.
 
 ## [0.9.2] — SQLite and Milvus: enforce cache scope
 
