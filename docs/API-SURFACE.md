@@ -127,6 +127,9 @@ There are eight. Not nine.
 | `get_context(session_id)` | — | `ContextWindow` |
 | `clear_context(session_id)` | — | `None` |
 | `context_summary(session_id=None)` | — | `dict` |
+| `get_context(session_id, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `ContextWindow` |
+| `clear_context(session_id, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `None` |
+| `context_summary(session_id=None, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `dict` |
 | `stats()` | — | `dict` |
 | `clear()` | — | `None` |
 
@@ -136,6 +139,11 @@ Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 
 📌 0.9.3: every backend enforces it — and `user_id` when `personalized=True` — on every lookup; `None` is the
 shared scope and nothing else (before, only Qdrant and the managed backend filtered on `tenant_id`).
+
+📌 0.9.3: the same holds for conversation history: a `session_id` is scoped by `tenant_id` and, when
+`personalized=True`, `user_id`. `get_context`, `clear_context` and `context_summary` gained keyword-only
+`tenant_id` and `user_id` (the table above shows them without), and `clear()` removes every session from any
+session store. `context_summary()` with a `tenant_id` or `user_id` but no `session_id` raises `TypeError`.
 
 📌 0.9.3: `get` and `set` raise `ValueError` for a `tenant_id`, or a `user_id` when `personalized=True`,
 that is `"global"` or falsy but not `None` (`""`, `0`, ...) — all of them named the shared scope. Pass
@@ -217,6 +225,12 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `get` (sync passthrough) | `threshold`, `tenant_id`, `plan` |
 | `set` (sync passthrough) | `tenant_id`, `plan`, `metadata` |
 | `cached_call` (sync passthrough) | `threshold`, `tenant_id`, `plan` |
+| `aget_context` — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `aclear_context` — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `acontext_summary` — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `get_context` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `clear_context` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `context_summary` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,

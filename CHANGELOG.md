@@ -107,6 +107,34 @@ before 0.9.3 has no scope and matches none, so `clear()` such stores after upgra
 is `True` on every local backend, and the `ScopeNotEnforcedWarning` the proxy, MCP server and LiteLLM adapter
 raised on backends that ignored the scope is gone.
 
+#### Every session store: conversation history was shared across tenants and users, and `clear()` left it
+
+**Who is affected:** self-hosted applications that pass `session_id` (context-aware caching) and serve more than one
+tenant (`tenant_id`) or user (`personalized=True`) from one `Cache`, or from one shared session store (a
+`RedisSessionStore` behind several replicas). The Cache handed the store the caller's `session_id` unchanged, so a
+lookup by one tenant or user with another's session id blended the other's earlier turns into its query — measured
+on the built-in, in-memory and Redis stores alike — and with the built-in store (the default) `get_context` and
+`context_summary` handed the other tenant or user the text of the earlier questions and answers; the injected stores
+hold the embedding vectors of the user's turns, derived from that text. With an injected store, `Cache.clear()`
+removed no session at all. The
+managed backend was not affected (the gateway scopes sessions itself).
+
+**What changed:** the Cache scopes every session id by tenant and, when personalized, by user before any store sees
+it (`sulci.sessions.scoped_session_id`), so a session belongs to one scope and nothing else. `get_context`,
+`clear_context` and `context_summary` (and `AsyncCache`'s) take `tenant_id` and `user_id` to name it. The
+`SessionStore` protocol gains `clear_scope(scope)` and `clear_all()`; `RedisSessionStore` indexes every session by
+tenant and user and removes them from the index, never by scanning the keyspace; `Cache.clear()` removes every
+session from any store, and a store without those two methods is refused when the Cache is built. Both shipped
+stores lose their `tenant_id` argument. `context_summary()` with a `tenant_id` or `user_id` but no `session_id`
+raises `TypeError` (it summarizes every session). `RedisSessionStore`'s default prefix becomes `sulci:sessions:`, with
+sessions under `{prefix}s:…` and expiry-ordered indexes under `{prefix}i:…`: sessions written before 0.9.3 are
+never read again. Delete them once (`sulci:session:*`); if you set your own `key_prefix`, choose a new one or delete
+its keys BEFORE upgrading — an old session at `{prefix}i:` would block every write. `RedisSessionStore` now needs
+Redis 6.2 or later, and not Redis Cluster (one write spans four keys).
+
+**What to do:** upgrade to 0.9.3. Until you can, make the session ids you pass unique per tenant and user (for
+example, prefix them with both), and clear an injected store yourself when you call `clear()`.
+
 ### Fixed
 
 - `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503

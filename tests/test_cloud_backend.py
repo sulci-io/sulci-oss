@@ -937,7 +937,8 @@ class TestCloudTransportShortCircuit:
         # But .set with session_id doesn't update it because raw_vec is None
         c.set("query", "answer", session_id="sess-1")
         # If local session recording had happened, the window would have a turn
-        window = c._sessions.get("sess-1")
+        assert c._sessions.active_sessions() == []   # 0.9.3: nothing recorded, under any id
+        window = c.get_context("sess-1")
         assert window.depth == 0, (
             "Cache.set must not record turns into the local session window "
             "when routing through the cloud transport — the gateway-side "

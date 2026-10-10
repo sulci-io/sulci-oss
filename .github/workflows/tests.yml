@@ -285,7 +285,7 @@ jobs:
       # ⏱ --durations: see the note on "Conformance suite" above (182s → 388s).
       - name: Test sessions
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_sessions.py -v --tb=short --durations=10
+        run: pytest tests/test_sessions.py tests/test_session_scope.py -v --tb=short --durations=10
 
       - name: Test sinks
         if: needs.changes.outputs.code == 'true'

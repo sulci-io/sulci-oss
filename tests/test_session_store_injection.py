@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 from sulci import Cache
 from sulci.context import SessionStore as LegacySessionStore
-from sulci.sessions import InMemorySessionStore
+from sulci.sessions import InMemorySessionStore, scoped_session_id
 from sulci.sinks import CacheEvent, NullSink
 
 
@@ -71,8 +71,9 @@ class TestInjectedSessionStoreRoundTrip:
             context_window=4, session_store=store,
         )
         c.set("hello there", "hi back", session_id="user-1")
-        # Inner store now has one user-query vector for this session
-        history = store.get("user-1")
+        # Inner store now has one user-query vector for this session — under its scoped id (0.9.3)
+        assert store.get("user-1") == []
+        history = store.get(scoped_session_id(None, None, "user-1"))
         assert len(history) == 1
         assert all(isinstance(v, float) for v in history[0])  # vector of floats
 
@@ -80,26 +81,28 @@ class TestInjectedSessionStoreRoundTrip:
         """cache.get(session_id=...) returns a window seeded from inner.get()."""
         store = InMemorySessionStore()
         # Pre-seed inner directly
-        store.append("user-2", [0.1] * 384)
-        store.append("user-2", [0.2] * 384)
+        sid = scoped_session_id(None, None, "user-2")   # 0.9.3: the store holds scoped ids
+        store.append(sid, [0.1] * 384)
+        store.append(sid, [0.2] * 384)
         c = Cache(
             backend="sqlite", db_path=str(tmp_path),
             context_window=4, session_store=store,
         )
         # Adapter rebuilds window with depth=2 from inner's two vectors
-        window = c._sessions.get("user-2")
+        window = c.get_context("user-2")
         assert window.depth == 2
 
     def test_clear_context_clears_inner(self, tmp_path):
         """cache.clear_context(sid) propagates to inner.clear(sid)."""
         store = InMemorySessionStore()
-        store.append("user-3", [0.1] * 384)
+        sid = scoped_session_id(None, None, "user-3")   # 0.9.3: the store holds scoped ids
+        store.append(sid, [0.1] * 384)
         c = Cache(
             backend="sqlite", db_path=str(tmp_path),
             context_window=4, session_store=store,
         )
         c.clear_context("user-3")
-        assert store.get("user-3") == []
+        assert store.get(sid) == []
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -671,6 +671,10 @@ cache = Cache(
 
 > **Important:** `cache.get()` returns a **3-tuple** `(response, similarity, context_depth)` — not a 2-tuple like v0.1. Always unpack all three values.
 
+> 📌 0.9.3: a session belongs to one tenant and, with `personalized=True`, one user — the same `session_id` from
+> another tenant or user is another conversation. `get_context`, `clear_context` and `context_summary` take
+> `tenant_id=` and `user_id=` (keyword-only) to name it; pass what you pass to `get` / `set`.
+
 **That is the whole public surface — eight methods, not nine.** The constructor
 defaults and method signatures above match an AST measurement of `sulci/core.py`
 at 0.9.2 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
@@ -698,6 +702,10 @@ the managed backend, before resetting anything. Catch it where a failed erasure 
 manager); `event_sink=` accepts any `sulci.sinks.EventSink` (default `None` = a
 no-op `NullSink`). The shipped sinks enforce a strict field allowlist — query
 text, response text and embeddings never leave the process.
+
+📌 0.9.3: a session store also implements `clear_scope(scope)` and `clear_all()` (the `Cache` refuses one that
+does not, since `clear()` could not reach its history), and is handed tenant- and user-scoped session ids
+(`sulci.sessions.scoped_session_id`); the shipped stores no longer take a `tenant_id`.
 
 ```python
 from sulci import Cache, RedisSessionStore, TelemetrySink

@@ -256,17 +256,20 @@ class AsyncCache:
             plan          = plan,
         )
 
-    async def aget_context(self, session_id: str):
-        """Async — return the ContextWindow for a session."""
-        return await asyncio.to_thread(self._cache.get_context, session_id)
+    async def aget_context(self, session_id: str, *, tenant_id: Optional[str] = None,
+                           user_id: Optional[str] = None):
+        """Async — return the ContextWindow for a session (0.9.3: of this tenant and user)."""
+        return await asyncio.to_thread(self._cache.get_context, session_id, tenant_id=tenant_id, user_id=user_id)
 
-    async def aclear_context(self, session_id: str) -> None:
-        """Async — reset conversation history for a session."""
-        return await asyncio.to_thread(self._cache.clear_context, session_id)
+    async def aclear_context(self, session_id: str, *, tenant_id: Optional[str] = None,
+                             user_id: Optional[str] = None) -> None:
+        """Async — reset conversation history for a session (0.9.3: of this tenant and user)."""
+        return await asyncio.to_thread(self._cache.clear_context, session_id, tenant_id=tenant_id, user_id=user_id)
 
-    async def acontext_summary(self, session_id: Optional[str] = None) -> dict:
+    async def acontext_summary(self, session_id: Optional[str] = None, *, tenant_id: Optional[str] = None,
+                               user_id: Optional[str] = None) -> dict:
         """Async — snapshot of one or all sessions."""
-        return await asyncio.to_thread(self._cache.context_summary, session_id)
+        return await asyncio.to_thread(self._cache.context_summary, session_id, tenant_id=tenant_id, user_id=user_id)
 
     async def astats(self) -> dict:
         """
@@ -366,17 +369,19 @@ class AsyncCache:
         """Sync passthrough — cache.clear()."""
         return self._cache.clear()
 
-    def get_context(self, session_id: str):
+    def get_context(self, session_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None):
         """Sync passthrough — cache.get_context()."""
-        return self._cache.get_context(session_id)
+        return self._cache.get_context(session_id, tenant_id=tenant_id, user_id=user_id)
 
-    def clear_context(self, session_id: str) -> None:
+    def clear_context(self, session_id: str, *, tenant_id: Optional[str] = None,
+                      user_id: Optional[str] = None) -> None:
         """Sync passthrough — cache.clear_context()."""
-        return self._cache.clear_context(session_id)
+        return self._cache.clear_context(session_id, tenant_id=tenant_id, user_id=user_id)
 
-    def context_summary(self, session_id: Optional[str] = None) -> dict:
+    def context_summary(self, session_id: Optional[str] = None, *, tenant_id: Optional[str] = None,
+                        user_id: Optional[str] = None) -> dict:
         """Sync passthrough — cache.context_summary()."""
-        return self._cache.context_summary(session_id)
+        return self._cache.context_summary(session_id, tenant_id=tenant_id, user_id=user_id)
 
     # ── Dunder ────────────────────────────────────────────────────────────────
 
