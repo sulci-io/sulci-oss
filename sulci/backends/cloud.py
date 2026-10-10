@@ -25,8 +25,8 @@ Public methods:
     remote_get(query, threshold, user_id, session_id)
         -> (response|None, similarity, context_depth)
     remote_set(query, response, user_id, session_id, ttl_seconds)
-    delete_user(user_id, *, raise_on_error=False)   # DELETE /v1/cache/user/{id}, id encoded (0.9.3)
-    clear(*, raise_on_error=False)                  # DELETE /v1/cache/clear
+    delete_user(user_id) -> dict   # DELETE /v1/cache/user/{id}, id encoded; raises SulciErasureError (0.9.3)
+    clear() -> dict                # DELETE /v1/cache/clear;                raises SulciErasureError (0.9.3)
 
 Pre-v0.6.0 (search/store/upsert) embedded queries locally and sent
 `{embedding, ...}` to the gateway — a parallel-implementation pattern that
@@ -49,12 +49,11 @@ logs. The contract is still `-> None`; customers wanting strong
 deletion confirmation should check the gateway access logs or run
 `Cache.stats()` to verify the cache size dropped as expected.
 
-0.9.3: the user id is percent-encoded into one path segment (`/` and `.` included), both methods
-check the HTTP status, return the gateway's answer on success, and on failure log a WARNING with the
-status and error code and return None — or raise SulciErasureError with raise_on_error=True.
+0.9.3 replaces the paragraph above: the user id is percent-encoded into one path segment (`/` and `.`
+included), and both methods return the gateway's answer when it confirms the erasure and raise
+SulciErasureError — with the status and error code — whenever it does not. There is no silent path.
 """
 
-import logging
 import os
 from urllib.parse import quote
 
@@ -63,18 +62,20 @@ from typing import Optional
 
 from sulci import __version__
 
-log = logging.getLogger(__name__)
-
 
 class SulciErasureError(RuntimeError):
-    """Raised by ``SulciCloudBackend.delete_user`` / ``clear`` with ``raise_on_error=True``
-    when the gateway does not confirm the erasure.
+    """Raised by ``SulciCloudBackend.delete_user`` / ``clear`` — and so by ``Cache.clear()`` on the managed
+    backend — whenever the gateway does not confirm the erasure: a transport error, any non-2xx answer, a 2xx
+    answer that is not ``{"status": "ok", ...}``, or a user id that cannot be encoded (nothing is sent).
+    The message names the operation, the status and the error code, never the user id.
 
     Attributes:
         operation: ``"delete_user"`` or ``"clear"``.
         status:    the HTTP status, or ``None`` when no response arrived.
         error:     the gateway's error code (``"validation_error"``, ``"erasure_incomplete"``,
-                   …), or the transport error's text.
+                   ``"unexpected_response"``, …); with no response, the transport error's TYPE
+                   (``"ConnectError"``) — its text, which can carry the URL and so the user id,
+                   stays on ``__cause__``; ``"unencodable user_id (…)"`` when nothing was sent.
         body:      the parsed JSON answer, when there was one.
     """
 
@@ -123,7 +124,9 @@ class SulciCloudBackend:
     Failure policy:
         - search() timeout or error  → returns (None, 0.0)  — treated as cache miss
         - upsert() failure           → silently ignored      — fire and forget
-        - Never raises to the caller — the user's app must never crash due to cache
+        - remote_get/remote_set never raise to the caller — a cache must never crash the app
+        - delete_user() / clear() raise SulciErasureError unless the gateway confirms the
+          erasure (0.9.3): an erasure that did not happen must not look like one that did
     """
 
     #: Tenant isolation is enforced server-side by the Sulci Cloud gateway,
@@ -274,7 +277,7 @@ class SulciCloudBackend:
         except Exception:
             pass   # Never crash the user's app on a failed write
 
-    def delete_user(self, user_id: str, *, raise_on_error: bool = False) -> Optional[dict]:
+    def delete_user(self, user_id: str) -> dict:
         """Delete all cache entries — and conversation history — for one user within this tenant.
 
         Sends ``DELETE /v1/cache/user/{user_id}`` with the id percent-encoded: every character
@@ -282,62 +285,43 @@ class SulciCloudBackend:
         path segment the gateway decodes once. (Before 0.9.3 it was sent as-is: ``"../clear"``
         reached ``DELETE /v1/cache/clear``, and ``"a?b"`` / ``"a#b"`` erased the user ``"a"``.)
 
-        Returns the gateway's answer on success — ``{"status": "ok", "deleted": N,
-        "tenant_id": ..., "user_id": ..., ...}`` — so the caller can confirm the erasure; test for
-        failure with ``is None``. A 2xx answer that is not that JSON counts as a failure.
-
-        On failure — a transport error, or any non-2xx answer such as ``422``
-        (``validation_error``: e.g. a reserved id) or ``503`` (``erasure_incomplete``) — it logs
-        a WARNING naming the status and the gateway's error code, and:
-
-          * by default returns ``None`` (the method has never raised, and 0.9.x keeps that);
-          * with ``raise_on_error=True`` raises :class:`SulciErasureError`.
+        Returns the gateway's answer — ``{"status": "ok", "deleted": N, "tenant_id": ...,
+        "user_id": ..., ...}`` — only when it confirms the erasure. Otherwise raises
+        :class:`SulciErasureError`: a transport error, any non-2xx answer such as ``422``
+        (``validation_error``: e.g. a reserved id) or ``503`` (``erasure_incomplete``), a 2xx answer
+        that is not that JSON, or an id that cannot be encoded (then nothing is sent).
 
         Before 0.9.3 a non-2xx answer was not checked at all: no exception, no log line.
         """
-        ok, status, error, body, exc = self._erase(lambda: _user_path(user_id))
-        if ok:
-            return body
-        log.warning("sulci.cloud.delete_user failed for user_id=%s: %s %s",
-                    _short(user_id), "no response" if status is None else f"HTTP {status}", _short(error))
-        if raise_on_error:
-            raise SulciErasureError("delete_user", status, error, body) from exc
-        return None
+        return self._erase("delete_user", lambda: _user_path(user_id))
 
-    def clear(self, *, raise_on_error: bool = False) -> Optional[dict]:
+    def clear(self) -> dict:
         """Clear all cache entries — and conversation history — for this tenant.
 
-        Sends ``DELETE /v1/cache/clear``. Returns the gateway's answer on success
-        (``{"status": "ok", "deleted": N, "tenant_id": ..., ...}``). On a transport error or any
-        non-2xx answer it logs a WARNING with the status and the gateway's error code, and
-        returns ``None`` — or, with ``raise_on_error=True``, raises :class:`SulciErasureError`.
-        ``Cache.clear()`` calls this with the default, so it still never raises.
+        Sends ``DELETE /v1/cache/clear``. Returns the gateway's answer (``{"status": "ok",
+        "deleted": N, "tenant_id": ..., ...}``) only when it confirms the erasure; otherwise raises
+        :class:`SulciErasureError`, as :meth:`delete_user` does. ``Cache.clear()`` lets it propagate.
 
         Before 0.9.3 a non-2xx answer (e.g. ``503 erasure_incomplete``) was not checked.
         """
-        ok, status, error, body, exc = self._erase(lambda: "/v1/cache/clear")
-        if ok:
-            return body
-        log.warning("sulci.cloud.clear failed: %s %s",
-                    "no response" if status is None else f"HTTP {status}", _short(error))
-        if raise_on_error:
-            raise SulciErasureError("clear", status, error, body) from exc
-        return None
+        return self._erase("clear", lambda: "/v1/cache/clear")
 
-    def _erase(self, make_path):
-        """One DELETE. Returns (ok, status, error, body, exception). Never raises (except
-        KeyboardInterrupt and friends): building the path is inside the guard too, because an id
-        that cannot be encoded (a lone surrogate, a failing __str__) must not crash the caller.
-        Success is a 2xx answer whose JSON body says {"status": "ok"} — anything else (an HTML page
-        from a misconfigured gateway URL, an empty 204) is not proof that anything was erased."""
+    def _erase(self, operation, make_path) -> dict:
+        """One DELETE. Returns the gateway's answer when it confirms the erasure — a 2xx answer whose
+        JSON body says {"status": "ok"} — and raises SulciErasureError otherwise. Anything else (an
+        HTML page from a misconfigured gateway URL, an empty 204) is not proof that anything was
+        erased. An id that cannot be encoded (a lone surrogate, a failing __str__) raises the same
+        error, with the cause chained, before anything is sent."""
         try:
             path = make_path()
         except Exception as e:
-            return False, None, f"unencodable user_id ({type(e).__name__})", None, e
+            raise SulciErasureError(operation, None, f"unencodable user_id ({type(e).__name__})") from e
         try:
             resp = self._client.delete(path)
-        except Exception as e:  # never let the transport crash the caller
-            return False, None, str(e) or type(e).__name__, None, e
+        except Exception as e:
+            # The type only: a transport's text can carry the request URL, and so the user id; the text stays
+            # on __cause__ for whoever handles the exception.
+            raise SulciErasureError(operation, None, type(e).__name__) from e
         try:
             body = resp.json()
         except Exception:
@@ -345,10 +329,10 @@ class SulciCloudBackend:
         status = resp.status_code
         if isinstance(status, int) and 200 <= status < 300:
             if isinstance(body, dict) and body.get("status") == "ok":
-                return True, status, None, body, None
-            return False, status, "unexpected_response", body, None
+                return body
+            raise SulciErasureError(operation, status, "unexpected_response", body)
         error = (body.get("error") if isinstance(body, dict) else None) or "error"
-        return False, status, str(error), body, None
+        raise SulciErasureError(operation, status, str(error), body)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

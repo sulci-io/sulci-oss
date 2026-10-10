@@ -312,8 +312,8 @@ def run() -> int:
     def fake_delete(url, **kwargs):
         delete_calls.append(url)
         r = MagicMock()
-        r.status_code = 204
-        r.raise_for_status = MagicMock()
+        r.status_code = 200   # 0.9.3: only {"status": "ok"} confirms an erasure; anything else raises
+        r.json.return_value = {"status": "ok", "deleted": 0, "tenant_id": 1}
         return r
     be._client.delete = fake_delete  # type: ignore[method-assign]
 

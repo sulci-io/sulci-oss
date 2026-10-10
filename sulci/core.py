@@ -1135,7 +1135,12 @@ class Cache:
         )
 
     def clear(self) -> None:
-        """Remove all cached entries, reset stats, and clear all sessions."""
+        """Remove all cached entries, reset stats, and clear all sessions.
+
+        If the backend cannot confirm the erasure — the managed backend raises
+        ``sulci.backends.cloud.SulciErasureError`` (0.9.3) — the exception propagates before
+        anything else is reset, so stats and sessions still describe the cache that is still there.
+        """
         self._backend.clear()
         self._stats = {"hits": 0, "misses": 0, "saved_cost": 0.0}
         if self._sessions:

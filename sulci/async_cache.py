@@ -279,7 +279,7 @@ class AsyncCache:
         return await asyncio.to_thread(self._cache.stats)
 
     async def aclear(self) -> None:
-        """Async — evict all entries, reset stats and sessions."""
+        """Async — evict all entries, reset stats and sessions. Raises as ``Cache.clear()`` does."""
         return await asyncio.to_thread(self._cache.clear)
 
     # ── Sync passthrough ──────────────────────────────────────────────────────

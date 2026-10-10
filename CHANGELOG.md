@@ -110,12 +110,26 @@ raised on backends that ignored the scope is gone.
   status and the gateway's error code and return `None`; with `raise_on_error=True` they raise the new
   `SulciErasureError` (from `sulci.backends.cloud`). They still never raise by default, including for an id
   that cannot be encoded; raising becomes the default in 0.10.0.
+  📌 Superseded before release: they never return `None`. An erasure the gateway does not confirm — a
+  transport error, any non-2xx answer, a 2xx answer that is not `{"status": "ok", ...}`, an id that cannot
+  be encoded — raises `SulciErasureError`, and `raise_on_error` does not exist. See *Changed*.
 
 ### Changed
 
 - On success `SulciCloudBackend.delete_user` and `clear` return the gateway's answer
   (`{"status": "ok", "deleted": N, ...}`) instead of `None`; `None` now means the erasure was not confirmed.
   Only a 2xx answer whose JSON says `"status": "ok"` counts as success.
+  📌 Superseded before release: they never return `None`; an unconfirmed erasure raises (next entry).
+- **Breaking:** `SulciCloudBackend.delete_user` and `clear` raise `SulciErasureError` (from
+  `sulci.backends.cloud`) whenever the gateway does not confirm the erasure, and log nothing — the exception
+  is the report; its message names the operation, the HTTP status and the error code (with no response,
+  the transport error's type), never the user id.
+  They return the gateway's answer otherwise, never `None`. So `Cache.clear()` and `AsyncCache.aclear()` on
+  the managed backend raise too, before resetting stats or sessions. From 0.6.2 to 0.9.2 a failed erasure
+  logged a WARNING (or, for a non-2xx answer, nothing) and returned normally, and `Cache.clear()` reset its
+  stats as if the erasure had happened. Code that must not stop on a failed erasure catches
+  `SulciErasureError`. `sulci.integrations.langchain.SulciCache.clear()` (and `aclear()`) no longer log and
+  ignore a failure either: it propagates, and a namespace partition that failed to clear is kept.
 
 ## [0.9.2] — SQLite and Milvus: enforce cache scope
 

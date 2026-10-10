@@ -687,6 +687,9 @@ because it is not in the `Backend` protocol. Whole-cache erasure via
 From 0.9.3 both `delete_user` and `clear` on the managed backend report failure: a non-2xx answer logs a
 WARNING and returns `None`, or raises `SulciErasureError` with `raise_on_error=True`; success returns the
 gateway's answer, including the number of entries deleted.
+📌 Before release this became stricter: both **raise** `SulciErasureError` whenever the gateway does not
+confirm the erasure (there is no `raise_on_error`, and nothing is logged), and so does `cache.clear()` on
+the managed backend, before resetting anything. Catch it where a failed erasure must not stop the caller.
 
 ### Advanced constructor options
 

@@ -8,10 +8,12 @@ tests/test_cloud_erasure.py — SulciCloudBackend.delete_user / clear (0.9.3).
    cache); ``"a?b=c"`` and ``"a#frag"`` erased the user ``"a"``; ``"org/alice"`` sent a two-segment
    path. ``quote(id, safe="")`` alone is not enough: it leaves ``.``, and httpx collapses the dot
    segments ``/user/.`` and ``/user/..`` — so ``.`` is escaped too.
-2. A non-2xx answer is no longer silent. 0.9.2 never looked at the status: a ``422`` or a ``503
-   erasure_incomplete`` produced no exception and no log line. Now: a WARNING with the status and
-   the gateway's error code, ``None`` by default (the method still never raises), and
-   ``SulciErasureError`` with ``raise_on_error=True``. Success returns the gateway's answer.
+2. An erasure the gateway does not confirm raises. 0.9.2 never looked at the status: a ``422`` or a
+   ``503 erasure_incomplete`` produced no exception and no log line. Now ``SulciErasureError``, with
+   the status and the gateway's error code, and nothing logged — the exception is the report — and
+   ``Cache.clear()`` lets it propagate before resetting anything. Success returns the gateway's
+   answer. Measured on oss-0005 (``measure_d1.py``): every failure returned ``None`` plus one WARNING,
+   and ``Cache.clear()`` reset its stats as if the erasure had happened.
 
 These run against httpx's MockTransport, so they see the bytes httpx actually sends.
 """
@@ -91,81 +93,145 @@ class TestStatusIsChecked:
     @pytest.mark.parametrize("status,error", [(422, "validation_error"), (503, "erasure_incomplete"),
                                               (404, "not_found"), (401, "unauthorized"), (500, "internal")])
     @pytest.mark.parametrize("op", ["delete_user", "clear"])
-    def test_a_failure_logs_a_warning_and_returns_none_by_default(self, caplog, op, status, error):
-        _, h = _recorder(status, {"error": error, "message": "m"})
-        b = _backend(h)
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
-            out = b.delete_user("alice") if op == "delete_user" else b.clear()
-        assert out is None
-        msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
-        assert len(msgs) == 1, msgs
-        assert op in msgs[0] and f"HTTP {status}" in msgs[0] and error in msgs[0], msgs[0]
-
-    @pytest.mark.parametrize("status,error", [(422, "validation_error"), (503, "erasure_incomplete"), (404, "not_found")])
-    @pytest.mark.parametrize("op", ["delete_user", "clear"])
-    def test_raise_on_error_raises_with_the_status_and_code(self, op, status, error):
+    def test_a_failure_raises_with_the_status_and_code(self, op, status, error):
         body = {"error": error, "message": "m"}
         _, h = _recorder(status, body)
         b = _backend(h)
         with pytest.raises(SulciErasureError) as e:
-            b.delete_user("alice", raise_on_error=True) if op == "delete_user" else b.clear(raise_on_error=True)
+            b.delete_user("alice") if op == "delete_user" else b.clear()
         assert (e.value.operation, e.value.status, e.value.error, e.value.body) == (op, status, error, body)
+        assert str(e.value) == f"sulci {op} failed: HTTP {status}: {error!r}"
 
     @pytest.mark.parametrize("op", ["delete_user", "clear"])
-    def test_a_transport_error_logs_and_returns_none_or_raises_on_request(self, caplog, op):
+    def test_a_transport_error_raises_with_no_status(self, op):
         def boom(request):
             raise httpx.ConnectError("connection refused", request=request)
         b = _backend(boom)
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
-            assert (b.delete_user("alice") if op == "delete_user" else b.clear()) is None
-        assert any("no response" in r.getMessage() for r in caplog.records)
         with pytest.raises(SulciErasureError) as e:
-            b.delete_user("alice", raise_on_error=True) if op == "delete_user" else b.clear(raise_on_error=True)
+            b.delete_user("alice") if op == "delete_user" else b.clear()
         assert e.value.status is None and isinstance(e.value.__cause__, httpx.ConnectError)
+        assert str(e.value) == f"sulci {op} failed: no response: 'ConnectError'"
+        assert "connection refused" in str(e.value.__cause__)
 
-    def test_a_non_json_failure_still_reports_its_status(self, caplog):
+    def test_a_non_json_failure_still_reports_its_status(self):
         b = _backend(lambda request: httpx.Response(502, text="<html>bad gateway</html>"))
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
-            assert b.clear() is None
-        assert any("HTTP 502" in r.getMessage() for r in caplog.records)
+        with pytest.raises(SulciErasureError) as e:
+            b.clear()
+        assert (e.value.status, e.value.error, e.value.body) == (502, "error", None)
 
-    def test_an_id_with_a_newline_cannot_forge_a_log_line(self, caplog):
+    @pytest.mark.parametrize("op,kind", [(op, k) for op in ("delete_user", "clear") for k in ("503", "transport", "html")]
+                             + [("delete_user", "unencodable")])
+    def test_a_failure_logs_nothing_the_exception_is_the_report(self, caplog, op, kind):
+        def transport(request):
+            raise httpx.ConnectError("connection refused", request=request)
+        b = _backend({"503": lambda r: httpx.Response(503, json={"error": "erasure_incomplete"}),
+                      "transport": transport, "unencodable": _recorder()[1],
+                      "html": lambda r: httpx.Response(200, text="<html>sign in</html>")}[kind])
+        uid = "\ud800" if kind == "unencodable" else "alice"
+        with caplog.at_level(logging.DEBUG, logger="sulci"):
+            with pytest.raises(SulciErasureError):
+                b.delete_user(uid) if op == "delete_user" else b.clear()
+        assert [r for r in caplog.records if r.name.startswith("sulci.backends.cloud")] == []
+
+    def test_the_message_never_carries_the_user_id(self):
+        """An exception ends up in tracebacks and error trackers; the user id may be personal data."""
         _, h = _recorder(503, {"error": "erasure_incomplete"})
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
-            _backend(h).delete_user("alice\nWARNING forged line")
-        assert all("\n" not in r.getMessage() for r in caplog.records)
+        with pytest.raises(SulciErasureError) as e:
+            _backend(h).delete_user("alice@example.com")
+        assert "alice" not in str(e.value) and "alice" not in repr(e.value)
 
-    def test_cache_clear_still_never_raises(self):
-        """Cache.clear() calls the backend with the default, so a failed erasure cannot crash an app."""
+    def test_a_transport_error_naming_the_url_does_not_carry_the_id_into_the_message(self):
+        def boom(request):
+            raise httpx.ConnectError(f"failed for {request.url}", request=request)
+        with pytest.raises(SulciErasureError) as e:
+            _backend(boom).delete_user("alice@example.com")
+        assert "alice" not in str(e.value) and "alice" not in repr(e.value)
+        assert "alice" in str(e.value.__cause__)   # the detail is still there for the handler
+
+    @pytest.mark.parametrize("op", ["delete_user", "clear"])
+    def test_there_is_no_flag_to_turn_the_exception_off(self, op):
+        import inspect
+        method = getattr(SulciCloudBackend, op)
+        assert "raise_on_error" not in inspect.signature(method).parameters
+        _, h = _recorder()
+        with pytest.raises(TypeError):
+            getattr(_backend(h), op)(*(["alice"] if op == "delete_user" else []), raise_on_error=False)
+
+
+class TestCacheClear:
+    """Cache.clear() on the managed backend: a failed erasure propagates, and nothing is reset."""
+
+    @staticmethod
+    def _cache(status, body, cls=None):
         from sulci import Cache
-        cache = Cache(backend="sulci", api_key="sk-sulci-test0000000000")
-        _, h = _recorder(503, {"error": "erasure_incomplete"})
+
+        class Rec:
+            events = []
+
+            def emit(self, event):
+                self.events.append(event.event_type)
+
+            def flush(self):
+                pass
+
+            def close(self):
+                pass
+
+        sink = Rec()
+        outer = (cls or Cache)(backend="sulci", api_key="sk-sulci-test0000000000", telemetry=False, event_sink=sink)
+        cache = getattr(outer, "_cache", outer)
+        _, h = _recorder(status, body)
         cache._backend._client.close()
         cache._backend._client = httpx.Client(base_url="https://api.sulci.io", transport=httpx.MockTransport(h))
+        cache._stats["hits"] = 5
+        from unittest.mock import MagicMock
+        cache._sessions = MagicMock()
+        return outer, cache, sink
+
+    def test_a_failed_erasure_raises_and_resets_nothing(self):
+        _, cache, sink = self._cache(503, {"error": "erasure_incomplete"})
+        with pytest.raises(SulciErasureError) as e:
+            cache.clear()
+        assert (e.value.operation, e.value.status) == ("clear", 503)
+        assert cache._stats["hits"] == 5 and "clear" not in sink.events
+        assert not cache._sessions.clear_all.called
+
+    def test_a_confirmed_erasure_resets_the_stats_and_reports_it(self):
+        _, cache, sink = self._cache(200, {"status": "ok", "deleted": 4, "tenant_id": 7})
         cache.clear()
+        assert cache._stats["hits"] == 0 and "clear" in sink.events
+        assert cache._sessions.clear_all.called
+
+    def test_async_aclear_raises_too(self):
+        import asyncio
+        from sulci import AsyncCache
+        ac, cache, sink = self._cache(503, {"error": "erasure_incomplete"}, AsyncCache)
+        with pytest.raises(SulciErasureError):
+            asyncio.run(ac.aclear())
+        assert "clear" not in sink.events
+        assert cache._stats["hits"] == 5 and not cache._sessions.clear_all.called
 
 
 class TestWhatTheReviewFound:
     """Independent review of the first cut (2026-10-09). Each was a real defect of that cut."""
 
     @pytest.mark.parametrize("bad", ["\ud800", "a\udcffb"])
-    def test_an_unencodable_id_never_raises_by_default(self, caplog, bad):
+    def test_an_unencodable_id_raises_and_sends_nothing(self, bad):
         seen, h = _recorder()
-        b = _backend(h)
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
-            assert b.delete_user(bad) is None
-        assert seen == [] and any("unencodable user_id" in r.getMessage() for r in caplog.records)
         with pytest.raises(SulciErasureError) as e:
-            b.delete_user(bad, raise_on_error=True)
+            _backend(h).delete_user(bad)
+        assert seen == []
         assert e.value.status is None and e.value.error.startswith("unencodable user_id")
         assert isinstance(e.value.__cause__, UnicodeEncodeError)
 
-    def test_an_id_whose_str_raises_never_raises_by_default(self):
+    def test_an_id_whose_str_raises_raises_and_sends_nothing(self):
         class Bad:
             def __str__(self):
                 raise ValueError("no text")
         seen, h = _recorder()
-        assert _backend(h).delete_user(Bad()) is None and seen == []
+        with pytest.raises(SulciErasureError) as e:
+            _backend(h).delete_user(Bad())
+        assert seen == [] and isinstance(e.value.__cause__, ValueError)
 
     @pytest.mark.parametrize("resp", [
         lambda r: httpx.Response(200, text="<html>sign in</html>"),
@@ -178,23 +244,21 @@ class TestWhatTheReviewFound:
     @pytest.mark.parametrize("op", ["delete_user", "clear"])
     def test_a_2xx_that_is_not_an_ok_answer_is_not_a_confirmed_erasure(self, op, resp):
         b = _backend(resp)
-        call = (lambda **kw: b.delete_user("alice", **kw)) if op == "delete_user" else b.clear
-        assert call() is None
         with pytest.raises(SulciErasureError) as e:
-            call(raise_on_error=True)
-        assert e.value.error == "unexpected_response"
+            b.delete_user("alice") if op == "delete_user" else b.clear()
+        assert e.value.error == "unexpected_response" and 200 <= e.value.status < 300
 
-    def test_an_error_code_with_control_characters_cannot_forge_a_line(self, caplog):
+    def test_an_error_code_with_control_characters_cannot_forge_a_line(self):
         _, h = _recorder(503, {"error": "x\nWARNING forged line"})
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
+        with pytest.raises(SulciErasureError) as e:
             _backend(h).clear()
-        assert all("\n" not in r.getMessage() for r in caplog.records)
+        assert "\n" not in str(e.value)
 
-    def test_a_long_id_is_truncated_in_the_log(self, caplog):
-        _, h = _recorder(503, {"error": "erasure_incomplete"})
-        with caplog.at_level(logging.WARNING, logger="sulci.backends.cloud"):
-            _backend(h).delete_user("x" * 100_000)
-        assert all(len(r.getMessage()) < 1000 for r in caplog.records)
+    def test_a_long_error_code_is_truncated_in_the_message(self):
+        _, h = _recorder(503, {"error": "x" * 100_000})
+        with pytest.raises(SulciErasureError) as e:
+            _backend(h).clear()
+        assert len(str(e.value)) < 1000 and len(e.value.error) == 100_000
 
     def test_the_error_pickles(self):
         import pickle
