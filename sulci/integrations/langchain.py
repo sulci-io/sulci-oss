@@ -242,18 +242,17 @@ class SulciCache(BaseCache):
             logger.warning("sulci update error — skipping store", exc_info=True)
 
     def clear(self, **kwargs: Any) -> None:
-        """Evict all entries across the default cache and all NS partitions."""
-        # Snapshot values first — avoids any dict-changed-during-iteration issues.
-        caches_to_clear = [self._default_cache] + list(self._ns_caches.values())
-        try:
-            for c in caches_to_clear:
-                c.clear()
-        except Exception:
-            logger.warning("sulci clear error", exc_info=True)
-        finally:
-            # Always reset the namespace dict — even if data clearing partly failed.
-            # This guarantees _ns_caches is empty after clear() is called.
-            self._ns_caches.clear()
+        """Evict all entries across the default cache and all NS partitions.
+
+        0.9.3: a failure propagates — on the managed backend, ``SulciErasureError`` when the gateway
+        does not confirm the erasure — instead of being logged and ignored: clear() is an erasure, not
+        a cache read. A partition is forgotten only once it has been cleared, so one that failed is
+        still there to clear again.
+        """
+        self._default_cache.clear()
+        for llm_string in list(self._ns_caches):
+            self._ns_caches[llm_string].clear()
+            del self._ns_caches[llm_string]
 
     # ── Async overrides ────────────────────────────────────────────────────────
     # LangChain recommends overriding these to avoid spawning excess threads.

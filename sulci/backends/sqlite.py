@@ -14,6 +14,8 @@ from __future__ import annotations
 import os, sqlite3, json, struct, time, math, warnings
 from typing import Optional
 
+from sulci._metadata import checked_metadata
+
 
 # PRAGMA user_version of the current schema.
 #   0 — through 0.9.1: `key` alone was UNIQUE, and no tenant_id column.
@@ -38,6 +40,7 @@ _CREATE_TABLE = """
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_user    ON cache(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_expires ON cache(expires)",
+    "CREATE INDEX IF NOT EXISTS idx_scope   ON cache(tenant_id, user_id)",
 )
 
 
@@ -45,8 +48,8 @@ class SQLiteBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
     #: tenant_id is part of a row's identity here, so two tenants never
-    #: overwrite each other's entry, but search() does not filter on it.
-    ENFORCES_TENANT_ISOLATION: bool = False
+    #: overwrite each other's entry, and search() filters on it (0.9.3).
+    ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
     def __init__(self, db_path: str = "./sulci_db"):
         os.makedirs(db_path, exist_ok=True)
@@ -153,7 +156,7 @@ class SQLiteBackend:
             user_id or "global",
             expires or 0.0,
             time.time(),
-            json.dumps(metadata or {}),
+            json.dumps(checked_metadata(metadata)),   # 0.9.3: the same rule as Cache.set
         ))
         self._conn.commit()
 
@@ -165,15 +168,15 @@ class SQLiteBackend:
         user_id: Optional[str] = None, now: Optional[float] = None,
     ) -> tuple[Optional[str], float]:
         now       = now or time.time()
+        # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global".
         rows      = self._conn.execute(
-            "SELECT response, embedding, expires, user_id FROM cache"
+            "SELECT response, embedding, expires FROM cache WHERE tenant_id = ? AND user_id = ?",
+            (tenant_id or "global", user_id or "global"),
         ).fetchall()
         best_sim  = 0.0
         best_resp = None
         for row in rows:
             if row["expires"] and now > row["expires"]:
-                continue
-            if user_id and row["user_id"] != user_id:
                 continue
             sim = self._cosine(embedding, self._unpack(row["embedding"]))
             if sim > best_sim:

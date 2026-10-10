@@ -13,11 +13,14 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from sulci._metadata import checked_metadata
+from sulci.backends._scope import scoped_id
+
 
 class ChromaBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
-    ENFORCES_TENANT_ISOLATION: bool = False
+    ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
     def __init__(self, db_path: str = "./sulci_db"):
         try:
@@ -42,15 +45,18 @@ class ChromaBackend:
         metadata: Optional[dict] = None,
     ) -> None:
         self._col.upsert(
-            ids        = [key],
+            # 0.9.3: scoped to tenant and user. `key` comes from the query alone, so upserting by it let
+            # another tenant or user storing the same question replace this entry.
+            ids        = [scoped_id(key, tenant_id, user_id)],
             embeddings = [embedding],
             documents  = [response],
             metadatas  = [{
+                # 0.9.3: metadata is refused if it uses a reserved name, and goes first; the entry's fields win.
+                **checked_metadata(metadata),
                 "query":     query,
                 "expires":   expires or 0.0,
                 "user_id":   user_id or "global",
                 "tenant_id": tenant_id or "global",
-                **(metadata or {}),
             }],
         )
 
@@ -62,7 +68,9 @@ class ChromaBackend:
         user_id: Optional[str] = None, now: Optional[float] = None,
     ) -> tuple[Optional[str], float]:
         now   = now or time.time()
-        where = {"user_id": user_id} if user_id else None
+        # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global".
+        # In the query's filter, so other scopes' copies of a question cannot crowd this one out.
+        where = {"$and": [{"tenant_id": tenant_id or "global"}, {"user_id": user_id or "global"}]}
         try:
             res = self._col.query(
                 query_embeddings = [embedding],

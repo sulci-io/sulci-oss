@@ -20,6 +20,8 @@ from __future__ import annotations
 import time, uuid, warnings
 from typing import Any, Optional
 
+from sulci._metadata import checked_metadata
+
 
 class QdrantBackend:
     #: True if this backend enforces tenant_id partition isolation.
@@ -193,6 +195,9 @@ class QdrantBackend:
                 id      = str(uuid.uuid4()),
                 vector  = embedding,
                 payload = {
+                    # 0.9.3: the caller's metadata is refused if it uses a reserved name, and goes
+                    # FIRST, so the entry's own fields below always win (it used to come last).
+                    **checked_metadata(metadata),
                     "key": key, "query": query, "response": response,
                     "tenant_id": tenant_id or "global",
                     "user_id": user_id or "global",
@@ -202,7 +207,6 @@ class QdrantBackend:
                     # "last seen" for entries that have never been served,
                     # instead of fabricating one at aggregation time.
                     "created": time.time(),
-                    **(metadata or {}),
                 },
             )],
         )

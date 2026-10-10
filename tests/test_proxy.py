@@ -301,19 +301,19 @@ def test_tenant_header_scopes_the_lookup(cache):
     c = make(cache, up)
     c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "sha-a"})
     r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "sha-b"})
-    # ⚠️ sqlite does not enforce tenant isolation, so this is a HIT. The
-    # assertion records real behaviour; see _scope.py for why the adapter
-    # warns rather than pretending otherwise.
-    assert r.headers["x-sulci-cache"] == "hit"
+    # 0.9.3: every backend enforces the tenant (before, SQLite served sha-a's answer here).
+    assert r.headers["x-sulci-cache"] == "miss"
+    assert len(up.calls) == 2
 
 
-def test_per_model_scoping_warns_when_unenforced(cache):
-    from sulci.integrations._scope import ScopeNotEnforcedWarning
-
+def test_per_model_scoping_keeps_models_apart(cache):
     up = Upstream()
     client = httpx.AsyncClient(transport=httpx.MockTransport(up.handler))
-    with pytest.warns(ScopeNotEnforcedWarning):
-        build_app(cache, client=client, share_across_models=False)
+    c = TestClient(build_app(cache, client=client, share_across_models=False))
+    c.post("/v1/chat/completions", json=OPENAI_BODY)
+    assert c.post("/v1/chat/completions", json=OPENAI_BODY).headers["x-sulci-cache"] == "hit"
+    other = dict(OPENAI_BODY, model="gpt-other")
+    assert c.post("/v1/chat/completions", json=other).headers["x-sulci-cache"] == "miss"
 
 
 # ── ops endpoints ────────────────────────────────────────────────────────
@@ -333,3 +333,22 @@ def test_stats_endpoint_reports_hits(cache):
 def test_build_app_rejects_cache_and_kwargs_together(cache):
     with pytest.raises(TypeError):
         build_app(cache, backend="sqlite")
+
+
+# ── 0.9.3: an empty tenant header is no tenant; a reserved one is answered without the cache ──
+def test_an_empty_tenant_header_is_no_tenant(cache):
+    up = Upstream()
+    c = make(cache, up)
+    c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": ""})
+    r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": ""})
+    assert r.headers["x-sulci-cache"] == "hit"
+    assert len(up.calls) == 1
+
+
+def test_a_reserved_tenant_header_is_answered_without_the_cache(cache):
+    up = Upstream()
+    c = make(cache, up)
+    for _ in range(2):
+        r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "global"})
+        assert r.status_code == 200 and r.headers["x-sulci-cache"] == "miss"
+    assert len(up.calls) == 2

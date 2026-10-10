@@ -201,26 +201,151 @@ class TestRedisSessionStore:
         store_a.append("s1", [1.0])
         assert store_b.get("s1") == [[1.0]]
 
-class TestTenantIsolation:
-    def test_in_memory_tenants_do_not_share_history(self):
-        a = InMemorySessionStore(tenant_id="tenant-A")
-        b = InMemorySessionStore(tenant_id="tenant-B")
-        a.append("user_42", [1.0, 2.0])
-        b.append("user_42", [9.0, 8.0])
-        assert a.get("user_42") == [[1.0, 2.0]]
-        assert b.get("user_42") == [[9.0, 8.0]]
+class TestScopes:
+    """0.9.3 (OSS-3): the stores take no tenant — the Cache scopes every id (sulci.sessions.scope) — and remove a
+    tenant's, a user's or every session."""
 
-    def test_in_memory_default_tenant_none_unchanged(self):
+    @staticmethod
+    def _fill(store):
+        from sulci.sessions import scoped_session_id
+        ids = {(t, u): scoped_session_id(t, u, "s1") for t in ("tA", "tB") for u in ("alice", None)}
+        for sid in ids.values():
+            store.append(sid, [1.0])
+        return ids
+
+    def test_in_memory_clear_scope_removes_one_tenant(self):
+        from sulci.sessions import tenant_scope
         store = InMemorySessionStore()
-        store.append("s1", [1.0])
-        assert store.get("s1") == [[1.0]]
+        ids = self._fill(store)
+        assert store.clear_scope(tenant_scope("tA")) == 2
+        assert [k for k, sid in ids.items() if store.get(sid)] == [("tB", "alice"), ("tB", None)]
 
-    def test_in_memory_summary_scoped_to_tenant(self):
-        a = InMemorySessionStore(tenant_id="tenant-A")
-        b = InMemorySessionStore(tenant_id="tenant-B")
-        a.append("s1", [1.0])
-        a.append("s2", [2.0])
-        b.append("s1", [9.0])
-        assert a.summary()["sessions"] == 2
-        assert b.summary()["sessions"] == 1
-        
+    def test_in_memory_clear_scope_removes_one_user(self):
+        from sulci.sessions import user_scope
+        store = InMemorySessionStore()
+        ids = self._fill(store)
+        assert store.clear_scope(user_scope("tA", "alice")) == 1
+        assert [k for k, sid in ids.items() if not store.get(sid)] == [("tA", "alice")]
+
+    def test_in_memory_takes_no_tenant(self):
+        with pytest.raises(TypeError):
+            InMemorySessionStore(tenant_id="tenant-A")
+
+
+class TestRedisIndex:
+    """0.9.3 (OSS-3): RedisSessionStore indexes every id it writes, and erases from the index, never a SCAN."""
+
+    def test_clear_all_and_clear_scope_never_scan_the_keyspace(self, redis_client, monkeypatch):
+        from sulci.sessions import scoped_session_id, tenant_scope
+        store = RedisSessionStore(redis_client)
+        for t in ("tA", "tB"):
+            store.append(scoped_session_id(t, "alice", "s1"), [1.0])
+        def no_scan(*a, **k):
+            raise AssertionError("keyspace SCAN")
+        monkeypatch.setattr(redis_client, "scan", no_scan)
+        monkeypatch.setattr(redis_client, "scan_iter", no_scan)
+        assert store.clear_scope(tenant_scope("tA")) == 1
+        assert store.summary()["sessions"] == 1
+        assert store.clear_all() == 1
+        assert redis_client.keys("*") == []                 # sessions and indexes alike are gone
+
+    def test_an_id_cannot_reach_the_index_namespace(self, redis_client):
+        store = RedisSessionStore(redis_client)
+        store.append("i:", [1.0])                            # looks like the store's own index key
+        store.append("s1", [2.0])
+        assert store.get("i:") == [[1.0]] and store.summary()["sessions"] == 2
+        assert store.clear_all() == 2
+
+    def test_index_entries_outlive_their_session_by_the_grace_period(self, redis_client):
+        import time as _time
+        from sulci.sessions import scoped_session_id
+        from sulci.sessions.redis import _INDEX_GRACE_SECONDS
+        store = RedisSessionStore(redis_client, ttl_seconds=60)
+        sid = scoped_session_id("tA", "alice", "s1")
+        store.append(sid, [1.0])
+        idx = [k for k in redis_client.keys("*") if ":i:" in k]
+        assert len(idx) == 3
+        for k in idx:
+            assert abs(redis_client.zscore(k, sid) - (_time.time() + 60 + _INDEX_GRACE_SECONDS)) < 5
+
+    def test_redis_takes_no_tenant(self, redis_client):
+        with pytest.raises(TypeError):
+            RedisSessionStore(redis_client, tenant_id="tenant-A")
+
+    def test_one_write_is_one_transaction(self, redis_client, monkeypatch):
+        from sulci.sessions import scoped_session_id
+        store = RedisSessionStore(redis_client, ttl_seconds=60)
+        made, real = [], redis_client.pipeline
+
+        def recording(*a, **k):
+            p = real(*a, **k)
+            made.append((k.get("transaction", a[0] if a else True), p))
+            return p
+        monkeypatch.setattr(redis_client, "pipeline", recording)
+        store.append(scoped_session_id("tA", "alice", "s1"), [1.0])
+        assert len(made) == 1 and made[0][0] is True        # the session and its three index entries together
+
+    def test_an_index_lists_live_sessions_not_every_id_ever_written(self, redis_client, monkeypatch):
+        import time as _time
+        from sulci.sessions import redis as rmod
+        store = RedisSessionStore(redis_client, ttl_seconds=60)
+        store.append("old", [1.0])
+        later = _time.time() + 60 + rmod._INDEX_GRACE_SECONDS + 1
+        monkeypatch.setattr(rmod.time, "time", lambda: later)
+        store.append("new", [2.0])
+        assert [m for m, _ in redis_client.zscan_iter(store._index())] == ["new"]
+
+    def test_a_writer_with_a_slow_clock_cannot_shorten_an_entry(self, redis_client, monkeypatch):
+        import time as _time
+        from sulci.sessions import redis as rmod
+        store = RedisSessionStore(redis_client, ttl_seconds=60)
+        store.append("s1", [1.0])
+        first = redis_client.zscore(store._index(), "s1")
+        real = _time.time
+        monkeypatch.setattr(rmod.time, "time", lambda: real() - 1000)
+        store.append("s1", [2.0])
+        assert redis_client.zscore(store._index(), "s1") == first
+
+    def test_stores_with_different_ttls_can_share_a_prefix(self, redis_client):
+        RedisSessionStore(redis_client).append("forever", [1.0])
+        RedisSessionStore(redis_client, ttl_seconds=60).append("hour", [1.0])
+        assert redis_client.ttl("sulci:sessions:i:") == -1          # the index never expires under "forever"
+        assert RedisSessionStore(redis_client).clear_all() == 2
+
+    def test_the_default_prefix_is_new(self, redis_client):
+        assert RedisSessionStore(redis_client)._key("x") == "sulci:sessions:s:x"
+
+
+class TestInMemoryThreads:
+    def test_appends_and_clears_from_many_threads(self):
+        import sys, threading, time
+        from sulci.sessions import scoped_session_id, tenant_scope
+        store, errors = InMemorySessionStore(max_total_sessions=50), []
+        stop = time.monotonic() + 1.0
+        old = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)                     # switch threads constantly, so the operations overlap
+
+        def writer(n):
+            i = 0
+            try:
+                while time.monotonic() < stop:
+                    store.append(scoped_session_id(f"t{n}", "u", f"s{i % 80}"), [1.0]); i += 1
+            except Exception as e:      # noqa: BLE001
+                errors.append(e)
+
+        def clearer():
+            i = 0
+            try:
+                while time.monotonic() < stop:
+                    store.clear_scope(tenant_scope(f"t{i % 4}")); i += 1
+            except Exception as e:      # noqa: BLE001
+                errors.append(e)
+        ts = [threading.Thread(target=writer, args=(n,)) for n in range(4)] + [threading.Thread(target=clearer)]
+        try:
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+        finally:
+            sys.setswitchinterval(old)
+        assert errors == []

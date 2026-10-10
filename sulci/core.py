@@ -31,6 +31,9 @@ from sulci.sinks.protocol import query_hash as _query_hash
 # dispatch; runtime behavior is duck-typed against the protocol's methods.
 from sulci.embeddings.protocol import Embedder
 from sulci.backends.protocol   import Backend
+from sulci._metadata import checked_metadata
+from sulci._scope_ids import refuse_reserved_scope
+from sulci.sessions.scope import scoped_session_id as _scoped_session_id
 
 
 # ── v0.5.2 nudge state (D15) ──────────────────────────────────────────────────
@@ -113,13 +116,10 @@ class _ProtocolAdaptedSessionStore:
             pass
 
     def clear_all(self) -> None:
-        # The new protocol doesn't expose enumeration. For multi-replica
-        # deployments (the primary motivation for injection), clear-all
-        # at the library level is a no-op — operators clear via their
-        # own admin tooling. Behavioral parity with legacy in the
-        # single-process case is satisfied by the adapter being
-        # discarded with the Cache instance.
-        pass
+        # 0.9.3 (OSS-3): the protocol's clear_all() — the store removes what it holds from its own
+        # index (it was a no-op, so Cache.clear() left an injected store's history in place).
+        # A failure propagates: an erasure that did not happen must not look like one that did.
+        self._inner.clear_all()
 
     def active_sessions(self) -> list:
         # Same enumeration limitation as clear_all().
@@ -433,6 +433,13 @@ class Cache:
         #   2. context_window > 0      → legacy _BuiltinSessionStore (default)
         #   3. otherwise               → no context tracking
         if session_store is not None:
+            # 0.9.3 (OSS-3): clear() must reach every session the store holds.
+            missing = [m for m in ("clear_scope", "clear_all") if not callable(getattr(session_store, m, None))]
+            if missing:
+                raise TypeError(
+                    f"session_store {type(session_store).__name__} has no {' or '.join(missing)}(): "
+                    "Cache.clear() could not remove its history (sulci.sessions.SessionStore, 0.9.3)"
+                )
             self._sessions = _ProtocolAdaptedSessionStore(
                 inner        = session_store,
                 query_weight = query_weight,
@@ -571,6 +578,13 @@ class Cache:
         window.add_turn(query,    role="user",      embedding=query_vec)
         window.add_turn(response, role="assistant")   # embedded lazily on next blend
 
+    def _session_key(self, session_id, tenant_id, user_id):
+        """0.9.3 (OSS-3): the id the session store is given — the caller's session_id scoped by tenant and,
+        when personalized, by user (sulci.sessions.scope). Falsy stays falsy (no session)."""
+        if not session_id:
+            return session_id
+        return _scoped_session_id(tenant_id, user_id if self.personalized else None, session_id)
+
     # ── public API ────────────────────────────────────────────────
 
     def get(
@@ -633,6 +647,8 @@ class Cache:
             response is None on cache miss.
             context_depth = number of prior turns that influenced lookup.
         """
+        # 0.9.3: "global" and "" address the shared scope; refused before anything is read or sent.
+        refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         _t0 = _time.time()
         self._query_count += 1
         matched_query: Optional[str] = None
@@ -687,7 +703,7 @@ class Cache:
             )
         else:
             # Self-hosted path — library is the engine in-process.
-            vec, depth = self._context_vec(query, session_id)
+            vec, depth = self._context_vec(query, self._session_key(session_id, tenant_id, user_id))
 
             # unreleased (2026-08-12) — blended-lookup threshold, applied HERE and
             # nowhere earlier: `depth` is the only thing that says whether this
@@ -858,7 +874,16 @@ class Cache:
 
         ``plan`` (v0.5.6, sulci-oss #36) is forwarded onto the emitted
         CacheEvent.plan; see ``Cache.get`` for the rationale.
+
+        ``metadata`` (0.9.3) must be a mapping (``TypeError``) whose keys do not
+        name the entry's own fields — ``sulci._metadata.RESERVED_METADATA_KEYS``
+        (``ValueError``). Nothing is embedded, stored or sent when either fails.
         """
+        # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
+        refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
+        # 0.9.3: metadata may not use the entry's own field names (ValueError, as the gateway's 422) and
+        # must be a mapping (TypeError) — checked here, on every backend, before anything is embedded or sent.
+        metadata = checked_metadata(metadata)
         _t0 = _time.time()
         if self._is_remote_transport:
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.
@@ -888,10 +913,10 @@ class Cache:
                 tenant_id = tenant_id,
                 user_id   = user_id if self.personalized else None,
                 expires   = expires,
-                metadata  = metadata or {},
+                metadata  = metadata,
             )
         if session_id and self._sessions and raw_vec is not None:
-            self._record_turn(session_id, query, response, raw_vec)
+            self._record_turn(self._session_key(session_id, tenant_id, user_id), query, response, raw_vec)
 
         # Telemetry — legacy emit pipe (sulci.connect()).
         # Mirror the cache.get behaviour: only emit when this Cache
@@ -1005,7 +1030,7 @@ class Cache:
             # guard already present in Cache.set's session-record path.
             if session_id and self._sessions and not self._is_remote_transport:
                 raw_vec = self._embedder.embed(query)
-                self._record_turn(session_id, query, hit, raw_vec)
+                self._record_turn(self._session_key(session_id, tenant_id, user_id), query, hit, raw_vec)
             return {
                 "response":      hit,
                 "source":        "cache",
@@ -1030,7 +1055,8 @@ class Cache:
 
     # ── context management API ────────────────────────────────────
 
-    def get_context(self, session_id: str) -> ContextWindow:
+    def get_context(self, session_id: str, *, tenant_id: Optional[str] = None,
+                    user_id: Optional[str] = None) -> ContextWindow:
         """
         Return the ContextWindow for a session (creates one if new).
 
@@ -1042,25 +1068,33 @@ class Cache:
             ctx.add_turn("Great! Let me help with that.", role="assistant")
 
         Raises RuntimeError if context_window == 0.
+
+        0.9.3: a session belongs to a tenant and, when personalized, a user —
+        pass the same ``tenant_id`` / ``user_id`` as to ``get`` and ``set``.
         """
+        refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         if self._sessions is None:
             raise RuntimeError(
                 "Context tracking is disabled. "
                 "Initialise Cache with context_window > 0 to enable it.\n"
                 "Example: Cache(backend='sqlite', context_window=6)"
             )
-        return self._sessions.get(session_id)
+        return self._sessions.get(self._session_key(session_id, tenant_id, user_id))
 
-    def clear_context(self, session_id: str) -> None:
+    def clear_context(self, session_id: str, *, tenant_id: Optional[str] = None,
+                      user_id: Optional[str] = None) -> None:
         """
         Clear conversation history for a session without removing cache entries.
 
         Call this when a user starts a new topic or when a conversation ends.
+        0.9.3: pass the same ``tenant_id`` / ``user_id`` as to ``get`` and ``set``.
         """
+        refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         if self._sessions:
-            self._sessions.delete(session_id)
+            self._sessions.delete(self._session_key(session_id, tenant_id, user_id))
 
-    def context_summary(self, session_id: Optional[str] = None) -> dict:
+    def context_summary(self, session_id: Optional[str] = None, *, tenant_id: Optional[str] = None,
+                        user_id: Optional[str] = None) -> dict:
         """
         Return a human-readable summary of session context.
 
@@ -1068,8 +1102,14 @@ class Cache:
         """
         if self._sessions is None:
             return {"context_window": 0, "message": "Context tracking disabled."}
+        if not session_id and (tenant_id is not None or user_id is not None):
+            # 0.9.3: tenant_id / user_id name ONE session's scope; without a session_id this is the
+            # every-session view, and silently ignoring the scope would hand back other tenants' sessions.
+            raise TypeError("context_summary(): tenant_id and user_id need a session_id — "
+                            "without one the summary covers every session")
         if session_id:
-            win = self._sessions.get(session_id)
+            refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
+            win = self._sessions.get(self._session_key(session_id, tenant_id, user_id))
             return {"session_id": session_id, **win.summary()}
         return self._sessions.summary()
 
@@ -1128,11 +1168,17 @@ class Cache:
         )
 
     def clear(self) -> None:
-        """Remove all cached entries, reset stats, and clear all sessions."""
+        """Remove all cached entries, reset stats, and clear all sessions — every tenant's and user's, in
+        the built-in store or an injected one (0.9.3: an injected store's were left in place).
+
+        If the backend cannot confirm the erasure — the managed backend raises
+        ``sulci.backends.cloud.SulciErasureError`` (0.9.3) — the exception propagates before
+        anything else is reset, so stats and sessions still describe the cache that is still there.
+        """
         self._backend.clear()
-        self._stats = {"hits": 0, "misses": 0, "saved_cost": 0.0}
         if self._sessions:
-            self._sessions.clear_all()
+            self._sessions.clear_all()   # 0.9.3: before the stats, so a failure leaves them as they were
+        self._stats = {"hits": 0, "misses": 0, "saved_cost": 0.0}
 
         # v0.5.0 — structured event sink (additive; defaults to NullSink)
         try:

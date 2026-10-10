@@ -25,8 +25,8 @@ Public methods:
     remote_get(query, threshold, user_id, session_id)
         -> (response|None, similarity, context_depth)
     remote_set(query, response, user_id, session_id, ttl_seconds)
-    delete_user(user_id)   # v0.6.2: real deletion via DELETE /v1/cache/user/{id}
-    clear()                # v0.6.2: real wipe via DELETE /v1/cache/clear
+    delete_user(user_id) -> dict   # DELETE /v1/cache/user/{id}, id encoded; raises SulciErasureError (0.9.3)
+    clear() -> dict                # DELETE /v1/cache/clear;                raises SulciErasureError (0.9.3)
 
 Pre-v0.6.0 (search/store/upsert) embedded queries locally and sent
 `{embedding, ...}` to the gateway — a parallel-implementation pattern that
@@ -48,17 +48,62 @@ HTTP error so GDPR-relevant deletion failures are visible in customer
 logs. The contract is still `-> None`; customers wanting strong
 deletion confirmation should check the gateway access logs or run
 `Cache.stats()` to verify the cache size dropped as expected.
+
+0.9.3 replaces the paragraph above: the user id is percent-encoded into one path segment (`/` and `.`
+included), and both methods return the gateway's answer when it confirms the erasure and raise
+SulciErasureError — with the status and error code — whenever it does not. There is no silent path.
 """
 
-import logging
 import os
+from urllib.parse import quote
 
 import httpx
 from typing import Optional
 
 from sulci import __version__
 
-log = logging.getLogger(__name__)
+
+class SulciErasureError(RuntimeError):
+    """Raised by ``SulciCloudBackend.delete_user`` / ``clear`` — and so by ``Cache.clear()`` on the managed
+    backend — whenever the gateway does not confirm the erasure: a transport error, any non-2xx answer, a 2xx
+    answer that is not ``{"status": "ok", ...}``, or a user id that cannot be encoded (nothing is sent).
+    The message names the operation, the status and the error code, never the user id.
+
+    Attributes:
+        operation: ``"delete_user"`` or ``"clear"``.
+        status:    the HTTP status, or ``None`` when no response arrived.
+        error:     the gateway's error code (``"validation_error"``, ``"erasure_incomplete"``,
+                   ``"unexpected_response"``, …); with no response, the transport error's TYPE
+                   (``"ConnectError"``) — its text, which can carry the URL and so the user id,
+                   stays on ``__cause__``; ``"unencodable user_id (…)"`` when nothing was sent.
+        body:      the parsed JSON answer, when there was one.
+    """
+
+    def __init__(self, operation: str, status, error: str, body=None):
+        self.operation, self.status, self.error, self.body = operation, status, error, body
+        where = "no response" if status is None else f"HTTP {status}"
+        super().__init__(f"sulci {operation} failed: {where}: {_short(error)}")
+
+    def __reduce__(self):  # picklable (multiprocessing, task queues)
+        return (type(self), (self.operation, self.status, self.error, self.body))
+
+
+def _short(value, limit: int = 200) -> str:
+    """repr() for a log line or message: control characters escaped, so a value cannot forge a line;
+    truncated, so a 100 kB id does not become a 100 kB log line."""
+    r = repr(value)
+    return r if len(r) <= limit else r[:limit] + f"…(+{len(r) - limit} chars)"
+
+
+def _user_path(user_id) -> str:
+    """``/v1/cache/user/<id>`` with the id as ONE path segment the gateway decodes once.
+
+    ``quote(..., safe="")`` escapes ``/``, ``?``, ``#``, ``%``, spaces and non-ASCII (as UTF-8),
+    but leaves ``.`` — and HTTP clients collapse the dot segments ``/user/.`` and ``/user/..``
+    before sending (``..`` would become ``DELETE /v1/cache/``). Escaping every ``.`` as ``%2E``
+    is harmless: the gateway decodes once.
+    """
+    return "/v1/cache/user/" + quote(str(user_id), safe="").replace(".", "%2E")
 
 
 class SulciCloudBackend:
@@ -79,7 +124,9 @@ class SulciCloudBackend:
     Failure policy:
         - search() timeout or error  → returns (None, 0.0)  — treated as cache miss
         - upsert() failure           → silently ignored      — fire and forget
-        - Never raises to the caller — the user's app must never crash due to cache
+        - remote_get/remote_set never raise to the caller — a cache must never crash the app
+        - delete_user() / clear() raise SulciErasureError unless the gateway confirms the
+          erasure (0.9.3): an erasure that did not happen must not look like one that did
     """
 
     #: Tenant isolation is enforced server-side by the Sulci Cloud gateway,
@@ -230,65 +277,62 @@ class SulciCloudBackend:
         except Exception:
             pass   # Never crash the user's app on a failed write
 
-    def delete_user(self, user_id: str) -> None:
-        """Delete all cache entries for a given user_id within this tenant.
+    def delete_user(self, user_id: str) -> dict:
+        """Delete all cache entries — and conversation history — for one user within this tenant.
 
-        Sends `DELETE /v1/cache/user/{user_id}`. The gateway resolves the
-        tenant from the `X-Sulci-Key` auth header and deletes only points
-        where BOTH tenant_id AND user_id match — strict GDPR isolation,
-        no cross-tenant leakage possible (see sulci-platform #103 for
-        the gateway-side filter).
+        Sends ``DELETE /v1/cache/user/{user_id}`` with the id percent-encoded: every character
+        outside ``A-Z a-z 0-9 - _ ~`` is escaped, ``/`` and ``.`` included, so the id is one
+        path segment the gateway decodes once. (Before 0.9.3 it was sent as-is: ``"../clear"``
+        reached ``DELETE /v1/cache/clear``, and ``"a?b"`` / ``"a#b"`` erased the user ``"a"``.)
 
-        Returns None unconditionally. The method never raises — a failure
-        in the deletion path will not crash the customer's app. However,
-        unlike pre-v0.6.2, failures are no longer silent: they produce
-        a `log.warning(...)` with the HTTP error so customers can see
-        deletion problems in their application logs.
+        Returns the gateway's answer — ``{"status": "ok", "deleted": N, "tenant_id": ...,
+        "user_id": ..., ...}`` — only when it confirms the erasure. Otherwise raises
+        :class:`SulciErasureError`: a transport error, any non-2xx answer such as ``422``
+        (``validation_error``: e.g. a reserved id) or ``503`` (``erasure_incomplete``), a 2xx answer
+        that is not that JSON, or an id that cannot be encoded (then nothing is sent).
 
-        Notes for GDPR auditing:
-          - The gateway response includes the count of points actually
-            deleted (`{"status": "ok", "deleted": N, "tenant_id": ...,
-            "user_id": ...}`), but this SDK method returns None to
-            preserve the v0.6.x contract. Inspect gateway access logs
-            or run `Cache.stats()` post-call to verify deletion.
-          - Pre-v0.6.2 the SDK sent `DELETE /v1/user/{user_id}` (route
-            never existed on the gateway, silently 404'd, no deletion
-            ever happened). If you were relying on that behavior for
-            14+ months between v0.3.0 and v0.6.2, your customer data
-            was likely retained longer than you intended. v0.6.2 closes
-            this gap.
+        Before 0.9.3 a non-2xx answer was not checked at all: no exception, no log line.
         """
-        try:
-            self._client.delete(f"/v1/cache/user/{user_id}")
-        except Exception as e:
-            # GDPR-relevant: surface failures via log.warning instead of
-            # swallowing them silently. The contract is still non-crashing
-            # (return None unconditionally), but customers and operators
-            # can now see something went wrong in standard logs.
-            log.warning(
-                "sulci.cloud.delete_user failed for user_id=%s: %s",
-                user_id, e,
-            )
+        return self._erase("delete_user", lambda: _user_path(user_id))
 
-    def clear(self) -> None:
-        """Clear all cache entries for this tenant.
+    def clear(self) -> dict:
+        """Clear all cache entries — and conversation history — for this tenant.
 
-        Sends `DELETE /v1/cache/clear`. Tenant-scoped — wipes only the
-        authenticated tenant's data; other tenants on shared infrastructure
-        are unaffected (see sulci-platform #103 gateway-side filter).
+        Sends ``DELETE /v1/cache/clear``. Returns the gateway's answer (``{"status": "ok",
+        "deleted": N, "tenant_id": ..., ...}``) only when it confirms the erasure; otherwise raises
+        :class:`SulciErasureError`, as :meth:`delete_user` does. ``Cache.clear()`` lets it propagate.
 
-        Returns None unconditionally. Like `delete_user`, this method
-        never raises, but failures now produce a `log.warning(...)`
-        instead of being silently swallowed.
-
-        Pre-v0.6.2 sent `DELETE /v1/cache` (route never existed; silent
-        404). v0.6.2 closes this gap — the gateway-side route exists
-        as of sulci-platform #103.
+        Before 0.9.3 a non-2xx answer (e.g. ``503 erasure_incomplete``) was not checked.
         """
+        return self._erase("clear", lambda: "/v1/cache/clear")
+
+    def _erase(self, operation, make_path) -> dict:
+        """One DELETE. Returns the gateway's answer when it confirms the erasure — a 2xx answer whose
+        JSON body says {"status": "ok"} — and raises SulciErasureError otherwise. Anything else (an
+        HTML page from a misconfigured gateway URL, an empty 204) is not proof that anything was
+        erased. An id that cannot be encoded (a lone surrogate, a failing __str__) raises the same
+        error, with the cause chained, before anything is sent."""
         try:
-            self._client.delete("/v1/cache/clear")
+            path = make_path()
         except Exception as e:
-            log.warning("sulci.cloud.clear failed: %s", e)
+            raise SulciErasureError(operation, None, f"unencodable user_id ({type(e).__name__})") from e
+        try:
+            resp = self._client.delete(path)
+        except Exception as e:
+            # The type only: a transport's text can carry the request URL, and so the user id; the text stays
+            # on __cause__ for whoever handles the exception.
+            raise SulciErasureError(operation, None, type(e).__name__) from e
+        try:
+            body = resp.json()
+        except Exception:
+            body = None
+        status = resp.status_code
+        if isinstance(status, int) and 200 <= status < 300:
+            if isinstance(body, dict) and body.get("status") == "ok":
+                return body
+            raise SulciErasureError(operation, status, "unexpected_response", body)
+        error = (body.get("error") if isinstance(body, dict) else None) or "error"
+        raise SulciErasureError(operation, status, str(error), body)
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

@@ -127,28 +127,19 @@ def test_unrelated_query_does_not_hit(server):
     assert out["cache_hit"] is False
 
 
-def test_tenant_id_is_accepted(server):
-    # NOTE the assertion. On sqlite, tenant_id is accepted and IGNORED —
-    # only qdrant sets ENFORCES_TENANT_ISOLATION = True. This test asserts
-    # the behaviour the code actually has. If a future sqlite backend starts
-    # enforcing, this test SHOULD fail and be rewritten; that is the point.
+def test_tenant_id_scopes_the_lookup(server):
+    # 0.9.3: every backend enforces tenant_id (before, SQLite accepted and ignored it, as this test recorded).
     _call(server, "cache_store", query=QUERY, response=RESP, tenant_id="repo-a")
     assert _call(server, "cache_lookup", query=QUERY, tenant_id="repo-a")["cache_hit"] is True
-    assert _call(server, "cache_lookup", query=QUERY, tenant_id="repo-b")["cache_hit"] is True
+    assert _call(server, "cache_lookup", query=QUERY, tenant_id="repo-b")["cache_hit"] is False
 
 
-def test_unenforced_scope_warns_loudly(cache):
-    from sulci.integrations._scope import ScopeNotEnforcedWarning
-
-    with pytest.warns(ScopeNotEnforcedWarning, match="ACCEPTED AND IGNORED"):
-        build_server(cache, default_tenant_id="owner/repo")
-
-
-def test_no_warning_when_no_scope_is_requested(cache, recwarn):
-    from sulci.integrations._scope import ScopeNotEnforcedWarning
-
-    build_server(cache)
-    assert not [w for w in recwarn if w.category is ScopeNotEnforcedWarning]
+def test_the_default_tenant_scopes_every_call(cache):
+    a = build_server(cache, default_tenant_id="owner/repo-a")
+    b = build_server(cache, default_tenant_id="owner/repo-b")
+    _call(a, "cache_store", query=QUERY, response=RESP)
+    assert _call(a, "cache_lookup", query=QUERY)["cache_hit"] is True
+    assert _call(b, "cache_lookup", query=QUERY)["cache_hit"] is False
 
 
 def test_stats_round_trips(server):
@@ -211,3 +202,21 @@ def test_cli_defaults_to_sqlite_not_chroma():
 def test_cli_accepts_the_documented_transports():
     for t in ("stdio", "sse", "streamable-http"):
         assert mcp_server._build_arg_parser().parse_args(["--transport", t]).transport == t
+
+
+# ── 0.9.3: a reserved default tenant is refused when the server is built ───────
+@pytest.mark.parametrize("value", ["global", ""])
+def test_a_reserved_default_tenant_is_refused_at_build(cache, value):
+    with pytest.raises(ValueError, match="tenant_id=.* is reserved"):
+        build_server(cache, default_tenant_id=value)
+
+
+def test_a_reserved_default_tenant_from_the_environment_is_refused_at_build(cache, monkeypatch):
+    monkeypatch.setenv("SULCI_MCP_TENANT_ID", "global")
+    with pytest.raises(ValueError, match="tenant_id=.* is reserved"):
+        build_server(cache)
+
+
+def test_an_empty_tenant_environment_variable_means_no_tenant(cache, monkeypatch):
+    monkeypatch.setenv("SULCI_MCP_TENANT_ID", "")
+    build_server(cache)

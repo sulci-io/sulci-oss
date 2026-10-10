@@ -4,10 +4,14 @@
 sulci/sessions/memory.py — InMemorySessionStore (v0.5.0)
 
 Extracted from sulci/context.py to match the SessionStore protocol.
-Behavior is identical to the v0.3.x context.SessionStore class.
-sulci.context.SessionStore still importable via backward-compat shim.
+
+0.9.3: the store no longer takes a ``tenant_id``. ``Cache`` scopes every session id by
+tenant and user (``sulci.sessions.scope``), and ``clear_scope`` / ``clear_all`` remove a
+tenant's, a user's or every session. Every operation holds one lock: ``AsyncCache`` and
+threaded servers call a store from several threads, and ``clear_scope`` walks the dict.
 """
 from __future__ import annotations
+import threading
 from collections import defaultdict
 from typing import Optional, List, Sequence
 
@@ -27,29 +31,19 @@ class InMemorySessionStore(SessionStore):
       - Long-running processes that may leak memory (use max_total_sessions)
     """
 
-    def __init__(
-        self,
-        max_total_sessions: Optional[int] = None,
-        tenant_id: Optional[str] = None,
-    ):
+    def __init__(self, max_total_sessions: Optional[int] = None):
         """
         Args:
             max_total_sessions: If set, evicts the oldest session when
                                 exceeded (LRU-ish). Default None = unbounded.
-            tenant_id:          Bind this store to a tenant. When set, all
-                                session_ids are namespaced internally so two
-                                tenants using the same session_id never collide.
-                                Default None = single-tenant (no scoping).
         """
         self._data: dict[str, List[Sequence[float]]] = defaultdict(list)
         self._max_total_sessions = max_total_sessions
-        self._tenant_id = tenant_id
-
-    def _scoped(self, session_id: str) -> str:
-        return f"{self._tenant_id}::{session_id}" if self._tenant_id else session_id
+        self._lock = threading.Lock()
 
     def get(self, session_id: str) -> List[Sequence[float]]:
-        return list(self._data.get(self._scoped(session_id), []))
+        with self._lock:
+            return list(self._data.get(session_id, []))
 
     def append(
         self,
@@ -57,36 +51,51 @@ class InMemorySessionStore(SessionStore):
         vector: Sequence[float],
         max_turns: int = 8,
     ) -> None:
-        history = self._data[self._scoped(session_id)]
-        history.append(list(vector))
-        if len(history) > max_turns:
-            # Trim from the front — keep most recent max_turns entries
-            del history[:-max_turns]
+        with self._lock:
+            history = self._data[session_id]
+            history.append(list(vector))
+            if len(history) > max_turns:
+                # Trim from the front — keep most recent max_turns entries
+                del history[:-max_turns]
 
-        if (self._max_total_sessions
-                and len(self._data) > self._max_total_sessions):
-            # Evict the first-inserted session (Python 3.7+ dicts preserve order)
-            oldest_id = next(iter(self._data))
-            del self._data[oldest_id]
+            if (self._max_total_sessions
+                    and len(self._data) > self._max_total_sessions):
+                # Evict the first-inserted session (Python 3.7+ dicts preserve order)
+                oldest_id = next(iter(self._data))
+                del self._data[oldest_id]
 
     def clear(self, session_id: str) -> None:
-        self._data.pop(self._scoped(session_id), None)
+        with self._lock:
+            self._data.pop(session_id, None)
+
+    def clear_scope(self, scope: str) -> int:
+        with self._lock:
+            doomed = [sid for sid in self._data if sid.startswith(scope)]
+            for sid in doomed:
+                del self._data[sid]
+            return len(doomed)
+
+    def clear_all(self) -> int:
+        with self._lock:
+            n = len(self._data)
+            self._data.clear()
+            return n
 
     def summary(self, session_id: Optional[str] = None) -> dict:
-        if session_id is not None:
-            scoped = self._scoped(session_id)
-            turns = len(self._data.get(scoped, []))
-            return {
-                "sessions": 1 if scoped in self._data else 0,
-                "total_turns": turns,
-                "avg_turns": float(turns),
-            }
+        with self._lock:
+            if session_id is not None:
+                turns = len(self._data.get(session_id, []))
+                return {
+                    "sessions": 1 if session_id in self._data else 0,
+                    "total_turns": turns,
+                    "avg_turns": float(turns),
+                }
 
-        total_sessions = len(self._data)
-        total_turns = sum(len(h) for h in self._data.values())
-        avg_turns = total_turns / total_sessions if total_sessions else 0.0
-        return {
-            "sessions": total_sessions,
-            "total_turns": total_turns,
-            "avg_turns": avg_turns,
-        }
+            total_sessions = len(self._data)
+            total_turns = sum(len(h) for h in self._data.values())
+            avg_turns = total_turns / total_sessions if total_sessions else 0.0
+            return {
+                "sessions": total_sessions,
+                "total_turns": total_turns,
+                "avg_turns": avg_turns,
+            }

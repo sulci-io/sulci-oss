@@ -85,9 +85,10 @@ class InMemoryBackend:
             "metadata":  metadata or {},
         }
 
-        # Upsert by key — replace existing entry with same key, otherwise append.
+        # Upsert by (key, tenant_id, user_id) — docs/protocols.md. Matching on the key alone (as this
+        # example did before 0.9.3) lets another tenant or user storing the same question replace this entry.
         for i, existing in enumerate(self._entries):
-            if existing["key"] == key:
+            if (existing["key"], existing["tenant_id"], existing["user_id"]) == (key, entry["tenant_id"], entry["user_id"]):
                 self._entries[i] = entry
                 return
         self._entries.append(entry)

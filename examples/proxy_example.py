@@ -54,9 +54,7 @@ def ask(client: httpx.Client, session: str) -> tuple:
         headers={
             "authorization": f"Bearer {KEY}",
             "content-type": "application/json",
-            # Scope the lookup. NOTE: on the sqlite backend tenant_id is
-            # accepted and IGNORED — only qdrant enforces isolation. See
-            # sulci/integrations/_scope.py.
+            # Scope the lookup: every backend enforces it (0.9.3).
             "x-sulci-tenant-id": "examples/proxy_example",
             "x-sulci-session-id": session,
         },

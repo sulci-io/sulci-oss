@@ -172,7 +172,8 @@ def _try_construct_backend(cls: Type) -> Optional[Any]:
         except ImportError:
             return None
         try:
-            return cls(db_path=tempfile.mkdtemp(prefix="sulci_compat_"))
+            # milvus-lite takes a FILE path; a directory made every Milvus conformance test skip (0.9.3).
+            return cls(db_path=os.path.join(tempfile.mkdtemp(prefix="sulci_compat_"), "milvus.db"))
         except Exception:
             return None
 

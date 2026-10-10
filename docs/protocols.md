@@ -73,6 +73,11 @@ The kwargs after `*` are **keyword-only**. Calling code must use
 `store(..., tenant_id=...)`, never positional. This is enforced at
 the protocol level so callers can't accidentally swap arguments.
 
+📌 0.9.3: `metadata` must be a mapping whose keys are not the entry's own field names
+(`sulci._metadata.RESERVED_METADATA_KEYS`). `Cache.set` refuses both before calling `store`; a backend that keeps
+`metadata` also calls `sulci._metadata.checked_metadata(metadata)` before it writes anything and lets the
+`ValueError` / `TypeError` propagate, so a direct `store` cannot hold what `Cache.set` refuses.
+
 **Behavioral requirements:**
 
 - MUST upsert by `(key, tenant_id, user_id)` — calling `store` twice
@@ -178,6 +183,10 @@ The shipped backends declare:
 | SulciCloudBackend | `False` (enforced server-side; OSS conformance can't reach the gateway) |
 
 Custom backends must declare this attribute. Conformance fails if it's missing.
+
+✅ 0.9.3: every local backend declares `True` and filters `search()` on `tenant_id` AND `user_id` (`None`
+meaning the shared scope `"global"`); the table above describes 0.9.2. Only `SulciCloudBackend` still reads
+`False`, for the reason given. A custom backend is expected to isolate the same way and declare `True`.
 
 ---
 

@@ -1,5 +1,8 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-10 against `sulci` **0.9.3** — `check_api_surface.py --show`; the 0.9.3 additions are the
+📌 rows and notes below (context methods' `tenant_id` / `user_id`). The 0.9.2 measurement follows.
+
 **Measured:** 2026-10-01 against `sulci` **0.9.2**
 
 📌 **Re-verified, not re-measured.** The surface was measured 2026-07-24 at
@@ -127,6 +130,9 @@ There are eight. Not nine.
 | `get_context(session_id)` | — | `ContextWindow` |
 | `clear_context(session_id)` | — | `None` |
 | `context_summary(session_id=None)` | — | `dict` |
+| `get_context(session_id, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `ContextWindow` |
+| `clear_context(session_id, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `None` |
+| `context_summary(session_id=None, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `dict` |
 | `stats()` | — | `dict` |
 | `clear()` | — | `None` |
 
@@ -134,10 +140,28 @@ Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
 (v0.4.0).
 
+📌 0.9.3: every backend enforces it — and `user_id` when `personalized=True` — on every lookup; `None` is the
+shared scope and nothing else (before, only Qdrant and the managed backend filtered on `tenant_id`).
+
+📌 0.9.3: the same holds for conversation history: a `session_id` is scoped by `tenant_id` and, when
+`personalized=True`, `user_id`. `get_context`, `clear_context` and `context_summary` gained keyword-only
+`tenant_id` and `user_id` (the table above shows them without), and `clear()` removes every session from any
+session store. `context_summary()` with a `tenant_id` or `user_id` but no `session_id` raises `TypeError`.
+
+📌 0.9.3: `get` and `set` raise `ValueError` for a `tenant_id`, or a `user_id` when `personalized=True`,
+that is `"global"` or falsy but not `None` (`""`, `0`, ...) — all of them named the shared scope. Pass
+`None` for no tenant or user.
+
 ### `metadata` is on `set` only
 
 `metadata` exists on `set` and `aset`. **It is not on `cached_call`** and never
 has been, despite having been documented there. It is also not on `get`.
+
+📌 0.9.3: `metadata` may not use the names of the entry's own fields — `key`, `query`, `response`,
+`tenant_id`, `user_id`, `expires`, `created` (`sulci._metadata.RESERVED_METADATA_KEYS`). They are dropped,
+with one WARNING naming them, and the entry keeps its own values; every other key is stored as before.
+📌 Superseded before release: such a `metadata` raises `ValueError` naming the keys (the gateway answers
+`422`), and one that is not a mapping raises `TypeError` — on every backend, before anything is stored.
 
 ### `delete_user` is not a `Cache` method
 
@@ -150,6 +174,13 @@ cache._backend.delete_user(user_id)  # works — cloud backend only, private att
 ```
 
 - `delete_user` is defined in exactly one place: `sulci/backends/cloud.py:233`.
+  📌 0.9.3: `delete_user(user_id, *, raise_on_error=False)` and `clear(*, raise_on_error=False)` (the line
+  number above has moved). The id is percent-encoded, `/` and `.` included. Both return the gateway's answer
+  on success; on failure they log a WARNING and return `None`, or raise `SulciErasureError` with
+  `raise_on_error=True`.
+  📌 Superseded before release: `delete_user(user_id) -> dict` and `clear() -> dict`, no flag. Any
+  erasure the gateway does not confirm raises `SulciErasureError` (nothing is logged), and so does
+  `Cache.clear()` on the managed backend, before it resets stats or sessions.
 - `class Cache:` (`core.py:140`) has no base class and inherits nothing.
 - There is no `__getattr__` or delegation anywhere in `core.py`.
 - It is not re-exported from `sulci/__init__.py`.
@@ -197,6 +228,12 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `get` (sync passthrough) | `threshold`, `tenant_id`, `plan` |
 | `set` (sync passthrough) | `tenant_id`, `plan`, `metadata` |
 | `cached_call` (sync passthrough) | `threshold`, `tenant_id`, `plan` |
+| `aget_context` — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `aclear_context` — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `acontext_summary` — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `get_context` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `clear_context` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `context_summary` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,
@@ -426,6 +463,9 @@ dependency since v0.6.3, so the `sulci[cloud]` extra is a back-compat no-op.
 Only `qdrant` and `sulci` enforce tenant isolation. The other five accept
 `tenant_id` and use it as a label — which is a real difference and should not be
 flattened into "all backends support multi-tenancy" in any marketing surface.
+
+✅ 0.9.3: superseded — every backend enforces tenant (and, when `personalized=True`, user) isolation on
+lookup; the "label only" column above describes 0.9.2.
 
 ---
 

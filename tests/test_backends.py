@@ -168,9 +168,8 @@ class TestSQLiteScopeKey:
     def test_same_key_two_tenants_is_two_rows(self, tmp_path):
         """
         Backend level, same user: a second tenant's write must not
-        replace the first tenant's row. (search() does not filter on
-        tenant_id — ENFORCES_TENANT_ISOLATION is False — so this is
-        asserted on the stored rows, not on a lookup.)
+        replace the first tenant's row, asserted on the stored rows. (Lookups
+        are scoped by tenant and user since 0.9.3: tests/test_backend_isolation.py.)
         """
         from sulci.backends.sqlite import SQLiteBackend
         b = SQLiteBackend(db_path=str(tmp_path / "rows"))
@@ -192,7 +191,7 @@ class TestSQLiteScopeKey:
 
         rows = b._conn.execute("SELECT response FROM cache").fetchall()
         assert [r[0] for r in rows] == ["new"]
-        assert b.search([1.0, 0.0], 0.85, user_id="u")[0] == "new"
+        assert b.search([1.0, 0.0], 0.85, tenant_id="t", user_id="u")[0] == "new"   # 0.9.3: scope = tenant AND user
 
 
 class TestSQLiteSchemaMigration:

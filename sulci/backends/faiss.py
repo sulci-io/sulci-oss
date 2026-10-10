@@ -7,17 +7,20 @@ FAISS backend — fastest local option, MIT license, zero infra.
 
 Install  : pip install "sulci[faiss]"
 Free tier: fully self-hosted, no limits
-Latency  : <2 ms at 100k entries (HNSW index)
+Latency  : a lookup searches the caller's own (tenant, user) entries exactly (0.9.3); the HNSW index holds
+           the vectors. An approximate search over every scope let other scopes crowd a caller's entry out.
 """
 from __future__ import annotations
 import os, pickle, time
 from typing import Optional
 
+from sulci._metadata import checked_metadata
+
 
 class FAISSBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
-    ENFORCES_TENANT_ISOLATION: bool = False
+    ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
     def __init__(self, db_path: str = "./sulci_faiss"):
         try:
@@ -33,6 +36,7 @@ class FAISSBackend:
         self._path  = db_path
         self._index = None
         self._meta: list[dict] = []
+        self._scopes: dict = {}     # 0.9.3: (tenant_id, user_id) -> positions of that scope's entries
         os.makedirs(db_path, exist_ok=True)
         self._load()
 
@@ -43,8 +47,16 @@ class FAISSBackend:
         if os.path.exists(self._meta_path()):
             with open(self._meta_path(), "rb") as f:
                 self._meta = pickle.load(f)
+            self._index_scopes()
         if os.path.exists(self._idx_path()):
             self._index = self._faiss.read_index(self._idx_path())
+
+    def _index_scopes(self):
+        """Rebuild the scope map from the stored entries; one without a stored scope belongs to none."""
+        self._scopes = {}
+        for i, m in enumerate(self._meta):
+            if "tenant_id" in m and "user_id" in m:
+                self._scopes.setdefault((m["tenant_id"], m["user_id"]), []).append(i)
 
     def _save(self):
         self._faiss.write_index(self._index, self._idx_path())
@@ -64,15 +76,19 @@ class FAISSBackend:
         user_id: Optional[str] = None, expires: Optional[float] = None,
         metadata: Optional[dict] = None,
     ) -> None:
+        metadata = checked_metadata(metadata)     # 0.9.3: before anything — _ensure creates the index
         self._ensure(len(embedding))
         vec = self._np.array([embedding], dtype="float32")
         self._index.add(vec)
         self._meta.append({
+            # 0.9.3: metadata is refused if it uses a reserved name, and goes first; the entry's fields win.
+            **checked_metadata(metadata),
             "key": key, "query": query, "response": response,
+            "tenant_id": tenant_id or "global",
             "user_id": user_id or "global",
             "expires": expires or 0.0,
-            **(metadata or {}),
         })
+        self._scopes.setdefault((tenant_id or "global", user_id or "global"), []).append(len(self._meta) - 1)
         self._save()
 
     def search(
@@ -85,16 +101,24 @@ class FAISSBackend:
         if self._index is None or self._index.ntotal == 0:
             return None, 0.0
         now = now or time.time()
-        vec = self._np.array([embedding], dtype="float32")
-        k   = min(5, self._index.ntotal)
-        D, I= self._index.search(vec, k)
+        # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global" —
+        # and searches that scope's vectors EXACTLY (the index's squared-L2 metric), so no number of entries in
+        # other scopes can crowd this one out. An entry without a stored scope matches no scope.
+        scope = (tenant_id or "global", user_id or "global")
+        ids   = self._scopes.get(scope)
+        if not ids:
+            return None, 0.0
+        vecs  = self._index.reconstruct_batch(self._np.array(ids, dtype="int64"))
+        dists = ((vecs - self._np.array(embedding, dtype="float32")) ** 2).sum(axis=1)
+        order = self._np.argsort(dists)[:5]
+        D, I  = [dists[order]], [[ids[j] for j in order]]
         for dist, idx in zip(D[0], I[0]):
             if idx < 0 or idx >= len(self._meta):
                 continue
             meta = self._meta[idx]
             if meta.get("expires") and now > meta["expires"]:
                 continue
-            if user_id and meta.get("user_id") != user_id:
+            if (meta.get("tenant_id"), meta.get("user_id")) != scope:
                 continue
             sim = float(1.0 - dist)
             if sim >= threshold:
@@ -104,6 +128,7 @@ class FAISSBackend:
     def clear(self) -> None:
         self._index = None
         self._meta  = []
+        self._scopes = {}
         for p in [self._idx_path(), self._meta_path()]:
             if os.path.exists(p):
                 os.remove(p)

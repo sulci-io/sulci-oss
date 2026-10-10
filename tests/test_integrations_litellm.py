@@ -150,18 +150,18 @@ def test_async_pipeline_writes_every_entry(cache):
 
 
 # ── scoping ──────────────────────────────────────────────────────────────
-def test_namespace_by_model_warns_on_a_backend_that_ignores_it(cache):
-    from sulci.integrations._scope import ScopeNotEnforcedWarning
+def test_namespace_by_model_keeps_models_apart(cache):
+    # 0.9.3: every backend enforces the namespace (before, SQLite accepted and ignored it).
+    a = SulciLiteLLMCache(cache, namespace_by_model=True)
+    a.set_cache("k1", VALUE, messages=MESSAGES, model="model-a")
+    assert a.get_cache("k1", messages=MESSAGES, model="model-a") == VALUE
+    assert a.get_cache("k1", messages=MESSAGES, model="model-b") is None
 
-    with pytest.warns(ScopeNotEnforcedWarning):
-        SulciLiteLLMCache(cache, namespace_by_model=True)
 
-
-def test_namespace_off_does_not_warn(cache, recwarn):
-    from sulci.integrations._scope import ScopeNotEnforcedWarning
-
-    SulciLiteLLMCache(cache, namespace_by_model=False)
-    assert not [w for w in recwarn if w.category is ScopeNotEnforcedWarning]
+def test_namespace_off_shares_across_models(cache):
+    a = SulciLiteLLMCache(cache, namespace_by_model=False)
+    a.set_cache("k1", VALUE, messages=MESSAGES, model="model-a")
+    assert a.get_cache("k1", messages=MESSAGES, model="model-b") == VALUE
 
 
 def test_session_key_is_read_from_metadata(adapter):

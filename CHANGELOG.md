@@ -8,6 +8,171 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.3] — Security: cache scope, erasure and conversation history
+
+Six security fixes and the behaviour changes that come with them — read **Security** and the **Breaking** entries under **Changed** before upgrading. The managed backend's `delete_user` / `clear` now raise on an unconfirmed erasure; every self-hosted backend now enforces `tenant_id` and `user_id`; `metadata` may not use the entry's own field names; sessions belong to one tenant and user.
+
+### Security
+
+#### Sulci Cloud: `delete_user` could erase the wrong user, or the tenant's whole cache
+
+**Who is affected:** applications on the managed backend (`backend="sulci"`) that call
+`SulciCloudBackend.delete_user(user_id)` with an id that can contain `/`, `.`, `?`, `#` or `%` — for example
+an id chosen by end users. The id was placed into the request path without encoding: `"../clear"` was sent
+as `DELETE /v1/cache/clear` and erased every entry of the tenant; `"a?b"` and `"a#b"` erased the user `"a"`;
+`"x/../bob"` erased the user `"bob"`; any other id containing `/` erased nothing. The method returned
+normally in every case.
+
+**What to do:** upgrade to 0.9.3. Until you can, pass only ids made of letters, digits, `-` and `_`. Ids
+containing `/` are erasable from 0.9.3 together with the managed gateway release that precedes it; against an
+older gateway they answer `404`, which 0.9.3 now reports (below) instead of ignoring.
+
+#### Qdrant, Chroma, FAISS: `metadata` could replace an entry's user, tenant, expiry or answer
+
+**Who is affected:** self-hosted applications on the Qdrant, Chroma or FAISS backend that pass `metadata` to
+`Cache.set` / `AsyncCache.aset` (or to a backend's `store`) built from input they do not fully control. Those
+backends wrote `metadata` into the entry *after* the entry's own fields, so a key with the same name replaced
+the field: `{"user_id": "bob"}` filed the entry under another user, `{"user_id": "global"}` moved it to the
+shared scope, `{"tenant_id": "t2"}` planted it in another tenant (Qdrant), `{"expires": 0}` made it never
+expire, `{"response": ...}` replaced the answer served (Qdrant, FAISS), and `query`, `key` and `created` could
+be rewritten. SQLite (which stores `metadata` in its own column), Redis and Milvus (which do not store it) and
+the managed backend (`backend="sulci"`, which does not send `metadata` to the gateway) were not affected.
+
+**What changed:** `key`, `query`, `response`, `tenant_id`, `user_id`, `expires` and `created` are reserved.
+They are dropped from `metadata` — by `Cache.set` and again by each backend's `store` — and one WARNING on the
+`sulci` logger names the keys that were dropped, never their values. The entry keeps its own values; every
+other `metadata` key is stored exactly as before. ⚠️ This applies on **every** backend, SQLite included: a
+SQLite application that stored one of those seven names in `metadata` for its own use no longer stores it
+(the WARNING says which).
+📌 Superseded before release: such a `metadata` is **refused** — `ValueError` naming the keys (never their
+values), from `Cache.set` / `AsyncCache.aset` on every backend including the managed one, before anything is
+embedded, stored or sent, and from the `store` of Qdrant, Chroma, FAISS and SQLite — as the managed gateway
+answers `422`. Nothing is dropped and nothing is logged. See *Changed*.
+
+**What to do:** upgrade to 0.9.3. Until you can, do not pass any of those seven names in `metadata`. Entries
+stored before upgrading keep what was written — an entry planted with `{"expires": 0}` never expires, and
+FAISS keeps its records on disk — so if a Qdrant, Chroma or FAISS cache may have been written with untrusted
+`metadata`, call `clear()` on it after upgrading.
+
+#### Chroma, Redis: storing a question could erase another tenant's or user's entry for it
+
+**Who is affected:** self-hosted applications on the Chroma or Redis backend that keep more than one tenant
+(`tenant_id`) or user (`personalized=True` with `user_id`) in one store. An entry's key is derived from the
+query text alone, and these two backends stored it under that key, so when a second tenant or user stored the
+same question, its entry **replaced** the first: the first tenant's or user's next lookup missed. Anyone able
+to store a question could erase other tenants' and users' entries for it. Qdrant, FAISS and Milvus never store
+by key, and SQLite was fixed in 0.9.2; they were not affected, nor was the managed backend.
+
+**What changed:** Chroma and Redis store each entry under an id scoped to its tenant and user
+(`sulci.backends._scope.scoped_id`). Other tenants and users keep their entries; the same tenant and user
+storing a question again still replaces its own.
+
+**What to do:** upgrade to 0.9.3, then call `clear()` on every Chroma or Redis store written before the
+upgrade. Entries stored before upgrading keep their old ids, so storing a question again after upgrading does
+**not** replace the old entry: Chroma keeps serving the old answer, and Redis serves either one, until the old
+entry expires — never, if the cache was built with `ttl_seconds=None`. The example backend in
+`examples/extending_sulci/custom_backend.py` had the same flaw and now upserts by key, tenant and user, as
+`docs/protocols.md` requires of every backend.
+
+#### Every backend: `user_id` or `tenant_id` `"global"` or `""` addressed the shared scope
+
+**Who is affected:** self-hosted applications that pass a `user_id` (with `personalized=True`) or a `tenant_id`
+taken from input they do not fully control. Every backend files entries stored without a tenant or user under
+the sentinel `"global"` — the shared scope — so a caller passing `"global"` read and wrote the shared scope as
+if it were its own, and `""` was stored there too. On Qdrant a lookup with `""` could not even read back what
+it had stored.
+
+**What changed — and it can break a caller:** `Cache.get` and `Cache.set` (and so `cached_call`, `AsyncCache`
+and the integrations built on them) raise `ValueError` for a `tenant_id`, or a `user_id` when
+`personalized=True` (otherwise `Cache` ignores `user_id`, as before), that is `"global"` or any falsy value
+other than `None` — `""`, `0`, `False`, `b""`, which every backend also filed under `"global"`. Nothing is read,
+written or sent first. This applies on every backend, the managed one (`backend="sulci"`) included, where a
+`tenant_id` is not sent at all and used to be ignored. Omit the argument (`None`) to mean "no tenant" or
+"no user". The proxy, MCP server and LiteLLM adapter treat a cache error as a miss, so there such a request is
+answered without the cache; the proxy now treats an empty `x-sulci-tenant-id` header as no tenant, and the MCP
+server refuses a reserved default tenant (`--tenant-id`, `SULCI_MCP_TENANT_ID`) when it is built.
+
+**What to do:** upgrade to 0.9.3, and map empty or zero ids to `None` before calling `Cache`.
+
+#### Chroma, FAISS, SQLite, Redis, Milvus: a lookup read other tenants' and users' entries
+
+**Who is affected:** self-hosted applications on any backend but Qdrant that keep more than one tenant
+(`tenant_id`) or user (`personalized=True`) in one store. Those backends accepted `tenant_id` and ignored it,
+and a lookup without `user_id` read every user's entries, so one tenant or user could be served another's
+cached answer. Measured through `Cache`: 14 of 32 cross-scope lookups returned another scope's answer on each of
+the five. Qdrant and the managed backend were not affected.
+
+**What changed:** every backend reads only the caller's own scope — the `tenant_id` and the `user_id` given,
+`None` meaning the shared scope and nothing else — and the scope is part of the search, so other scopes' copies
+of a question cannot crowd out the caller's own (FAISS searches the caller's own entries exactly). A tenant or
+user id that is not valid Unicode text (a lone surrogate) raises `ValueError`, on every backend alike. Redis,
+FAISS and Milvus now store `tenant_id`; an entry stored
+before 0.9.3 has no scope and matches none, so `clear()` such stores after upgrading. `ENFORCES_TENANT_ISOLATION`
+is `True` on every local backend, and the `ScopeNotEnforcedWarning` the proxy, MCP server and LiteLLM adapter
+raised on backends that ignored the scope is gone.
+
+#### Every session store: conversation history was shared across tenants and users, and `clear()` left it
+
+**Who is affected:** self-hosted applications that pass `session_id` (context-aware caching) and serve more than one
+tenant (`tenant_id`) or user (`personalized=True`) from one `Cache`, or from one shared session store (a
+`RedisSessionStore` behind several replicas). The Cache handed the store the caller's `session_id` unchanged, so a
+lookup by one tenant or user with another's session id blended the other's earlier turns into its query — measured
+on the built-in, in-memory and Redis stores alike — and with the built-in store (the default) `get_context` and
+`context_summary` handed the other tenant or user the text of the earlier questions and answers; the injected stores
+hold the embedding vectors of the user's turns, derived from that text. With an injected store, `Cache.clear()`
+removed no session at all. The
+managed backend was not affected (the gateway scopes sessions itself).
+
+**What changed:** the Cache scopes every session id by tenant and, when personalized, by user before any store sees
+it (`sulci.sessions.scoped_session_id`), so a session belongs to one scope and nothing else. `get_context`,
+`clear_context` and `context_summary` (and `AsyncCache`'s) take `tenant_id` and `user_id` to name it. The
+`SessionStore` protocol gains `clear_scope(scope)` and `clear_all()`; `RedisSessionStore` indexes every session by
+tenant and user and removes them from the index, never by scanning the keyspace; `Cache.clear()` removes every
+session from any store, and a store without those two methods is refused when the Cache is built. Both shipped
+stores lose their `tenant_id` argument. `context_summary()` with a `tenant_id` or `user_id` but no `session_id`
+raises `TypeError` (it summarizes every session). `RedisSessionStore`'s default prefix becomes `sulci:sessions:`, with
+sessions under `{prefix}s:…` and expiry-ordered indexes under `{prefix}i:…`: sessions written before 0.9.3 are
+never read again. Delete them once (`sulci:session:*`); if you set your own `key_prefix`, choose a new one or delete
+its keys BEFORE upgrading — an old session at `{prefix}i:` would block every write. `RedisSessionStore` now needs
+Redis 6.2 or later, and not Redis Cluster (one write spans four keys).
+
+**What to do:** upgrade to 0.9.3. Until you can, make the session ids you pass unique per tenant and user (for
+example, prefix them with both), and clear an injected store yourself when you call `clear()`.
+
+### Fixed
+
+- `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503
+  erasure_incomplete` from the gateway produced no exception and no log line. Now both log a WARNING with the
+  status and the gateway's error code and return `None`; with `raise_on_error=True` they raise the new
+  `SulciErasureError` (from `sulci.backends.cloud`). They still never raise by default, including for an id
+  that cannot be encoded; raising becomes the default in 0.10.0.
+  📌 Superseded before release: they never return `None`. An erasure the gateway does not confirm — a
+  transport error, any non-2xx answer, a 2xx answer that is not `{"status": "ok", ...}`, an id that cannot
+  be encoded — raises `SulciErasureError`, and `raise_on_error` does not exist. See *Changed*.
+
+### Changed
+
+- On success `SulciCloudBackend.delete_user` and `clear` return the gateway's answer
+  (`{"status": "ok", "deleted": N, ...}`) instead of `None`; `None` now means the erasure was not confirmed.
+  Only a 2xx answer whose JSON says `"status": "ok"` counts as success.
+  📌 Superseded before release: they never return `None`; an unconfirmed erasure raises (next entry).
+- **Breaking:** `SulciCloudBackend.delete_user` and `clear` raise `SulciErasureError` (from
+  `sulci.backends.cloud`) whenever the gateway does not confirm the erasure, and log nothing — the exception
+  is the report; its message names the operation, the HTTP status and the error code (with no response,
+  the transport error's type), never the user id.
+  They return the gateway's answer otherwise, never `None`. So `Cache.clear()` and `AsyncCache.aclear()` on
+  the managed backend raise too, before resetting stats or sessions. From 0.6.2 to 0.9.2 a failed erasure
+  logged a WARNING (or, for a non-2xx answer, nothing) and returned normally, and `Cache.clear()` reset its
+  stats as if the erasure had happened. Code that must not stop on a failed erasure catches
+  `SulciErasureError`. `sulci.integrations.langchain.SulciCache.clear()` (and `aclear()`) no longer log and
+  ignore a failure either: it propagates, and a namespace partition that failed to clear is kept.
+- **Breaking:** a `metadata` key named `key`, `query`, `response`, `tenant_id`, `user_id`, `expires` or
+  `created` raises `ValueError` (it was dropped with a WARNING), and a `metadata` that is not a mapping raises
+  `TypeError` (SQLite, Redis, Milvus and the managed backend stored or ignored a list; the others failed with
+  an unrelated `TypeError`). Both are checked by `Cache.set` before anything is embedded, stored or sent, and
+  by the `store` of every backend that keeps `metadata`. `sulci._metadata.without_reserved` is replaced by
+  `checked_metadata`, which returns a new dict or raises.
+
 ## [0.9.2] — SQLite and Milvus: enforce cache scope
 
 ### Security

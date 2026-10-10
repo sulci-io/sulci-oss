@@ -10,8 +10,7 @@ Coverage
 - search() returns (response, similarity) on success
 - upsert() is silent on failure — never raises
 - upsert() sends correct payload on success
-- delete_user() is silent on failure — never raises
-- clear() is silent on failure — never raises
+- delete_user() / clear() raise SulciErasureError on failure (0.9.3; they never raised before)
 - repr() shows key prefix and url
 - Cache(backend='sulci', api_key=...) constructs SulciCloudBackend
 - Cache(backend='sulci') resolves key from SULCI_API_KEY env var
@@ -415,10 +414,10 @@ class TestDeleteAndClear:
 
       1. Canonical URLs — both methods now hit /v1/cache/user/{id} and
          /v1/cache/clear, the routes added by sulci-platform #103.
-      2. Failure visibility — log.warning fires on errors (was: silent
-         except: pass). The methods still never raise, but the swallowed
-         failure mode is replaced with a logged warning so customers
-         can see GDPR-relevant deletion failures.
+      2. Failure visibility — 0.9.3: an erasure the gateway does not
+         confirm raises SulciErasureError (v0.6.2 to 0.9.2 logged a
+         warning and returned None; before that: except: pass).
+         tests/test_cloud_erasure.py covers the cases.
       3. Response contract — gateway returns {"status": "ok", "deleted":
          N, "tenant_id": ..., [user_id: ...]}; both shapes round-trip
          through the vendored CacheClearResponse / CacheDeleteUserResponse
@@ -457,56 +456,29 @@ class TestDeleteAndClear:
             "returns 404 and historically got swallowed silently."
         )
 
-    # ── 2. log.warning replaces silent failure ───────────────────────────────
+    # ── 2–3. A failed erasure raises (0.9.3) ─────────────────────────────────
 
-    def test_delete_user_logs_warning_on_failure(self):
-        """Pre-v0.6.2: `except Exception: pass`. Post-v0.6.2:
-        `except Exception as e: log.warning(...)`. The customer-visible
-        contract (no raise) is preserved, but failures are now visible
-        in standard logs."""
+    def test_delete_user_raises_on_failure(self):
+        """0.9.3: an erasure the gateway does not confirm raises. v0.6.2–0.9.2
+        logged a warning and returned None, so a caller could not tell a
+        GDPR erasure that failed from one that happened."""
+        from sulci.backends.cloud import SulciErasureError
         b = make_backend()
         with patch.object(b._client, "delete",
-                          side_effect=Exception("connection refused")), \
-             patch("sulci.backends.cloud.log") as mock_log:
-            b.delete_user("user-42")
-        mock_log.warning.assert_called_once()
-        # Verify the log message format includes the user_id and the error
-        call_args = mock_log.warning.call_args
-        format_string = call_args[0][0]
-        assert "delete_user" in format_string
-        assert "user_id=%s" in format_string or "%s" in format_string
+                          side_effect=Exception("connection refused")):
+            with pytest.raises(SulciErasureError) as e:
+                b.delete_user("user-42")
+        assert e.value.operation == "delete_user" and e.value.status is None
 
-    def test_clear_logs_warning_on_failure(self):
-        """Symmetric to delete_user — silent swallow replaced with
-        log.warning."""
+    def test_clear_raises_on_failure(self):
+        """Symmetric to delete_user."""
+        from sulci.backends.cloud import SulciErasureError
         b = make_backend()
         with patch.object(b._client, "delete",
-                          side_effect=Exception("connection refused")), \
-             patch("sulci.backends.cloud.log") as mock_log:
-            b.clear()
-        mock_log.warning.assert_called_once()
-        call_args = mock_log.warning.call_args
-        format_string = call_args[0][0]
-        assert "clear" in format_string
-
-    # ── 3. Non-crashing contract preserved ───────────────────────────────────
-
-    def test_delete_user_does_not_raise_on_failure(self):
-        """Contract pin: even with log.warning, the method MUST NOT raise.
-        Customer apps that call cache.delete_user() and don't catch
-        exceptions (the documented pattern) must not start crashing
-        post-v0.6.2."""
-        b = make_backend()
-        with patch.object(b._client, "delete",
-                          side_effect=Exception("error")):
-            b.delete_user("user-42")   # must not raise
-
-    def test_clear_does_not_raise_on_failure(self):
-        """Symmetric contract pin to delete_user — clear() never raises."""
-        b = make_backend()
-        with patch.object(b._client, "delete",
-                          side_effect=Exception("error")):
-            b.clear()   # must not raise
+                          return_value=mock_response({"error": "erasure_incomplete"}, 503)):
+            with pytest.raises(SulciErasureError) as e:
+                b.clear()
+        assert (e.value.operation, e.value.status, e.value.error) == ("clear", 503, "erasure_incomplete")
 
     # ── 4. Response-shape round-trip pins (vendored gateway contract) ────────
 
@@ -965,7 +937,8 @@ class TestCloudTransportShortCircuit:
         # But .set with session_id doesn't update it because raw_vec is None
         c.set("query", "answer", session_id="sess-1")
         # If local session recording had happened, the window would have a turn
-        window = c._sessions.get("sess-1")
+        assert c._sessions.active_sessions() == []   # 0.9.3: nothing recorded, under any id
+        window = c.get_context("sess-1")
         assert window.depth == 0, (
             "Cache.set must not record turns into the local session window "
             "when routing through the cloud transport — the gateway-side "

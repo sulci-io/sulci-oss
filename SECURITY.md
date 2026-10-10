@@ -23,6 +23,8 @@ upgrade to the latest release.
 | Latest `0.7.x`  | ✅ Security fixes                       |
 | `< 0.7.0`       | ❌ Please upgrade to the latest release |
 
+📌 **Since 0.9.3 (October 2026) the table above is out of date:** only the latest `0.9.x` release — 0.9.3 or later — receives security fixes. Every earlier version, `0.7.x` and `0.8.x` included, is unsupported; upgrade.
+
 The library is tested and supported on **Python 3.9–3.12** across Linux,
 macOS, and Windows. Reports against unsupported Python versions may be
 closed with an upgrade recommendation.

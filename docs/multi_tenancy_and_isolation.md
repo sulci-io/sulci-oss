@@ -136,6 +136,12 @@ their `search()` doesn't filter on it. Those backends are appropriate
 for single-tenant deployments where the application has no concept of
 multiple tenants. **Don't use them for multi-tenant SaaS.**
 
+✅ **0.9.3: this no longer describes any shipped backend.** Chroma, SQLite, Redis, FAISS and Milvus filter every
+lookup on the tenant and the user (`None` = the shared scope `"global"` only), with the scope inside the search;
+Redis, FAISS and Milvus now store `tenant_id`. All of them declare `ENFORCES_TENANT_ISOLATION = True`, so the
+conformance suite's `TestTenantIsolation` runs against each one installed where it runs. The table above
+describes 0.9.2.
+
 The conformance test suite (`tests/compat/`) automatically runs the
 `TestTenantIsolation` group only against backends declaring
 `ENFORCES_TENANT_ISOLATION = True`. Custom backends that handle

@@ -173,11 +173,23 @@ class TestSilentFailure:
         ):
             cache.update(QUERY, LLM, [Generation(text=RESP)])  # no exception
 
-    def test_clear_error_is_silent(self, cache):
+    def test_clear_error_propagates(self, cache):
+        """0.9.3: clear() is an erasure, not a cache read: its failure is raised, not logged and
+        ignored (on the managed backend, SulciErasureError when the gateway does not confirm it)."""
         with patch.object(
             cache._default_cache, "clear", side_effect=RuntimeError("db gone")
         ):
-            cache.clear()  # no exception
+            with pytest.raises(RuntimeError, match="db gone"):
+                cache.clear()
+
+    def test_a_partition_that_fails_to_clear_is_kept(self, cache_ns):
+        cache_ns.update(QUERY, "gpt-4o",     [Generation(text="A")])
+        cache_ns.update(QUERY, "claude-3-5", [Generation(text="B")])
+        failing = cache_ns._ns_caches["claude-3-5"]
+        with patch.object(failing, "clear", side_effect=RuntimeError("db gone")):
+            with pytest.raises(RuntimeError, match="db gone"):
+                cache_ns.clear()
+        assert list(cache_ns._ns_caches) == ["claude-3-5"] and cache_ns._ns_caches["claude-3-5"] is failing
 
 
 # ─────────────────────────────────────────────────────────────────────────────
