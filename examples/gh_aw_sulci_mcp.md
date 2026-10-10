@@ -26,6 +26,8 @@
 #    It is present so the intent is recorded and so this workflow is correct
 #    the day sqlite enforces — NOT because it protects you today. If you need
 #    real per-SHA isolation right now, use backend=qdrant, or give each SHA
+#    ✅ 0.9.3: superseded — sqlite (and every other backend) enforces --tenant-id, and the startup warning
+#    is gone; the paragraph around this line describes 0.9.2.
 #    its own db_path under the cache-memory mount (see the commented line).
 #
 # ⚠️ AND THE CORRECTNESS PROBLEM THAT NO CONFIGURATION SOLVES. A cached answer

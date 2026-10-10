@@ -29,7 +29,7 @@ def _filter_literal(value: str) -> str:
 class MilvusBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
-    ENFORCES_TENANT_ISOLATION: bool = False
+    ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
     COLLECTION = "sulci"
 
@@ -77,6 +77,7 @@ class MilvusBackend:
             "vector":   embedding,
             "query":    query,
             "response": response,
+            "tenant_id": tenant_id or "global",
             "user_id":  user_id or "global",
             "expires":  expires or 0.0,
         }])
@@ -93,7 +94,9 @@ class MilvusBackend:
         now     = now or time.time()
         # Every caller-supplied value goes through _filter_literal: an
         # interpolated value could otherwise change the expression itself.
-        filter_ = f"user_id == {_filter_literal(user_id)}" if user_id else ""
+        # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global".
+        filter_ = (f"tenant_id == {_filter_literal(tenant_id or 'global')} and "
+                   f"user_id == {_filter_literal(user_id or 'global')}")
         results = self._client.search(
             collection_name = self.COLLECTION,
             data            = [embedding],

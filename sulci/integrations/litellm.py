@@ -68,7 +68,6 @@ except ImportError as _ll_err:  # pragma: no cover
     ) from _ll_err
 
 from sulci import Cache
-from sulci.integrations._scope import warn_if_scope_unenforced
 
 __all__ = ["SulciLiteLLMCache", "install"]
 
@@ -159,9 +158,6 @@ class SulciLiteLLMCache(BaseCache):
         self.sulci: Cache = cache if cache is not None else Cache(**cache_kwargs)
         self.namespace_by_model = namespace_by_model
         self.session_key = session_key
-        if namespace_by_model:
-            # Default-on, and a no-op on 6 of 7 backends. Say so.
-            warn_if_scope_unenforced(self.sulci, feature="namespace_by_model")
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _tenant(self, **kwargs: Any) -> Optional[str]:

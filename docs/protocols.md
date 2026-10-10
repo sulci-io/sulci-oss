@@ -179,6 +179,10 @@ The shipped backends declare:
 
 Custom backends must declare this attribute. Conformance fails if it's missing.
 
+✅ 0.9.3: every local backend declares `True` and filters `search()` on `tenant_id` AND `user_id` (`None`
+meaning the shared scope `"global"`); the table above describes 0.9.2. Only `SulciCloudBackend` still reads
+`False`, for the reason given. A custom backend is expected to isolate the same way and declare `True`.
+
 ---
 
 ## Embedder protocol

@@ -293,7 +293,7 @@ jobs:
 
       - name: Backend tests (skip missing deps)
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_backends.py tests/test_metadata_reserved.py tests/test_entry_id_scope.py tests/test_reserved_scope_ids.py -v --tb=short
+        run: pytest tests/test_backends.py tests/test_metadata_reserved.py tests/test_entry_id_scope.py tests/test_reserved_scope_ids.py tests/test_backend_isolation.py -v --tb=short
 
       - name: Test AsyncCache
         if: needs.changes.outputs.code == 'true'

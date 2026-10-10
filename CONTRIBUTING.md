@@ -38,6 +38,8 @@ contract every backend must satisfy.
 2. **Declare `ENFORCES_TENANT_ISOLATION`** as a class attribute. `True`
    if `search()` actually filters out other tenants (Qdrant pattern);
    `False` if `tenant_id` is stored as a label only.
+   ✅ 0.9.3: every shipped local backend isolates and declares `True`; a new backend is expected to filter
+   `search()` on `tenant_id` AND `user_id` (`None` = the shared scope `"global"`) inside the search itself.
 
 3. **Register in `sulci/core.py` `_load_backend()`** so users can
    construct `Cache(backend="yourbackend")`.

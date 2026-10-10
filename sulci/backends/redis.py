@@ -27,7 +27,7 @@ from sulci.backends._scope import scoped_id
 class RedisBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
-    ENFORCES_TENANT_ISOLATION: bool = False
+    ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
     def __init__(
         self,
@@ -79,6 +79,7 @@ class RedisBackend:
         self._redis.hset(rkey, mapping={
             "query":    query.encode(),
             "response": response.encode(),
+            "tenant_id":(tenant_id or "global").encode(),
             "user_id":  (user_id or "global").encode(),
             "expires":  str(expires or 0.0).encode(),
             "embedding":self._pack(embedding),
@@ -97,6 +98,7 @@ class RedisBackend:
         best_sim  = 0.0
         best_resp = None
         cursor    = 0
+        scope     = ((tenant_id or "global").encode(), (user_id or "global").encode())
         while True:
             cursor, keys = self._redis.scan(cursor, match=f"{self._prefix}*", count=200)
             for rkey in keys:
@@ -105,8 +107,9 @@ class RedisBackend:
                     exp  = float(data.get(b"expires", 0))
                     if exp and now > exp:
                         continue
-                    uid = (data.get(b"user_id") or b"global").decode()
-                    if user_id and uid != user_id:
+                    # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning "global". An
+                    # entry without a stored scope matches no scope.
+                    if (data.get(b"tenant_id"), data.get(b"user_id")) != scope:
                         continue
                     stored = self._unpack(data[b"embedding"])
                     sim    = self._cosine(embedding, stored)

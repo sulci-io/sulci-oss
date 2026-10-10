@@ -20,7 +20,7 @@ from sulci.backends._scope import scoped_id
 class ChromaBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
-    ENFORCES_TENANT_ISOLATION: bool = False
+    ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
     def __init__(self, db_path: str = "./sulci_db"):
         try:
@@ -68,7 +68,9 @@ class ChromaBackend:
         user_id: Optional[str] = None, now: Optional[float] = None,
     ) -> tuple[Optional[str], float]:
         now   = now or time.time()
-        where = {"user_id": user_id} if user_id else None
+        # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global".
+        # In the query's filter, so other scopes' copies of a question cannot crowd this one out.
+        where = {"$and": [{"tenant_id": tenant_id or "global"}, {"user_id": user_id or "global"}]}
         try:
             res = self._col.query(
                 query_embeddings = [embedding],

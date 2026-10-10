@@ -301,19 +301,19 @@ def test_tenant_header_scopes_the_lookup(cache):
     c = make(cache, up)
     c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "sha-a"})
     r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "sha-b"})
-    # ⚠️ sqlite does not enforce tenant isolation, so this is a HIT. The
-    # assertion records real behaviour; see _scope.py for why the adapter
-    # warns rather than pretending otherwise.
-    assert r.headers["x-sulci-cache"] == "hit"
+    # 0.9.3: every backend enforces the tenant (before, SQLite served sha-a's answer here).
+    assert r.headers["x-sulci-cache"] == "miss"
+    assert len(up.calls) == 2
 
 
-def test_per_model_scoping_warns_when_unenforced(cache):
-    from sulci.integrations._scope import ScopeNotEnforcedWarning
-
+def test_per_model_scoping_keeps_models_apart(cache):
     up = Upstream()
     client = httpx.AsyncClient(transport=httpx.MockTransport(up.handler))
-    with pytest.warns(ScopeNotEnforcedWarning):
-        build_app(cache, client=client, share_across_models=False)
+    c = TestClient(build_app(cache, client=client, share_across_models=False))
+    c.post("/v1/chat/completions", json=OPENAI_BODY)
+    assert c.post("/v1/chat/completions", json=OPENAI_BODY).headers["x-sulci-cache"] == "hit"
+    other = dict(OPENAI_BODY, model="gpt-other")
+    assert c.post("/v1/chat/completions", json=other).headers["x-sulci-cache"] == "miss"
 
 
 # ── ops endpoints ────────────────────────────────────────────────────────

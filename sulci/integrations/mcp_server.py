@@ -67,7 +67,6 @@ except ImportError as _mcp_err:  # pragma: no cover
     ) from _mcp_err
 
 from sulci import Cache
-from sulci.integrations._scope import warn_if_scope_unenforced
 
 __all__ = ["build_server", "main"]
 
@@ -134,9 +133,6 @@ def build_server(
     # 0.9.3: a reserved default tenant ("global", "") would make every tool call fail; refuse it at build.
     from sulci._scope_ids import refuse_reserved_scope
     refuse_reserved_scope(default_tenant_id, None, personalized=False)
-
-    if default_tenant_id is not None:
-        warn_if_scope_unenforced(cache, feature="default_tenant_id")
 
     from sulci import __version__ as _sulci_version  # local: avoids cycle
 

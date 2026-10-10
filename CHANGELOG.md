@@ -86,6 +86,23 @@ server refuses a reserved default tenant (`--tenant-id`, `SULCI_MCP_TENANT_ID`) 
 
 **What to do:** upgrade to 0.9.3, and map empty or zero ids to `None` before calling `Cache`.
 
+#### Chroma, FAISS, SQLite, Redis, Milvus: a lookup read other tenants' and users' entries
+
+**Who is affected:** self-hosted applications on any backend but Qdrant that keep more than one tenant
+(`tenant_id`) or user (`personalized=True`) in one store. Those backends accepted `tenant_id` and ignored it,
+and a lookup without `user_id` read every user's entries, so one tenant or user could be served another's
+cached answer. Measured through `Cache`: 14 of 32 cross-scope lookups returned another scope's answer on each of
+the five. Qdrant and the managed backend were not affected.
+
+**What changed:** every backend reads only the caller's own scope — the `tenant_id` and the `user_id` given,
+`None` meaning the shared scope and nothing else — and the scope is part of the search, so other scopes' copies
+of a question cannot crowd out the caller's own (FAISS searches the caller's own entries exactly). A tenant or
+user id that is not valid Unicode text (a lone surrogate) raises `ValueError`, on every backend alike. Redis,
+FAISS and Milvus now store `tenant_id`; an entry stored
+before 0.9.3 has no scope and matches none, so `clear()` such stores after upgrading. `ENFORCES_TENANT_ISOLATION`
+is `True` on every local backend, and the `ScopeNotEnforcedWarning` the proxy, MCP server and LiteLLM adapter
+raised on backends that ignored the scope is gone.
+
 ### Fixed
 
 - `SulciCloudBackend.delete_user` and `clear` now check the HTTP status. Before, a `422` or a `503

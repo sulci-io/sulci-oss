@@ -18,7 +18,7 @@ Milvus never upsert by key.)
 encoding (an ASCII-escaped JSON array, so ``("a:b", "c")`` and ``("a", "b:c")``
 differ, and any string encodes, lone surrogates included), and maps a falsy
 tenant or user to ``"global"``, as the backends do for the scope fields they
-store (Chroma stores both; Redis stores ``user_id`` only). The same question
+store (every backend stores both since 0.9.3). The same question
 stored again in the SAME scope still replaces its entry.
 """
 

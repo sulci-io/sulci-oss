@@ -134,6 +134,9 @@ Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
 (v0.4.0).
 
+📌 0.9.3: every backend enforces it — and `user_id` when `personalized=True` — on every lookup; `None` is the
+shared scope and nothing else (before, only Qdrant and the managed backend filtered on `tenant_id`).
+
 📌 0.9.3: `get` and `set` raise `ValueError` for a `tenant_id`, or a `user_id` when `personalized=True`,
 that is `"global"` or falsy but not `None` (`""`, `0`, ...) — all of them named the shared scope. Pass
 `None` for no tenant or user.
@@ -438,6 +441,9 @@ dependency since v0.6.3, so the `sulci[cloud]` extra is a back-compat no-op.
 Only `qdrant` and `sulci` enforce tenant isolation. The other five accept
 `tenant_id` and use it as a label — which is a real difference and should not be
 flattened into "all backends support multi-tenancy" in any marketing surface.
+
+✅ 0.9.3: superseded — every backend enforces tenant (and, when `personalized=True`, user) isolation on
+lookup; the "label only" column above describes 0.9.2.
 
 ---
 

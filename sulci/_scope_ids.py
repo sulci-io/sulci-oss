@@ -42,6 +42,16 @@ def _reserved(value: Any) -> bool:
         return False
 
 
+def _not_text(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        value.encode("utf-8")
+        return False
+    except UnicodeEncodeError:              # a lone surrogate: no backend can store or filter on it
+        return True
+
+
 def refuse_reserved_scope(tenant_id: Any, user_id: Any, *, personalized: bool) -> None:
     """Raise ``ValueError`` if ``tenant_id``, or ``user_id`` when ``personalized``, names the shared scope."""
     if _reserved(tenant_id):
@@ -49,6 +59,10 @@ def refuse_reserved_scope(tenant_id: Any, user_id: Any, *, personalized: bool) -
             f"tenant_id={tenant_id!r} is reserved: it names the shared scope that entries without a tenant are "
             "filed under. Omit tenant_id (None) for no tenant, or pass a tenant's own id."
         )
+    if _not_text(tenant_id):
+        raise ValueError("tenant_id is not valid Unicode text (it contains a lone surrogate)")
+    if personalized and _not_text(user_id):
+        raise ValueError("user_id is not valid Unicode text (it contains a lone surrogate)")
     if personalized and _reserved(user_id):
         raise ValueError(
             f"user_id={user_id!r} is reserved: it names the shared scope that entries without a user are "

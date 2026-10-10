@@ -76,7 +76,6 @@ except ImportError as _px_err:  # pragma: no cover
     ) from _px_err
 
 from sulci import Cache
-from sulci.integrations._scope import warn_if_scope_unenforced
 
 __all__ = ["build_app", "extract_prompt", "is_cacheable_response"]
 
@@ -229,9 +228,6 @@ def build_app(
             "not both."
         )
     sulci_cache = cache if cache is not None else Cache(**cache_kwargs)
-
-    if not share_across_models:
-        warn_if_scope_unenforced(sulci_cache, feature="per-model cache scoping")
 
     openai_upstream = (
         openai_upstream

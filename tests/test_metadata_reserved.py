@@ -211,6 +211,7 @@ def _faiss_standin():
     from sulci.backends.faiss import FAISSBackend
     b = FAISSBackend.__new__(FAISSBackend)
     b._index, b._meta, b._np = _RecordingIndex(), [], _FakeNp()
+    b._scopes = {}                                  # 0.9.3 (oss-0005): FAISS keeps a scope map
     b._ensure = lambda dim: None
     b._save = lambda: None
     return b
@@ -254,8 +255,8 @@ def test_chroma_store_keeps_its_own_fields(caplog):
 def test_faiss_store_keeps_its_own_fields(caplog):
     with caplog.at_level(logging.WARNING, logger="sulci"):
         meta = _faiss_written(dict(PLANT, source="docs"))
-    assert meta == {"key": "k1", "query": "real question", "response": "real answer",
-                    "user_id": "alice", "expires": 4102444800.0, "source": "docs"}
+    assert meta == {"key": "k1", "query": "real question", "response": "real answer", "tenant_id": "t1",
+                    "user_id": "alice", "expires": 4102444800.0, "source": "docs"}     # tenant_id: 0.9.3 (oss-0005)
     assert _dropped(caplog) == sorted(SEVEN)
 
 
@@ -353,6 +354,5 @@ def test_end_to_end_a_plant_changes_nothing(tmp_path, plant, fake_embedder):
         c.set(Q, R, tenant_id="t1", user_id="alice", metadata=dict(plant))
         assert c.get(Q, tenant_id="t1", user_id="alice")[0] == R, name
         assert c.get(Q, tenant_id="t1", user_id="bob")[0] is None, name
-        if name == "qdrant":              # the only backend that reads tenant_id
-            assert c.get(Q, tenant_id="t2", user_id="alice")[0] is None, name
+        assert c.get(Q, tenant_id="t2", user_id="alice")[0] is None, name   # every backend reads tenant_id (0.9.3)
         c.clear()

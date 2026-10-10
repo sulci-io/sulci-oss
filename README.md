@@ -316,6 +316,10 @@ three surfaces above, which all offer scoping as a safety property —
 default `sqlite` backend **each of those is a no-op**, and each will emit a
 `ScopeNotEnforcedWarning` saying so rather than pretending otherwise.
 
+✅ **0.9.3: every backend enforces it.** Chroma, FAISS, Milvus, Redis and SQLite now read only the caller's
+own tenant and user, as Qdrant does (`None` is the shared scope and nothing else), so the three surfaces above
+scope for real on every backend and `ScopeNotEnforcedWarning` no longer exists. The table above describes 0.9.2.
+
 If you need real isolation today: use `backend="qdrant"` or the managed `sulci` backend, or give each scope
 its own `db_path`, or turn the feature off and share deliberately.
 
