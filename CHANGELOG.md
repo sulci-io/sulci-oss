@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.9.3] — Security: cache scope, erasure and conversation history
+
+Six security fixes and the behaviour changes that come with them — read **Security** and the **Breaking** entries under **Changed** before upgrading. The managed backend's `delete_user` / `clear` now raise on an unconfirmed erasure; every self-hosted backend now enforces `tenant_id` and `user_id`; `metadata` may not use the entry's own field names; sessions belong to one tenant and user.
+
 ### Security
 
 #### Sulci Cloud: `delete_user` could erase the wrong user, or the tenant's whole cache

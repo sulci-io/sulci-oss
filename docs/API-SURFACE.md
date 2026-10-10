@@ -1,5 +1,8 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-10 against `sulci` **0.9.3** — `check_api_surface.py --show`; the 0.9.3 additions are the
+📌 rows and notes below (context methods' `tenant_id` / `user_id`). The 0.9.2 measurement follows.
+
 **Measured:** 2026-10-01 against `sulci` **0.9.2**
 
 📌 **Re-verified, not re-measured.** The surface was measured 2026-07-24 at

@@ -13,9 +13,9 @@ backend implementations. Do not modify without a superseding ADR.
 This protocol formalizes the shape every shipped backend
 (chroma, qdrant, sqlite, redis, faiss, milvus, cloud) has, with one
 v0.4.0 addition: `tenant_id` for multi-tenant partition isolation.
-All shipped backends accept this kwarg; QdrantBackend enforces tenant
-isolation natively via payload filters, while other backends currently
-store `tenant_id` as a labeling field. See ADR 0005 for the rationale.
+All shipped backends accept this kwarg. Since 0.9.3 every shipped backend
+enforces it, and `user_id`, on every lookup (before, only QdrantBackend
+and the managed backend did). See ADR 0005 for the rationale.
 
 Usage
 -----
@@ -62,12 +62,13 @@ class Backend(Protocol):
 
     Implementations shipped in v0.4.0:
       - ChromaBackend       sulci/backends/chroma.py
-      - QdrantBackend       sulci/backends/qdrant.py     (enforces tenant_id)
+      - QdrantBackend       sulci/backends/qdrant.py
       - SQLiteBackend       sulci/backends/sqlite.py
       - RedisBackend        sulci/backends/redis.py
       - FaissBackend        sulci/backends/faiss.py
       - MilvusBackend       sulci/backends/milvus.py
-      - SulciCloudBackend   sulci/backends/cloud.py      (enforces tenant_id)
+      - SulciCloudBackend   sulci/backends/cloud.py
+    Every one enforces tenant_id and user_id (0.9.3).
 
     Custom implementations: any class matching this surface.
     Verify conformance: sulci.tests.compat.test_backend_conformance
@@ -89,22 +90,34 @@ class Backend(Protocol):
         Insert or replace a cache entry.
 
         Args:
-            key:       Deterministic identifier for this cache entry
-                       (typically hash of tenant + user + query text).
+            key:       Deterministic identifier for this cache entry.
+                       ``Cache.set`` derives it from the query text
+                       alone, so it does NOT identify the scope: a
+                       store MUST NOT replace an entry of another
+                       (tenant_id, user_id) that has the same key
+                       (0.9.3; docs/protocols.md).
             query:     Original query text (for debugging / display).
             response:  The LLM response being cached.
             embedding: Normalized vector representation of `query`.
             tenant_id: Optional tenant (organization) scoping. Entries
                        written with a `tenant_id` are isolated from other
                        tenants — a `search` call without a matching
-                       `tenant_id` MUST NOT return them. None = no tenant
-                       scoping (single-tenant deployment).
+                       `tenant_id` MUST NOT return them. None = the
+                       shared scope "global", which is a scope of its
+                       own: entries written with a tenant are not in it.
             user_id:   Optional per-user scoping within a tenant. Layered
                        on top of `tenant_id`: tenant partitions first,
                        then user within tenant. "global" if None.
             expires:   Unix timestamp after which this entry is stale.
                        None or 0.0 = never expires.
-            metadata:  Arbitrary additional fields to store in the backend.
+            metadata:  Additional fields to store beside the entry: a
+                       mapping whose keys are not the entry's own field
+                       names (``sulci._metadata.RESERVED_METADATA_KEYS``).
+                       ``Cache.set`` refuses others before calling store;
+                       a backend that keeps metadata calls
+                       ``sulci._metadata.checked_metadata(metadata)``
+                       first and lets its ValueError / TypeError
+                       propagate (0.9.3).
 
         Raises:
             Implementation-specific errors are acceptable but should be
@@ -135,9 +148,12 @@ class Backend(Protocol):
                        matches. Tenant isolation is a hard boundary:
                        entries from other tenants MUST NOT be returned
                        even if their similarity exceeds `threshold`.
-            user_id:   Optional filter — only match entries stored with
-                       this `user_id` (or "global" entries if permitted),
-                       within the tenant scope.
+            user_id:   Only match entries stored with exactly this
+                       `user_id` within the tenant scope; None = only
+                       entries stored without one ("global"). The scope
+                       is part of the search, so other scopes' entries
+                       cannot crowd this one's out of the candidates
+                       (0.9.3).
             now:       Unix timestamp for TTL comparison. Uses time.time()
                        if None. Parameter is for test determinism.
 
