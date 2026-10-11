@@ -40,6 +40,15 @@ qdrant_client = pytest.importorskip("qdrant_client")
 from sulci.backends.qdrant import QdrantBackend  # noqa: E402
 
 
+def _own(caught) -> list:
+    """The warnings QdrantBackend itself raised. `catch_warnings(record=True)` with `simplefilter("always")`
+    records EVERY warning emitted inside the block, including ones from objects other tests left for the garbage
+    collector — publish.yml runs the whole suite in one process, and the v0.9.3 run caught 3 where this file meant
+    1. Count only the backend's own."""
+    return [w for w in caught if issubclass(w.category, RuntimeWarning)
+            and str(w.message).startswith("QdrantBackend:")]
+
+
 def _close(backend: QdrantBackend) -> None:
     """Release the embedded storage lock so the same path can be reopened."""
     backend._client.close()
@@ -206,6 +215,7 @@ class TestExistingCollectionIsNotSilentlyIgnored:
             warnings.simplefilter("always")
             second = QdrantBackend(db_path=path, on_disk=True, quantization="scalar")
 
+        caught = _own(caught)
         assert len(caught) == 1
         assert caught[0].category is RuntimeWarning
         message = str(caught[0].message)
@@ -232,7 +242,7 @@ class TestExistingCollectionIsNotSilentlyIgnored:
             warnings.simplefilter("always")
             QdrantBackend(db_path=path, on_disk=True, quantization="scalar")
 
-        assert caught == []
+        assert _own(caught) == []
 
     def test_passing_no_kwargs_against_an_existing_collection_is_silent(self, tmp_path):
         """The overwhelmingly common path — a process restart — stays quiet."""
@@ -244,7 +254,7 @@ class TestExistingCollectionIsNotSilentlyIgnored:
             warnings.simplefilter("always")
             QdrantBackend(db_path=path)
 
-        assert caught == []
+        assert _own(caught) == []
 
     def test_partial_drift_is_reported_for_the_field_that_drifted(self, tmp_path):
         """Only `on_disk` differs. The message should say so and not blame
@@ -257,7 +267,23 @@ class TestExistingCollectionIsNotSilentlyIgnored:
             warnings.simplefilter("always")
             QdrantBackend(db_path=path, on_disk=True, quantization="scalar")
 
+        caught = _own(caught)
         assert len(caught) == 1
         message = str(caught[0].message)
         assert "on_disk" in message
         assert "quantization" not in message
+
+    def test_a_foreign_warning_during_construction_is_not_counted(self, tmp_path):
+        """The v0.9.3 publish failure, reproduced: another warning lands inside the block (there, from garbage
+        another test left; here, injected). The drift is still reported exactly once."""
+        path = str(tmp_path / "q")
+        first = QdrantBackend(db_path=path, quantization="scalar")
+        _close(first)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            warnings.warn("unclosed <socket.socket fd=7>", ResourceWarning)
+            QdrantBackend(db_path=path, on_disk=True, quantization="scalar")
+            warnings.warn("some library is deprecated", DeprecationWarning)
+
+        assert len(caught) == 3
+        assert [str(w.message)[:13] for w in _own(caught)] == ["QdrantBackend"]
