@@ -349,3 +349,80 @@ class TestInMemoryThreads:
         finally:
             sys.setswitchinterval(old)
         assert errors == []
+
+
+class TestRedisIndexesExpire:
+    """0.10.0: an index key expires with its latest entry. Measured on 0.9.3 (a real Redis): a user who wrote once and
+    never returned kept their index forever — TTL -1, the expired session still listed."""
+
+    def _index_keys(self, redis_client, store):
+        return sorted(k for k in redis_client.keys(store._index() + "*"))
+
+    def test_every_index_of_a_ttl_store_expires(self, redis_client):
+        from sulci.sessions.scope import scoped_session_id, scopes_of
+        from sulci.sessions import redis as rmod
+        store = RedisSessionStore(redis_client, ttl_seconds=60)
+        store.append(scoped_session_id("tA", "alice", "s1"), [1.0])
+        keys = self._index_keys(redis_client, store)
+        assert len(keys) == 3                                   # the store's, the tenant's, the user's
+        for k in keys:
+            assert 0 < redis_client.ttl(k) <= 60 + rmod._INDEX_GRACE_SECONDS + 1, k
+
+    def test_a_user_who_never_returns_leaves_no_index_behind(self, redis_client, monkeypatch):
+        from sulci.sessions.scope import scoped_session_id, scopes_of
+        import time as _time
+        from sulci.sessions import redis as rmod
+        monkeypatch.setattr(rmod, "_INDEX_GRACE_SECONDS", 0)
+        store = RedisSessionStore(redis_client, ttl_seconds=1)
+        alice = scoped_session_id("tA", "alice", "s1")
+        store.append(alice, [1.0])
+        user_index = store._index(scopes_of(alice)[1])
+        assert redis_client.exists(user_index)
+        _time.sleep(2.2)                                         # her session expires, and her index with it
+        assert not redis_client.exists(user_index), "alice's index outlived her session"
+
+    def test_a_store_without_ttl_keeps_a_shared_index_persistent(self, redis_client):
+        from sulci.sessions.scope import scoped_session_id, scopes_of
+        RedisSessionStore(redis_client, ttl_seconds=60).append(scoped_session_id("tA", "alice", "s1"), [1.0])
+        store = RedisSessionStore(redis_client)
+        store.append(scoped_session_id("tA", "alice", "s2"), [1.0])
+        for k in self._index_keys(redis_client, store):
+            assert redis_client.ttl(k) == -1, k
+        RedisSessionStore(redis_client, ttl_seconds=60).append(scoped_session_id("tA", "alice", "s3"), [1.0])
+        for k in self._index_keys(redis_client, store):
+            assert redis_client.ttl(k) == -1, k                  # a later TTL'd write cannot shorten it
+
+    def test_a_client_clock_behind_the_server_still_finds_its_live_session(self, redis_client, monkeypatch):
+        """0.10.0's review, measured: with an absolute EXPIREAT, a client 400 s behind the Redis server had every
+        index of a live session expire at once, and clear_scope erased nothing."""
+        from sulci.sessions.scope import scoped_session_id, scopes_of
+        import time as _time
+        from sulci.sessions import redis as rmod
+        real = _time.time
+        monkeypatch.setattr(rmod.time, "time", lambda: real() - 400)
+        store = RedisSessionStore(redis_client, ttl_seconds=60)
+        sid = scoped_session_id("tA", "alice", "s1")
+        store.append(sid, [1.0])
+        for k in self._index_keys(redis_client, store):
+            assert redis_client.ttl(k) > 60, k
+        assert store.clear_scope(scopes_of(sid)[1]) == 1 and store.get(sid) == []
+
+    def test_clearing_the_no_ttl_session_lets_the_rest_of_its_index_expire(self, redis_client):
+        from sulci.sessions.scope import scoped_session_id, scopes_of
+        RedisSessionStore(redis_client, ttl_seconds=60).append(scoped_session_id("tA", "alice", "s1"), [1.0])
+        forever = RedisSessionStore(redis_client)
+        sid = scoped_session_id("tA", "alice", "s2")
+        forever.append(sid, [1.0])
+        user_index = forever._index(scopes_of(sid)[1])
+        assert redis_client.ttl(user_index) == -1
+        forever.clear(sid)
+        from sulci.sessions import redis as rmod
+        assert 0 < redis_client.ttl(user_index) <= 60 + rmod._INDEX_GRACE_SECONDS + 1
+
+    def test_a_shorter_ttl_store_cannot_expire_a_longer_ones_index_early(self, redis_client):
+        from sulci.sessions.scope import scoped_session_id, scopes_of
+        long_store = RedisSessionStore(redis_client, ttl_seconds=3600)
+        long_store.append(scoped_session_id("tA", "alice", "s1"), [1.0])
+        RedisSessionStore(redis_client, ttl_seconds=10).append(scoped_session_id("tA", "alice", "s2"), [1.0])
+        for k in self._index_keys(redis_client, long_store):
+            assert redis_client.ttl(k) > 3600, k

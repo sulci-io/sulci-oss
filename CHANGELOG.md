@@ -8,6 +8,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`RedisSessionStore`: an index no longer outlives every session it lists.** The per-tenant and per-user indexes
+  (0.9.3) were pruned only by later writes to the same index, so the index of a user who never wrote again kept its
+  expired sessions forever (measured on a real Redis: TTL -1, the expired session still listed). Each index key now
+  expires when its latest entry does, set in the same transaction as each write and each erasure, relative to the
+  writing client's clock; an index shared with a store that has no TTL stays persistent, and a store with a shorter
+  TTL cannot shorten it. Redis 6.2 remains the minimum. ⚠️ This covers index keys written from this release on: an
+  index left by 0.9.3 for a user who never writes again keeps no expiry. Upgrade every process that shares a
+  `key_prefix` before relying on erasure — a 0.9.3 writer does not extend an expiry set by a 0.10.0 one, so a session
+  it adds can fall out of the index.
+
 ## [0.9.3] — Security: cache scope, erasure and conversation history
 
 Six security fixes and the behaviour changes that come with them — read **Security** and the **Breaking** entries under **Changed** before upgrading. The managed backend's `delete_user` / `clear` now raise on an unconfirmed erasure; every self-hosted backend now enforces `tenant_id` and `user_id`; `metadata` may not use the entry's own field names; sessions belong to one tenant and user.

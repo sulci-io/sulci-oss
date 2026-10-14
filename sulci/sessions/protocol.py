@@ -7,7 +7,7 @@ STABLE API — modifications require superseding ADR per ADR 0005.
 
 📌 0.9.3: ``clear_scope`` and ``clear_all`` added (OSS-3 — session history was keyed
 by ``session_id`` alone and ``Cache.clear()`` could not reach an injected store's).
-The ADR 0005 amendment that records this is owed with the release.
+Recorded as ADR 0005 Amendment 1 (sulci-platform, 2026-10-11).
 """
 from __future__ import annotations
 from typing import Protocol, runtime_checkable, Optional, List, Sequence

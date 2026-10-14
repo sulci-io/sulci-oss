@@ -15,14 +15,19 @@ Key schema (0.9.3; the default prefix changed from "sulci:session:" with it):
 session and records its id in the store's index and in its tenant's and user's indexes in
 one MULTI/EXEC transaction (nothing interleaves with it), scored by when the session expires
 plus a grace period, and drops index entries whose session has expired — so an index lists
-the live sessions, not every id ever written. ``clear_scope`` and ``clear_all`` remove exactly
+the live sessions, not every id ever written. 0.10.0: each index key also EXPIRES when its latest entry does
+(``_EXPIRE_WITH_LATEST``) — an index pruned only by its own writes kept, for every user who never wrote again, a
+sorted set of sessions long expired, forever. Each write resets the whole index's expiry from the writing process's
+clock, so the grace period must also cover that: a writer whose clock is ahead of another's by more than the grace
+can end an index before the other's session (measured in 0.10.0's review). ``clear_scope`` and ``clear_all`` remove exactly
 the indexed sessions, in transactions, without a keyspace SCAN (a SCAN-based erasure was
 measured on the managed platform saturating Redis); a write that races an erasure is either
 removed by it or stays indexed. The ``s:`` and ``i:`` namespaces cannot collide, whatever id
 a caller uses. The grace period (``_INDEX_GRACE_SECONDS``) also absorbs clock differences
 between the processes sharing the store; it must exceed them.
 
-Needs Redis 6.2 or later (``ZADD … GT``). Not for Redis Cluster: one write spans the session
+Needs Redis 6.2 or later (``ZADD … GT``; the expiry script uses only ``ZRANGE … WITHSCORES``, ``EXPIRE`` and
+``PERSIST``, all older). Not for Redis Cluster: one write spans the session
 key and three index keys.
 
 Install:
@@ -40,6 +45,28 @@ from sulci.sessions.scope import scopes_of
 _INDEX_GRACE_SECONDS = 300
 _NEVER = float("inf")
 _BATCH = 500
+
+#: 0.10.0. Each index key in KEYS expires when its latest entry does, or is PERSISTed when that entry's score is +inf
+#: (a store without a TTL shares the index). The expiry is RELATIVE — the highest score minus ARGV[1], the writing
+#: client's own `now` — because the scores come from client clocks: an absolute EXPIREAT is judged by the SERVER's
+#: clock, and a client 400 s behind it had all three indexes of a live session expire at once (0.10.0's review,
+#: measured), so erasure missed the session. Run in the same MULTI as the writes that change the scores; a store with
+#: a longer TTL sharing the prefix can only push the expiry later. Measured on 0.9.3: a user who wrote once and never
+#: returned kept their index — TTL -1, the expired session still listed.
+_EXPIRE_WITH_LATEST = """
+local now = tonumber(ARGV[1])
+for _, key in ipairs(KEYS) do
+  local top = redis.call('ZRANGE', key, -1, -1, 'WITHSCORES')
+  if top[2] then
+    if top[2] == 'inf' or top[2] == '+inf' then
+      redis.call('PERSIST', key)
+    else
+      redis.call('EXPIRE', key, math.max(1, math.ceil(tonumber(top[2]) - now)))
+    end
+  end
+end
+return 0
+"""
 
 
 def _text(v) -> str:
@@ -106,10 +133,12 @@ class RedisSessionStore(SessionStore):
         if self._ttl:
             pipe.expire(key, self._ttl)
         for idx in indexes:
-            # GT: a writer whose clock is behind cannot move an entry's expiry earlier. Indexes themselves never
-            # expire: stores with different TTLs may share a prefix, and an empty sorted set disappears anyway.
+            # GT: a writer whose clock is behind cannot move an entry's expiry earlier.
             pipe.zadd(idx, {session_id: until}, gt=True)
             pipe.zremrangebyscore(idx, "-inf", now)            # sessions that have expired
+        # 0.10.0: and each index expires with its latest entry (stores with different TTLs may share a prefix, so
+        # the expiry comes from the scores the index holds, not from this store's TTL).
+        pipe.eval(_EXPIRE_WITH_LATEST, len(indexes), *indexes, now)
         pipe.execute()
 
     def _remove(self, session_ids: Iterable[str]) -> int:
@@ -120,9 +149,14 @@ class RedisSessionStore(SessionStore):
         pipe = self._redis.pipeline(transaction=True)
         pipe.delete(*[self._key(s) for s in ids])
         pipe.zrem(self._index(), *ids)
+        touched = {self._index()}
         for sid in ids:
             for scope in scopes_of(sid):
                 pipe.zrem(self._index(scope), sid)
+                touched.add(self._index(scope))
+        # 0.10.0: what is left of each index expires with ITS latest entry — removing the only +inf entry of an index
+        # shared with a TTL'd store would otherwise leave the rest persistent until that index is written again.
+        pipe.eval(_EXPIRE_WITH_LATEST, len(touched), *sorted(touched), time.time())
         return int(pipe.execute()[0])
 
     def _members(self, index: str):
