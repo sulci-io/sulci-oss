@@ -76,6 +76,7 @@ except ImportError as _px_err:  # pragma: no cover
     ) from _px_err
 
 from sulci import Cache
+from sulci.sessions.errors import SulciSessionError
 
 __all__ = ["build_app", "extract_prompt", "is_cacheable_response"]
 
@@ -353,6 +354,8 @@ def build_app(
                         sulci_cache.set(
                             prompt, text, tenant_id=tenant, session_id=session
                         )
+                    except SulciSessionError as exc:
+                        logger.warning("sulci stored the reply; the conversation turn was not recorded: %s", exc)
                     except Exception as exc:
                         logger.warning("sulci store failed: %s", exc)
             elif isinstance(payload, dict):

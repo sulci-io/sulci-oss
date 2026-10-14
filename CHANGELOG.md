@@ -8,6 +8,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **⚠️ Breaking: an injected session store's failures are no longer silent.** With `Cache(session_store=...)`,
+  `set` and `clear_context` raise the new `sulci.sessions.SulciSessionError` when the store fails (its own
+  exception is `__cause__`). `set` raises only after the entry is stored and its event emitted — the message says
+  the entry WAS stored; `clear_context` says the history was NOT cleared. A failed read (`get`, `get_context`,
+  `context_summary`) logs a WARNING on the `sulci` logger and continues without history; `cached_call` logs a
+  WARNING and returns the response, cached or fresh, without raising. `AsyncCache` follows. `clear()` now raises
+  `SulciSessionError` (the store's exception as `__cause__`) where 0.9.3 let the store's own exception through;
+  the entries WERE cleared and the `clear` event is emitted.
+  A read that fails part-way uses none of the history (0.9.3 kept what had been read). Recording a turn no
+  longer reads the history first. The MCP server's `cache_store` reports `"stored": true, "session_recorded":
+  false` for such a failure, and the proxy, LiteLLM and LlamaIndex adapters log that the entry was stored.
+  Measured on 0.9.3: against a store whose every call raised, `set`, `clear_context` and `get` each returned
+  normally and nothing was logged. The built-in in-process session store is unaffected.
+
 ### Fixed
 
 - **`RedisSessionStore`: an index no longer outlives every session it lists.** The per-tenant and per-user indexes

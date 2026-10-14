@@ -200,6 +200,25 @@ def test_store_failure_is_swallowed():
     a.set_cache("k", VALUE, messages=MESSAGES)  # must not raise
 
 
+def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, caplog):
+    """0.10.0: Cache.set raises SulciSessionError after the value is stored; the adapter says so."""
+    import logging
+    from sulci.sessions import InMemorySessionStore
+
+    class _DownStore(InMemorySessionStore):
+        def append(self, *a, **k):
+            raise ConnectionError("session store down")
+
+    cache = Cache(backend="sqlite", db_path=str(tmp_path / "ll-s"), embedding_model=fake_embedder, threshold=0.85,
+                  telemetry=False, context_window=4, context_threshold=0.85, session_store=_DownStore())
+    a = SulciLiteLLMCache(cache, namespace_by_model=False)
+    with caplog.at_level(logging.WARNING):
+        a.set_cache("k", VALUE, messages=MESSAGES, metadata={"sulci_session_id": "s1"})
+    assert any("stored the value" in rec.getMessage() for rec in caplog.records)
+    assert not any("set_cache failed" in rec.getMessage() for rec in caplog.records)
+    assert a.get_cache("k", messages=MESSAGES) is not None
+
+
 # ── wiring ───────────────────────────────────────────────────────────────
 def test_install_replaces_the_inner_cache_implementation(cache):
     import litellm

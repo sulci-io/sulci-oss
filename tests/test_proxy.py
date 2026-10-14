@@ -352,3 +352,24 @@ def test_a_reserved_tenant_header_is_answered_without_the_cache(cache):
         r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-tenant-id": "global"})
         assert r.status_code == 200 and r.headers["x-sulci-cache"] == "miss"
     assert len(up.calls) == 2
+
+
+
+def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, caplog):
+    """0.10.0: Cache.set raises SulciSessionError after the reply is stored; the proxy says so."""
+    import logging
+    from sulci.sessions import InMemorySessionStore
+
+    class _DownStore(InMemorySessionStore):
+        def append(self, *a, **k):
+            raise ConnectionError("session store down")
+
+    cache = Cache(backend="sqlite", db_path=str(tmp_path / "px-s"), embedding_model=fake_embedder, threshold=0.85,
+                  telemetry=False, context_window=4, context_threshold=0.85, session_store=_DownStore())
+    c = make(cache, Upstream())
+    with caplog.at_level(logging.WARNING):
+        r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-session-id": "s1"})
+    assert r.status_code == 200
+    assert any("stored the reply" in rec.getMessage() for rec in caplog.records)
+    assert not any(rec.getMessage().startswith("sulci store failed") for rec in caplog.records)
+    assert c.post("/v1/chat/completions", json=OPENAI_BODY).headers["x-sulci-cache"] == "hit"

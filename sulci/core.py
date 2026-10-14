@@ -34,6 +34,10 @@ from sulci.backends.protocol   import Backend
 from sulci._metadata import checked_metadata
 from sulci._scope_ids import refuse_reserved_scope
 from sulci.sessions.scope import scoped_session_id as _scoped_session_id
+from sulci.sessions.errors import SulciSessionError
+
+import logging as _logging
+_log = _logging.getLogger("sulci")
 
 
 # ── v0.5.2 nudge state (D15) ──────────────────────────────────────────────────
@@ -61,6 +65,10 @@ class _ProtocolAdaptedSessionStore:
     user-vector additions back to the inner store. Assistant turns
     stay window-local (the new protocol doesn't carry response text).
 
+    0.10.0: a failed WRITE (append, clear) raises ``SulciSessionError`` from the store's exception; a failed READ
+    (get, summary) logs a WARNING on the ``sulci`` logger and degrades to no history. Through 0.9.3 every one of
+    them was swallowed silently, so a store that was down looked exactly like a conversation with no history.
+
     Not part of the public API.
     """
 
@@ -83,43 +91,63 @@ class _ProtocolAdaptedSessionStore:
         """Rebuild a transient window seeded from the inner store."""
         window = ContextWindow(**self._cfg)
         try:
-            for v in self._inner.get(session_id):
-                window.add_turn("", role="user", embedding=v)
-        except Exception:
-            # Inner-store read failures degrade to empty context
-            pass
+            vectors = list(self._inner.get(session_id))
+        except Exception as exc:
+            # 0.10.0: a read failure degrades to no history — all of it, even if the store yielded some — and
+            # says so. Only the store's own read is caught: a fault in seeding the window is not the store's.
+            vectors = []
+            _log.warning("sulci.Cache: the session store failed to read conversation history; continuing without it "
+                         "(%s: %s)", type(exc).__name__, exc)
+        for v in vectors:
+            window.add_turn("", role="user", embedding=v)
         self._wrap_add_turn(window, session_id)
         return window
 
+    def record_user_turn(self, session_id: str, embedding) -> None:
+        """0.10.0: append one user-query vector. Cache records a turn through this, without reading the history
+        first — a read failure on a write path would only add a WARNING to the error that follows."""
+        try:
+            self._inner.append(session_id, embedding, max_turns=self._max_turns)
+        except Exception as exc:
+            raise SulciSessionError(
+                f"the session store failed to record the conversation turn ({type(exc).__name__}: {exc})"
+            ) from exc
+
     def _wrap_add_turn(self, window, session_id):
         original    = window.add_turn
-        inner       = self._inner
-        max_turns   = self._max_turns
+        record      = self.record_user_turn
         def wrapped(text, role="user", embedding=None):
             result = original(text, role=role, embedding=embedding)
             # Write-through: only user-role turns with embeddings
             # round-trip to the inner store. Assistant turns and
             # text-only user turns stay window-local.
             if role == "user" and embedding is not None:
-                try:
-                    inner.append(session_id, embedding, max_turns=max_turns)
-                except Exception:
-                    # Inner-store write failures must not break Cache calls
-                    pass
+                record(session_id, embedding)        # 0.10.0: a failure raises SulciSessionError
             return result
         window.add_turn = wrapped
 
     def delete(self, session_id: str) -> None:
+        # 0.10.0: a clear that did not happen must not look like one that did.
         try:
             self._inner.clear(session_id)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise SulciSessionError(
+                f"the session store failed to clear the conversation history; it was NOT cleared "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
 
     def clear_all(self) -> None:
         # 0.9.3 (OSS-3): the protocol's clear_all() — the store removes what it holds from its own
         # index (it was a no-op, so Cache.clear() left an injected store's history in place).
         # A failure propagates: an erasure that did not happen must not look like one that did.
-        self._inner.clear_all()
+        # 0.10.0: as SulciSessionError, like every other failed write to an injected store.
+        try:
+            self._inner.clear_all()
+        except Exception as exc:
+            raise SulciSessionError(
+                f"the session store failed to clear the conversation histories; they were NOT cleared "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
 
     def active_sessions(self) -> list:
         # Same enumeration limitation as clear_all().
@@ -128,8 +156,10 @@ class _ProtocolAdaptedSessionStore:
     def summary(self) -> dict:
         try:
             inner_sum = self._inner.summary() or {}
-        except Exception:
+        except Exception as exc:
             inner_sum = {}
+            _log.warning("sulci.Cache: the session store failed to summarise its sessions (%s: %s)",
+                         type(exc).__name__, exc)
         # Translate new-protocol shape to legacy shape
         return {
             "active_sessions": int(inner_sum.get("sessions", 0)),
@@ -571,8 +601,14 @@ class Cache:
         response:   str,
         query_vec:  list,
     ) -> None:
-        """Append user + assistant turns to the session window."""
+        """Append user + assistant turns to the session window.
+
+        0.10.0: with an injected store only the user vector is kept (the adapter's window is transient), so it is
+        appended directly — no read first. A failure raises ``SulciSessionError``."""
         if self._sessions is None or not session_id:
+            return
+        if isinstance(self._sessions, _ProtocolAdaptedSessionStore):
+            self._sessions.record_user_turn(session_id, query_vec)
             return
         window = self._sessions.get(session_id)
         window.add_turn(query,    role="user",      embedding=query_vec)
@@ -878,6 +914,10 @@ class Cache:
         ``metadata`` (0.9.3) must be a mapping (``TypeError``) whose keys do not
         name the entry's own fields — ``sulci._metadata.RESERVED_METADATA_KEYS``
         (``ValueError``). Nothing is embedded, stored or sent when either fails.
+
+        0.10.0: when an injected session store fails to record the turn, ``set`` raises
+        ``sulci.sessions.SulciSessionError`` — AFTER the entry is stored and the ``set`` event emitted, so
+        the entry is in the cache; only the conversation turn is missing.
         """
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
@@ -915,8 +955,12 @@ class Cache:
                 expires   = expires,
                 metadata  = metadata,
             )
+        session_error = None
         if session_id and self._sessions and raw_vec is not None:
-            self._record_turn(self._session_key(session_id, tenant_id, user_id), query, response, raw_vec)
+            try:
+                self._record_turn(self._session_key(session_id, tenant_id, user_id), query, response, raw_vec)
+            except SulciSessionError as exc:
+                session_error = exc       # 0.10.0: raised below, once the stored entry has been accounted for
 
         # Telemetry — legacy emit pipe (sulci.connect()).
         # Mirror the cache.get behaviour: only emit when this Cache
@@ -954,6 +998,11 @@ class Cache:
         except Exception:
             pass
 
+        if session_error is not None:
+            raise SulciSessionError(
+                f"Cache.set: the entry WAS stored, but {session_error}"
+            ) from session_error.__cause__
+
     def cached_call(
         self,
         query:         str,
@@ -974,6 +1023,10 @@ class Cache:
         and ``context_window > 0``.  Every call appends the query and
         response to the session window so the next call benefits from
         the updated context.
+
+        0.10.0: when an injected session store fails to record that turn, ``cached_call`` logs a WARNING on
+        the ``sulci`` logger and still returns the response — on a miss the LLM has already been paid for.
+        It never raises ``SulciSessionError``; ``set``, ``clear_context`` and ``clear`` do.
 
         Args:
             query:         User query string.
@@ -1030,7 +1083,10 @@ class Cache:
             # guard already present in Cache.set's session-record path.
             if session_id and self._sessions and not self._is_remote_transport:
                 raw_vec = self._embedder.embed(query)
-                self._record_turn(self._session_key(session_id, tenant_id, user_id), query, hit, raw_vec)
+                try:
+                    self._record_turn(self._session_key(session_id, tenant_id, user_id), query, hit, raw_vec)
+                except SulciSessionError as exc:
+                    _log.warning("sulci.Cache: cached_call returned the cached response, but %s", exc)
             return {
                 "response":      hit,
                 "source":        "cache",
@@ -1041,7 +1097,10 @@ class Cache:
             }
 
         response = llm_fn(query, **llm_kwargs)
-        self.set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, plan=plan)
+        try:
+            self.set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, plan=plan)
+        except SulciSessionError as exc:
+            _log.warning("sulci.Cache: cached_call returned the LLM response; %s", exc)
         ms = (time.perf_counter() - t0) * 1000
         # _stats["misses"] is incremented inside .get() above — see #42.
         return {
@@ -1088,6 +1147,8 @@ class Cache:
 
         Call this when a user starts a new topic or when a conversation ends.
         0.9.3: pass the same ``tenant_id`` / ``user_id`` as to ``get`` and ``set``.
+        0.10.0: raises ``sulci.sessions.SulciSessionError`` when an injected session store fails — the
+        history was NOT cleared.
         """
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         if self._sessions:
@@ -1174,11 +1235,19 @@ class Cache:
         If the backend cannot confirm the erasure — the managed backend raises
         ``sulci.backends.cloud.SulciErasureError`` (0.9.3) — the exception propagates before
         anything else is reset, so stats and sessions still describe the cache that is still there.
+        0.10.0: if an injected session store then fails, ``sulci.sessions.SulciSessionError`` — the
+        entries WERE cleared and the ``clear`` event is emitted; the conversation histories were NOT
+        cleared, and stats are left as they were.
         """
         self._backend.clear()
+        session_error = None
         if self._sessions:
-            self._sessions.clear_all()   # 0.9.3: before the stats, so a failure leaves them as they were
-        self._stats = {"hits": 0, "misses": 0, "saved_cost": 0.0}
+            try:
+                self._sessions.clear_all()   # 0.9.3: before the stats, so a failure leaves them as they were
+            except SulciSessionError as exc:
+                session_error = exc          # 0.10.0: raised below, once the cleared entries are accounted for
+        if session_error is None:
+            self._stats = {"hits": 0, "misses": 0, "saved_cost": 0.0}
 
         # v0.5.0 — structured event sink (additive; defaults to NullSink)
         try:
@@ -1190,6 +1259,11 @@ class Cache:
             ))
         except Exception:
             pass
+
+        if session_error is not None:
+            raise SulciSessionError(
+                f"Cache.clear: the entries WERE cleared, but {session_error}"
+            ) from session_error.__cause__
 
     def __repr__(self) -> str:
         ctx = f", context_window={self.context_window}" if self.context_window else ""

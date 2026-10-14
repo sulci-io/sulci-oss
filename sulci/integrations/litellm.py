@@ -68,6 +68,7 @@ except ImportError as _ll_err:  # pragma: no cover
     ) from _ll_err
 
 from sulci import Cache
+from sulci.sessions.errors import SulciSessionError
 
 __all__ = ["SulciLiteLLMCache", "install"]
 
@@ -230,6 +231,8 @@ class SulciLiteLLMCache(BaseCache):
                 tenant_id=self._tenant(**kwargs),
                 session_id=self._session(**kwargs),
             )
+        except SulciSessionError as exc:
+            logger.warning("sulci set_cache stored the value; the conversation turn was not recorded: %s", exc)
         except Exception as exc:
             logger.warning("sulci set_cache failed: %s", exc)
 

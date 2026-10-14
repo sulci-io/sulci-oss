@@ -221,6 +221,7 @@ def build_server(
             tenant_id: Optional[str] = None,
         ) -> str:
             """Store `query` -> `response`. Returns a JSON object."""
+            from sulci.sessions.errors import SulciSessionError
             try:
                 cache.set(
                     query,
@@ -228,6 +229,10 @@ def build_server(
                     tenant_id=_tenant(tenant_id),
                     session_id=session_id,
                 )
+            except SulciSessionError as exc:
+                # 0.10.0: the entry IS stored; only the conversation turn is missing.
+                logger.warning("sulci cache_store: %s", exc)
+                return json.dumps({"stored": True, "session_recorded": False, "error": str(exc)})
             except Exception as exc:
                 logger.warning("sulci cache_store failed: %s", exc)
                 return json.dumps({"stored": False, "error": str(exc)})

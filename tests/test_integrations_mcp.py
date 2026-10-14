@@ -184,6 +184,21 @@ def test_stats_failure_is_reported_not_raised():
     assert "error" in _call(build_server(_Exploding()), "cache_stats")
 
 
+def test_a_session_store_failure_reports_the_entry_as_stored(tmp_path, fake_embedder):
+    """0.10.0: Cache.set raises SulciSessionError AFTER the entry is stored; cache_store says so."""
+    from sulci.sessions import InMemorySessionStore
+
+    class _DownStore(InMemorySessionStore):
+        def append(self, *a, **k):
+            raise ConnectionError("session store down")
+
+    c = Cache(backend="sqlite", db_path=str(tmp_path / "mcp-s"), embedding_model=fake_embedder,
+              threshold=0.85, telemetry=False, context_window=4, session_store=_DownStore())
+    out = _call(build_server(c), "cache_store", query=QUERY, response=RESP, session_id="s1")
+    assert out["stored"] is True and out["session_recorded"] is False and "WAS stored" in out["error"]
+    assert c.get(QUERY)[0] == RESP
+
+
 # ── constructor guards ───────────────────────────────────────────────────
 def test_cache_and_kwargs_are_mutually_exclusive(cache):
     with pytest.raises(TypeError):

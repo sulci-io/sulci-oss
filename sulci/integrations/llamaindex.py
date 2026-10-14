@@ -52,6 +52,8 @@ from typing import Any, Optional, Sequence
 
 logger = logging.getLogger(__name__)
 
+from sulci.sessions.errors import SulciSessionError   # 0.10.0 — imports nothing from llama_index
+
 # llama-index-core is optional — guard the import clearly.
 try:
     from llama_index.core.base.llms.types import (
@@ -268,6 +270,9 @@ class SulciCacheLLM(LLM):
         try:
             self._get_cache().set(prompt, result.text, session_id=session_id)
             logger.debug("sulci SET  prompt=%r", prompt[:60])
+        except SulciSessionError:
+            logger.warning("sulci complete() stored the response; the conversation turn was not recorded",
+                           exc_info=True)
         except Exception:
             logger.warning("sulci complete() store error — skipping", exc_info=True)
 
@@ -310,6 +315,9 @@ class SulciCacheLLM(LLM):
             if text:
                 self._get_cache().set(key, text, session_id=session_id)
                 logger.debug("sulci SET  key=%r", key[:60])
+        except SulciSessionError:
+            logger.warning("sulci chat() stored the response; the conversation turn was not recorded",
+                           exc_info=True)
         except Exception:
             logger.warning("sulci chat() store error — skipping", exc_info=True)
 

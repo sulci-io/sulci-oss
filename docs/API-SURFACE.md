@@ -148,6 +148,14 @@ shared scope and nothing else (before, only Qdrant and the managed backend filte
 `tenant_id` and `user_id` (the table above shows them without), and `clear()` removes every session from any
 session store. `context_summary()` with a `tenant_id` or `user_id` but no `session_id` raises `TypeError`.
 
+📌 0.10.0: with an injected `session_store`, a failed write raises `sulci.sessions.SulciSessionError` — from
+`set` (the entry **was** stored; only the conversation turn is missing) and from `clear_context` (the history
+was **not** cleared). A failed read logs a WARNING on the `sulci` logger and continues without history (`get`,
+`get_context`, `context_summary`). `cached_call` never raises it: it logs a WARNING and returns the response.
+`clear()` raises it too when the store fails after the entries are cleared (0.9.3 let the store's own exception
+through). `AsyncCache` behaves the same. Only a user turn with an embedding reaches an injected store; assistant
+and text-only turns stay in the window. Through 0.9.3 every one of these failures except `clear()`'s was silent.
+
 📌 0.9.3: `get` and `set` raise `ValueError` for a `tenant_id`, or a `user_id` when `personalized=True`,
 that is `"global"` or falsy but not `None` (`""`, `0`, ...) — all of them named the shared scope. Pass
 `None` for no tenant or user.

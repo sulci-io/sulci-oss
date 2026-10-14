@@ -346,3 +346,28 @@ class TestStats:
 
     def test_repr_contains_hit_rate(self, cache):
         assert "hit_rate" in repr(cache)
+
+
+
+def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, caplog):
+    """0.10.0: Cache.set raises SulciSessionError after the response is stored; complete() and chat() say so."""
+    import logging
+    from sulci.sessions import InMemorySessionStore
+    from sulci import Cache
+
+    class _DownStore(InMemorySessionStore):
+        def append(self, *a, **k):
+            raise ConnectionError("session store down")
+
+    llm = SulciCacheLLM(llm=MockLLM())
+    # SulciCacheLLM's constructor does not forward session_store, so the Cache is handed in directly.
+    llm._sulci_cache = Cache(backend="sqlite", db_path=str(tmp_path / "li-s"), threshold=0.85,
+                             embedding_model=fake_embedder, telemetry=False, context_window=4,
+                             context_threshold=0.85, session_store=_DownStore())
+    with caplog.at_level(logging.WARNING):
+        assert llm.complete(PROMPT, session_id="s1").text == RESPONSE
+        llm.chat([ChatMessage(role=MessageRole.USER, content="another question")], session_id="s1")
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("complete() stored the response" in m for m in messages)
+    assert any("chat() stored the response" in m for m in messages)
+    assert not any("store error" in m for m in messages)
