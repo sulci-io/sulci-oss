@@ -142,6 +142,10 @@ Redis, FAISS and Milvus now store `tenant_id`. All of them declare `ENFORCES_TEN
 conformance suite's `TestTenantIsolation` runs against each one installed where it runs. The table above
 describes 0.9.2.
 
+📌 0.10.0: Milvus files each entry under one scope key — `sulci.sessions.scope.user_scope(tenant_id, user_id)`,
+built from SHA-256 digests (`t-:u-:` is the shared scope) — and filters on that key alone; it no longer stores or
+filters on the ids themselves. Entries written before 0.10.0 are misses.
+
 The conformance test suite (`tests/compat/`) automatically runs the
 `TestTenantIsolation` group only against backends declaring
 `ENFORCES_TENANT_ISOLATION = True`. Custom backends that handle

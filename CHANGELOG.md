@@ -10,6 +10,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **⚠️ Breaking: `MilvusBackend` filters on a scope key, and entries stored before 0.10.0 are misses.** Each entry
+  now carries a `scope` field — the same digest-based key `sulci.sessions.scope.user_scope(tenant_id, user_id)`
+  gives sessions — and a lookup filters on that key alone, so no caller-supplied text reaches a Milvus filter
+  expression. Through 0.9.3 the filter quoted the ids themselves, and on milvus-lite 2.5.1 (measured beside
+  pymilvus 2.6.12 and with 3.0.2) a `tenant_id` or `user_id` holding a newline, carriage return or tab never found
+  its own entries: no escape form of those characters matched; milvus-lite 3.2.2 matched them. The raw ids are no longer stored. An entry written before
+  0.10.0 has no `scope` field, so it is never returned and stays in the collection until `clear()`; storing the
+  answer again adds a new entry. A collection with a fixed schema and no `scope` field (one sulci did not create)
+  is refused with a `RuntimeError` saying so. Called directly, the backend treats `"global"` as an id like any
+  other, not as the shared scope (`Cache` refuses it, as in 0.9.3).
+
 - **⚠️ Breaking: an injected session store's failures are no longer silent.** With `Cache(session_store=...)`,
   `set` and `clear_context` raise the new `sulci.sessions.SulciSessionError` when the store fails (its own
   exception is `__cause__`). `set` raises only after the entry is stored and its event emitted — the message says

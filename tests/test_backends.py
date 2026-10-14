@@ -385,23 +385,52 @@ class TestMilvusBackend:
         "o'neil", "line\nbreak", "cr\rx", "tab\tx", "nul\x00x", "uni \u00fc", "",
     ]
 
-    def test_filter_literal_is_a_single_quoted_string(self):
-        """Runs without pymilvus: the expression must not depend on the value."""
-        from sulci.backends.milvus import _filter_literal
-        for value in self.SCOPE_VALUES:
-            lit = _filter_literal(value)
-            assert lit[0] == lit[-1] == '"'
-            body = lit[1:-1]
-            # Every quote and backslash in the body is escaped, so the
-            # literal cannot close early and nothing after it is parsed.
-            i = 0
-            while i < len(body):
-                if body[i] == "\\":
-                    assert body[i + 1] in '\\"nrt'
-                    i += 2
-                    continue
-                assert body[i] not in '"\n\r'
-                i += 1
+    def test_no_caller_text_reaches_the_filter(self):
+        """Runs without pymilvus. 0.10.0: the filter names a scope key of digests, whatever the ids hold."""
+        import re
+        from sulci.backends.milvus import _scope_key
+        keys = set()
+        for tenant in (None, "t1", 't" or "1"=="1'):
+            for value in self.SCOPE_VALUES:
+                key = _scope_key(tenant, value)
+                assert re.fullmatch(r"t(-|[0-9a-f]{32}):u(-|[0-9a-f]{32}):", key), (tenant, value)
+                keys.add(key)
+        # one key per (tenant, value): the ten ids, and "" naming the shared user
+        assert len(keys) == 3 * len(self.SCOPE_VALUES)
+        assert _scope_key(None, None) == _scope_key("", "")
+
+    def test_global_is_an_id_not_the_shared_scope(self):
+        """Runs without pymilvus. Cache refuses "global"; a direct caller of the backend gets a scope of its own."""
+        from sulci.backends.milvus import _scope_key
+        assert _scope_key(None, "global") != _scope_key(None, None)
+        assert _scope_key("global", None) != _scope_key(None, None)
+
+    @skip_milvus
+    def test_a_fixed_schema_without_a_scope_field_is_refused_clearly(self, tmp_path):
+        import pytest
+        from pymilvus import MilvusClient, DataType
+        from sulci.backends.milvus import MilvusBackend
+        b = MilvusBackend(db_path=str(tmp_path / "milvus_fixed.db"))
+        schema = MilvusClient.create_schema(auto_id=True, enable_dynamic_field=False)
+        schema.add_field("id", DataType.INT64, is_primary=True)
+        schema.add_field("vector", DataType.FLOAT_VECTOR, dim=2)
+        index = b._client.prepare_index_params()
+        index.add_index("vector", index_type="FLAT", metric_type="COSINE")
+        b._client.create_collection(b.COLLECTION, schema=schema, index_params=index)
+        with pytest.raises(RuntimeError, match="fixed schema without a 'scope' field"):
+            b.store("k", "q", "r", [1.0, 0.0])
+
+    @skip_milvus
+    def test_an_entry_written_before_the_scope_key_is_a_miss(self, tmp_path):
+        """0.10.0: a row without a "scope" field (as 0.9.3 wrote them) matches no lookup — not an error."""
+        from sulci.backends.milvus import MilvusBackend
+        b = MilvusBackend(db_path=str(tmp_path / "milvus_old.db"))
+        vec = [1.0, 0.0]
+        b.store("k", "q", "new", vec, tenant_id="t1", user_id="alice")
+        b._client.insert(b.COLLECTION, [{"vector": vec, "query": "q", "response": "old",
+                                         "tenant_id": "t1", "user_id": "bob", "expires": 0.0}])
+        assert b.search(vec, 0.85, tenant_id="t1", user_id="bob")[0] is None
+        assert b.search(vec, 0.85, tenant_id="t1", user_id="alice")[0] == "new"
 
     @skip_milvus
     def test_user_scope_matches_exactly(self, tmp_path):
@@ -413,4 +442,6 @@ class TestMilvusBackend:
 
         for i, value in enumerate(self.SCOPE_VALUES[:-1]):
             assert b.search(vec, 0.85, user_id=value)[0] == f"resp-{i}", value
+            # 0.10.0: and within its tenant — the same user id under another tenant is someone else
+            assert b.search(vec, 0.85, tenant_id="t2", user_id=value)[0] is None, value
         assert b.search(vec, 0.85, user_id="nobody")[0] is None

@@ -192,21 +192,25 @@ def _milvus():
     return b
 
 
-def test_milvus_stores_the_tenant_and_filters_on_both():
+def test_milvus_files_and_filters_on_the_scope_key():
+    """0.10.0: each entry carries the key of its (tenant, user); a lookup filters on its own key alone."""
+    from sulci.sessions.scope import user_scope
     b = _milvus()
     b.store("k", Q, "A", VEC, tenant_id="t1", user_id="alice")
     b.store("k", Q, "B", VEC)
-    assert [(r["tenant_id"], r["user_id"]) for r in b._client.rows] == [("t1", "alice"), ("global", "global")]
+    assert [r["scope"] for r in b._client.rows] == [user_scope("t1", "alice"), user_scope(None, None)]
+    assert not any("tenant_id" in r or "user_id" in r for r in b._client.rows)     # no raw ids stored
     b.search(VEC, 0.5, tenant_id="t1", user_id="alice")
     b.search(VEC, 0.5)
-    assert b._client.filters == ['tenant_id == "t1" and user_id == "alice"',
-                                 'tenant_id == "global" and user_id == "global"']
+    assert b._client.filters == [f'scope == "{user_scope("t1", "alice")}"', f'scope == "{user_scope(None, None)}"']
 
 
-def test_milvus_filter_values_stay_quoted():
+def test_milvus_filter_holds_no_caller_text():
     b = _milvus()
-    b.search(VEC, 0.5, tenant_id='t" or "1"=="1', user_id="a\\b")
-    assert b._client.filters == ['tenant_id == "t\\" or \\"1\\"==\\"1" and user_id == "a\\\\b"']
+    b.search(VEC, 0.5, tenant_id='t" or "1"=="1', user_id="a\\b\nc")
+    (f,) = b._client.filters
+    assert '"1"' not in f and "\\" not in f and "\n" not in f
+    assert f.count('"') == 2
 
 
 # ── every shipped backend now declares that it isolates ────────────────────────
