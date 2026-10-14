@@ -69,6 +69,13 @@ Docs only; no library code changed. Every statement re-read against the released
   deprecated. Both pins go on Python 3.10+ when milvus-lite 3.x can be used again; on 3.9 they stay. ⚠️ Run one
   Milvus Lite 2.x process per user at a time: each shares `~/.cache/milvus`, and two starting or stopping together
   failed with "Mmap manager has not been init" (measured).
+- **`MilvusBackend` retries a Milvus Lite server that failed to come up.** milvus-lite 2.5.1 counts a server as
+  started once its process has lived half a second, not once it serves; in CI (macOS, Python 3.12) the first server
+  of a job was gone when pymilvus connected, and `MilvusBackend(db_path=...)` raised. A local server that started
+  but could not be reached is now tried again up to twice, after stopping what milvus-lite left for that file; if
+  every attempt fails, the last error is raised. A start that failed outright — for example a file another process
+  has open — is not retried (on 2.5.1 a retry started a second server on the same file). A Milvus server (`uri=`)
+  is unaffected.
 - **`RedisSessionStore`: an index no longer outlives every session it lists.** The per-tenant and per-user indexes
   (0.9.3) were pruned only by later writes to the same index, so the index of a user who never wrote again kept its
   expired sessions forever (measured on a real Redis: TTL -1, the expired session still listed). Each index key now

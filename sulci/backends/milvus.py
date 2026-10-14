@@ -11,6 +11,7 @@ Latency  : 5–20 ms embedded, <5 ms Zilliz Cloud
 """
 from __future__ import annotations
 import re
+import sys
 import time
 from typing import Optional
 
@@ -37,6 +38,47 @@ def _scope_key(tenant_id: Optional[str], user_id: Optional[str]) -> str:
     return key
 
 
+#: 0.10.0. A local Milvus Lite file is opened by starting a milvus-lite server, and milvus-lite 2.5.1 counts a start
+#: as good once the server process has lived 0.5 s — not once it serves. Measured in CI (macOS, Python 3.12, a cold
+#: runner): the first server of the job was gone when pymilvus connected ("…milvus_test.db.sock … No such file or
+#: directory"), and MilvusBackend(db_path=...) raised. A server that started but could not be reached is retried,
+#: each time after stopping what milvus-lite left registered for that file; the last error is raised if every
+#: attempt fails. A start that failed outright (ConnectionConfigException) is not, nor is a Milvus server (uri=).
+_LITE_START_ATTEMPTS = 3
+_LITE_RETRY_PAUSE_SECONDS = 0.5
+
+
+def _release_lite_server(db_path: str) -> None:
+    """Stop the milvus-lite server registered for db_path, if milvus-lite registered one (2.x and 3.x both name it
+    server_manager_instance.release_server)."""
+    manager  = sys.modules.get("milvus_lite.server_manager")
+    instance = getattr(manager, "server_manager_instance", None)
+    release  = getattr(instance, "release_server", None)
+    if release is None:
+        return
+    try:
+        release(db_path)
+    except Exception:
+        pass                                    # nothing to stop, or already stopped: the next attempt starts afresh
+
+
+def _open_lite(client_cls, db_path: str):
+    from pymilvus.exceptions import ConnectionConfigException, MilvusException
+    for attempt in range(1, _LITE_START_ATTEMPTS + 1):
+        try:
+            return client_cls(db_path)
+        except ConnectionConfigException:
+            # No server was started at all: the file is held by another process, the directory is missing, or the
+            # process exited at once. Not retried — measured on 2.5.1: a retry after "file opened by another
+            # program" started a SECOND server on the same file (2.5.1's failed start deletes the holder's lock).
+            raise
+        except MilvusException:
+            if attempt == _LITE_START_ATTEMPTS:
+                raise
+            _release_lite_server(db_path)
+            time.sleep(_LITE_RETRY_PAUSE_SECONDS * attempt)
+
+
 class MilvusBackend:
     #: True if this backend enforces tenant_id partition isolation.
     #: When True, search() must not return entries with mismatched tenant_id.
@@ -59,7 +101,7 @@ class MilvusBackend:
             )
         self._client = (
             MilvusClient(uri=uri, token=token) if uri
-            else MilvusClient(db_path)
+            else _open_lite(MilvusClient, db_path)       # 0.10.0: a start that failed is retried
         )
         self._ready = False
 

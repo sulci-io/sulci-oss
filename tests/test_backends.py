@@ -429,6 +429,74 @@ class TestMilvusBackend:
         with pytest.raises(RuntimeError, match="fixed schema without a 'scope' field"):
             b.store("k", "q", "r", [1.0, 0.0])
 
+    @staticmethod
+    def _flaky_client(monkeypatch, failures):
+        """A MilvusClient stand-in that fails its first `failures` constructions like a server that did not come
+        up, and records every milvus-lite release."""
+        from pymilvus.exceptions import MilvusException
+        from sulci.backends import milvus as mb
+        calls = {"made": 0, "released": []}
+
+        class _Client:
+            def __init__(self, *a, **k):
+                calls["made"] += 1
+                if calls["made"] <= failures:
+                    raise MilvusException(code=2, message="Fail connecting to server on unix:/tmp/x.sock")
+
+        monkeypatch.setattr("pymilvus.MilvusClient", _Client)
+        monkeypatch.setattr(mb, "_release_lite_server", lambda path: calls["released"].append(path))
+        monkeypatch.setattr(mb.time, "sleep", lambda s: None)
+        return calls
+
+    @skip_milvus
+    def test_a_local_server_that_failed_to_start_is_retried(self, monkeypatch, tmp_path):
+        """0.10.0: measured in CI — milvus-lite 2.5.1's first server on a cold macOS runner was gone when pymilvus
+        connected, and the backend could not be constructed."""
+        from sulci.backends.milvus import MilvusBackend
+        calls = self._flaky_client(monkeypatch, failures=2)
+        db = str(tmp_path / "m.db")
+        MilvusBackend(db_path=db)
+        assert calls["made"] == 3 and calls["released"] == [db, db]
+
+    @skip_milvus
+    def test_a_local_server_that_never_starts_raises_its_error(self, monkeypatch, tmp_path):
+        import pytest
+        from pymilvus.exceptions import MilvusException
+        from sulci.backends.milvus import MilvusBackend, _LITE_START_ATTEMPTS
+        calls = self._flaky_client(monkeypatch, failures=99)
+        with pytest.raises(MilvusException, match="Fail connecting"):
+            MilvusBackend(db_path=str(tmp_path / "m.db"))
+        assert calls["made"] == _LITE_START_ATTEMPTS
+
+    @skip_milvus
+    def test_a_server_that_was_never_started_is_not_retried(self, monkeypatch, tmp_path):
+        """A file held by another process: retrying on milvus-lite 2.5.1 started a second server on the same file."""
+        import pytest
+        from pymilvus.exceptions import ConnectionConfigException
+        from sulci.backends import milvus as mb
+        calls = {"made": 0, "released": []}
+
+        class _Client:
+            def __init__(self, *a, **k):
+                calls["made"] += 1
+                raise ConnectionConfigException(message="Open local milvus failed")
+
+        monkeypatch.setattr("pymilvus.MilvusClient", _Client)
+        monkeypatch.setattr(mb, "_release_lite_server", lambda path: calls["released"].append(path))
+        with pytest.raises(ConnectionConfigException):
+            mb.MilvusBackend(db_path=str(tmp_path / "m.db"))
+        assert calls == {"made": 1, "released": []}
+
+    @skip_milvus
+    def test_a_milvus_server_uri_is_not_retried_here(self, monkeypatch):
+        import pytest
+        from pymilvus.exceptions import MilvusException
+        from sulci.backends.milvus import MilvusBackend
+        calls = self._flaky_client(monkeypatch, failures=99)
+        with pytest.raises(MilvusException):
+            MilvusBackend(uri="http://127.0.0.1:1")
+        assert calls["made"] == 1 and calls["released"] == []
+
     @skip_milvus
     def test_a_new_backend_finds_what_an_earlier_one_stored(self, tmp_path):
         """0.10.0: a lookup opens the existing collection; through 0.9.3 it missed until this instance stored."""
