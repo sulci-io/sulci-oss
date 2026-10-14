@@ -20,22 +20,19 @@
 #    expire six days before the cache does. That is usually what you want in
 #    CI — set --ttl-seconds explicitly if it is not.
 #
-# ⚠️ TENANT ISOLATION IS NOT ENFORCED ON SQLITE. Only the qdrant backend sets
-#    ENFORCES_TENANT_ISOLATION = True. `--tenant-id` below is accepted and
-#    IGNORED by the sqlite backend, and sulci will warn about it on startup.
-#    It is present so the intent is recorded and so this workflow is correct
-#    the day sqlite enforces — NOT because it protects you today. If you need
-#    real per-SHA isolation right now, use backend=qdrant, or give each SHA
-#    ✅ 0.9.3: superseded — sqlite (and every other backend) enforces --tenant-id, and the startup warning
-#    is gone; the paragraph around this line describes 0.9.2.
-#    its own db_path under the cache-memory mount (see the commented line).
+# ✅ --tenant-id IS ENFORCED (sulci 0.9.3+). Every backend, sqlite included,
+#    reads only the tenant a lookup names. Before 0.9.3 sqlite accepted
+#    --tenant-id and ignored it (with a startup warning); on 0.9.2 or older,
+#    give each SHA its own db_path under the cache-memory mount instead (see
+#    the commented line). The tenant id must not be "global" or empty — the
+#    server refuses those when it is built.
 #
 # ⚠️ AND THE CORRECTNESS PROBLEM THAT NO CONFIGURATION SOLVES. A cached answer
 #    is keyed on the question. The repository is not in the question. A cached
 #    "the auth module looks fine" from three commits ago is a confidently
 #    wrong review of new code. For anything whose answer depends on the tree,
-#    scope by commit SHA — and read the sqlite caveat above before assuming
-#    that scoping is doing anything.
+#    scope by commit SHA. The --tenant-id below scopes by REPOSITORY, not by
+#    commit: use the per-SHA db_path line, or a tenant id that includes the SHA.
 
 on:
   workflow_dispatch:
@@ -65,8 +62,9 @@ mcp-servers:
     args:
       - "--backend=sqlite"
       - "--db-path=/tmp/gh-aw/cache-memory/sulci_db"
-      # Per-SHA store. Uncomment INSTEAD of --tenant-id for isolation that
-      # actually holds on sqlite — separate files cannot bleed into each other.
+      # Per-SHA store: one file per commit, so nothing crosses commits. Use it
+      # instead of the shared db-path above if answers depend on the tree (and
+      # it is the only isolation that holds on sulci 0.9.2 or older).
       # - "--db-path=/tmp/gh-aw/cache-memory/sulci_${{ github.sha }}"
       - "--tenant-id=${{ github.repository }}"
       - "--context-window=4"

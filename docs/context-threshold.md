@@ -68,6 +68,15 @@ recoverable from the follow-up's own text.
 
 ## Remote transport
 
-`context_threshold` is a self-hosted parameter. On the cloud transport the
-gateway performs the blending and applies its own threshold, so a value set here
-has no effect; `Cache.get` warns once rather than accepting it silently.
+`context_threshold` is a self-hosted parameter. On the cloud transport
+(`backend="sulci"`) the gateway performs the blending, so a value set here has no
+effect; `Cache.get` warns once rather than accepting it silently.
+
+What the gateway does compare against (0.9.3, read from
+`sulci/backends/cloud.py` `remote_get` and the platform's cache route): the SDK
+sends the lookup's effective `threshold` — the per-call value, else the `Cache`'s
+`threshold` (default `0.85`) — and the gateway uses that one number for every
+lookup, blended or not. A blended lookup on the managed tier therefore has no
+separate threshold either. How much history the gateway blends is its
+`context_window` (the tenant setting; 0, the default, is stateless); the Python
+SDK does not send one.

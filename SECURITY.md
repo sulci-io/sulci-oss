@@ -18,12 +18,15 @@ patch version on the current release line, and older versions are **not**
 backported. If you are affected by a security issue, the fix will be to
 upgrade to the latest release.
 
-| Version         | Supported                              |
-| --------------- | -------------------------------------- |
-| Latest `0.7.x`  | ✅ Security fixes                       |
-| `< 0.7.0`       | ❌ Please upgrade to the latest release |
+| Version          | Supported                              |
+| ---------------- | -------------------------------------- |
+| Latest `0.9.x` (0.9.3 or later) | ✅ Security fixes        |
+| `< 0.9.3`        | ❌ Please upgrade to the latest release |
 
-📌 **Since 0.9.3 (October 2026) the table above is out of date:** only the latest `0.9.x` release — 0.9.3 or later — receives security fixes. Every earlier version, `0.7.x` and `0.8.x` included, is unsupported; upgrade.
+0.9.2 and 0.9.3 each fixed security issues in the self-hosted backends, the
+managed backend's erasure and the session stores (see their *Security* entries
+in [`CHANGELOG.md`](CHANGELOG.md)); every release before 0.9.3, `0.7.x` and
+`0.8.x` included, is unsupported.
 
 The library is tested and supported on **Python 3.9–3.12** across Linux,
 macOS, and Windows. Reports against unsupported Python versions may be

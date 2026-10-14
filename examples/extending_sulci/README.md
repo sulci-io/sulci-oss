@@ -26,5 +26,7 @@ infrastructure, and verify against sulci's conformance test suite.
 3. Run `pytest tests/compat/` and confirm the conformance suite passes.
 
 See `docs/protocols.md` for the full protocol contract, and
-`docs/multi_tenancy_and_isolation.md` for the tenant isolation guarantees
-your backend must satisfy if it sets `ENFORCES_TENANT_ISOLATION = True`.
+`docs/multi_tenancy_and_isolation.md` for the tenant and user isolation
+guarantees your backend must satisfy. Every shipped backend sets
+`ENFORCES_TENANT_ISOLATION = True` since 0.9.3, and so does `InMemoryBackend`;
+a new backend is expected to as well.
