@@ -285,13 +285,13 @@ not filtered by it. `milvus` does not store or filter on `tenant_id`.
 - Docs now say that `user_id` is ignored unless `personalized=True`, and that
   a lookup without `user_id` is unscoped on every backend except `qdrant`.
 
-### Also in this release (added 2026-10-14 from `git log v0.9.1..v0.9.2`)
-
-- `NOTICE` states that U.S. Patent Application No. 64/018,452 is assigned to
-  Kathiravan Sengodan, not to Sulci Labs Inc., matching the served pages (`e4d3dd5`, #156).
-- Tests and CI only: a denied device code ends `connect()` on the next poll in the
-  tests; each test is bounded by `pytest-timeout`; Redis is probed once; the
-  v0.9.0 integration install is guarded on code changes (#158).
+> 📌 **Added 2026-10-14 (GA doc refresh), beside this record:** also in this release, read from `git log v0.9.1..v0.9.2` — not in the entry as published.
+>
+> - `NOTICE` states that U.S. Patent Application No. 64/018,452 is assigned to
+>   Kathiravan Sengodan, not to Sulci Labs Inc., matching the served pages (`e4d3dd5`, #156).
+> - Tests and CI only: a denied device code ends `connect()` on the next poll in the
+>   tests; each test is bounded by `pytest-timeout`; Redis is probed once; the
+>   v0.9.0 integration install is guarded on code changes (#158).
 
 ### Known limitations
 
@@ -366,22 +366,21 @@ defaults in force, so upgrading does not alter an existing deployment. There is
 a test asserting exactly this, because it is the property that makes the
 release safe to ship.
 
-### Also in this release (added 2026-10-14 from `git log v0.9.0..v0.9.1`)
-
-- **Packaging:** the `litellm` extra and `sulci[all]` cap `litellm<1.97.0` —
-  1.97.0 fails `Message` forward-ref resolution on Python 3.10
-  (BerriAI/litellm#36384) (`5dd0f16`).
-- **Copyright:** copyright, licence and trademark attribution move to Sulci Labs
-  Inc. (`9245a8a`, #153).
-- **Benchmark:** `--agent` honours `--seed` and defaults to seed 42 (#145); the
-  four seeded MiniLM context draws are committed under
-  `benchmark/results/minilm/` (#154); loose output beside pinned draws is refused
-  (#150).
-- **Release tooling and CI:** the publish workflow's `release-guard` fails when the
-  tag disagrees with `pyproject.toml` (#144); a CI job installs `sulci[all]` (#149);
-  `scripts/check_agent_draws.py` (#147) and recursive suite discovery for the CI
-  coverage check (#135).
-
+> 📌 **Added 2026-10-14 (GA doc refresh), beside this record:** also in this release, read from `git log v0.9.0..v0.9.1` — not in the entry as published.
+>
+> - **Packaging:** the `litellm` extra and `sulci[all]` cap `litellm<1.97.0` —
+>   1.97.0 fails `Message` forward-ref resolution on Python 3.10
+>   (BerriAI/litellm#36384) (`5dd0f16`).
+> - **Copyright:** copyright, licence and trademark attribution move to Sulci Labs
+>   Inc. (`9245a8a`, #153).
+> - **Benchmark:** `--agent` honours `--seed` and defaults to seed 42 (#145); the
+>   four seeded MiniLM context draws are committed under
+>   `benchmark/results/minilm/` (#154); loose output beside pinned draws is refused
+>   (#150).
+> - **Release tooling and CI:** the publish workflow's `release-guard` fails when the
+>   tag disagrees with `pyproject.toml` (#144); a CI job installs `sulci[all]` (#149);
+>   `scripts/check_agent_draws.py` (#147) and recursive suite discovery for the CI
+>   coverage check (#135).
 
 ## [0.9.0] — 2026-08-13 — three new integration surfaces, and the figures that ship with them
 

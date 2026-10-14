@@ -138,10 +138,12 @@ pip install openai              # for OpenAI
 
 ## LangChain Integration
 
-The LangChain adapter supports context-aware lookup: with `context_window > 0`
-it blends prior conversation turns into the similarity lookup rather than
-matching the current prompt in isolation (see *Context-Aware Blending* below for
-what that does and does not do).
+The LangChain adapter is a stateless semantic cache. LangChain's cache interface
+carries no conversation id, so `SulciCache` calls `get(prompt)` / `set(prompt, …)`
+without a `session_id` (`sulci/integrations/langchain.py`) and `context_window`
+has no effect there. For context-aware lookup, use the LlamaIndex adapter with a
+per-call `session_id=`, or call `Cache.cached_call(..., session_id=...)` directly
+(see *Context-Aware Blending* below for what blending does and does not do).
 
 ```python
 from langchain_core.globals import set_llm_cache
@@ -149,9 +151,6 @@ from sulci.integrations.langchain import SulciCache
 
 # Stateless semantic — drop-in for GPTCache
 set_llm_cache(SulciCache(backend="sqlite"))
-
-# Context-aware — chatbot / agent
-set_llm_cache(SulciCache(backend="sqlite", context_window=4, threshold=0.75))
 
 # Managed Sulci Cloud
 set_llm_cache(SulciCache(backend="sulci", api_key="sk-sulci-..."))
@@ -178,13 +177,14 @@ Settings.llm = SulciCacheLLM(
     threshold = 0.85,
 )
 
-# Context-aware — RAG chatbot / agent
+# Context-aware — RAG chatbot / agent: pass session_id on each call
 Settings.llm = SulciCacheLLM(
     llm            = OpenAI(model="gpt-4o"),
     backend        = "sqlite",
     threshold      = 0.75,
     context_window = 4,
 )
+Settings.llm.complete("How do I fix it?", session_id="conv-42")
 
 # Managed Sulci Cloud
 Settings.llm = SulciCacheLLM(
@@ -204,7 +204,7 @@ from sulci.integrations.langchain import SulciCache
 from llama_index.llms.langchain import LangChainLLM
 from langchain_openai import ChatOpenAI
 
-set_llm_cache(SulciCache(backend="sqlite", context_window=4))
+set_llm_cache(SulciCache(backend="sqlite"))   # stateless: no session id on this path
 
 from llama_index.core import Settings
 Settings.llm = LangChainLLM(llm=ChatOpenAI(model="gpt-4o"))
@@ -275,8 +275,7 @@ and fabricating the original counts would corrupt billing reconciliation.
 
 ## LiteLLM
 
-Sulci as the cache layer inside a LiteLLM deployment, giving it the
-context-aware cache it does not have.
+Sulci as the cache layer inside a LiteLLM deployment.
 
 ```bash
 pip install "sulci[sqlite,litellm]"
