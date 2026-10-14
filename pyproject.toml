@@ -45,7 +45,17 @@ qdrant   = ["qdrant-client>=1.7.0","sentence-transformers>=2.2.0"]
 faiss    = ["faiss-cpu>=1.7.4",    "sentence-transformers>=2.2.0"]
 redis    = ["redis>=5.0.0",        "redisvl>=0.1.0", "sentence-transformers>=2.2.0"]
 sqlite   = ["sentence-transformers>=2.2.0"]
-milvus   = ["pymilvus>=2.3.0",     "sentence-transformers>=2.2.0"]
+# 0.10.0: milvus-lite is named explicitly. pymilvus 3 no longer installs it, so "sulci[milvus]" gave a backend
+# whose default (a local file) failed at construction: "milvus-lite is required for local database connections".
+# Not on Windows (2.x has no Windows build): use uri= there. Below 3: milvus-lite 3.2.2, a rewrite, killed the
+# process with a bus error when a collection was dropped while its own background thread built an index (measured
+# on macOS, in sulci's test suite), and could not search a collection another process wrote until it was loaded.
+# milvus-lite 2.x imports pkg_resources, which setuptools 82 removed. On Python 3.9 with grpcio 1.80 (the newest
+# built for 3.9) milvus-lite 2.5.1 failed to start about one time in eight ("Open local milvus failed"); 1.75-1.78
+# never did. Measured 2026-10-14.
+milvus   = ["pymilvus>=2.4.2", "milvus-lite>=2.4.1,<3; sys_platform != 'win32'",
+            "setuptools<82; sys_platform != 'win32'",
+            "grpcio<1.80; python_version < '3.10' and sys_platform != 'win32'", "sentence-transformers>=2.2.0"]
 openai   = ["openai>=1.0.0"]
 cloud    = ["httpx>=0.27.0"]  # no-op since v0.6.3 (httpx is now mandatory); kept for back-compat
 langchain = ["langchain-core>=0.1.0"]
@@ -73,7 +83,10 @@ all      = [
     "faiss-cpu>=1.7.4",
     "redis>=5.0.0",
     "redisvl>=0.1.0",
-    "pymilvus>=2.3.0",
+    "pymilvus>=2.4.2",
+    "milvus-lite>=2.4.1,<3; sys_platform != 'win32'",
+    "setuptools<82; sys_platform != 'win32'",
+    "grpcio<1.80; python_version < '3.10' and sys_platform != 'win32'",
     "sentence-transformers>=2.2.0",
     "openai>=1.0.0",
     "httpx>=0.27.0",

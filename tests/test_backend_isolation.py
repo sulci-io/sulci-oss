@@ -213,6 +213,40 @@ def test_milvus_filter_holds_no_caller_text():
     assert f.count('"') == 2
 
 
+class _LoadStateClient(_MilvusClient):
+    """A recorded client for an EXISTING collection in a given load state."""
+    def __init__(self, state):
+        super().__init__()
+        self.state, self.loaded = state, []
+
+    def has_collection(self, name):
+        return True
+
+    def describe_collection(self, name):
+        return {"fields": [{"name": "id"}, {"name": "vector"}], "enable_dynamic_field": True}
+
+    def get_load_state(self, name):
+        class _State:
+            def __init__(self, name):
+                self.name = name
+        return {"state": _State(self.state)}
+
+    def load_collection(self, name):
+        self.loaded.append(name)
+
+
+@pytest.mark.parametrize("state, loads", [("Loaded", False), ("NotLoad", True), ("Loading", True)])
+def test_milvus_loads_an_existing_collection_unless_it_is_loaded(state, loads):
+    """0.10.0: a Milvus server refuses to search a collection that is not loaded; loading one that is needs a
+    privilege a read-only role may lack. Runs without pymilvus."""
+    from sulci.backends.milvus import MilvusBackend
+    b = MilvusBackend.__new__(MilvusBackend)
+    b._client, b._ready = _LoadStateClient(state), False
+    b.search(VEC, 0.5)
+    assert b._client.loaded == (["sulci"] if loads else [])
+    assert len(b._client.filters) == 1                 # and the lookup ran
+
+
 # ── every shipped backend now declares that it isolates ────────────────────────
 @pytest.mark.parametrize("module, cls", [("sqlite", "SQLiteBackend"), ("chroma", "ChromaBackend"),
                                          ("faiss", "FAISSBackend"), ("redis", "RedisBackend"),

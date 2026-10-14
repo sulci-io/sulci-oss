@@ -33,7 +33,16 @@ skip_chroma  = pytest.mark.skipif(not has_package("chromadb"),         reason="c
 skip_qdrant  = pytest.mark.skipif(not has_package("qdrant_client"),     reason="qdrant-client not installed")
 skip_faiss   = pytest.mark.skipif(not has_package("faiss"),             reason="faiss-cpu not installed")
 skip_redis   = pytest.mark.skipif(not has_package("redis"),             reason="redis not installed")
-skip_milvus  = pytest.mark.skipif(not has_package("pymilvus"),          reason="pymilvus not installed")
+# 0.10.0: and milvus-lite — the tests open a local file, which pymilvus alone cannot (not installed on Windows).
+# By find_spec, not import: an installed milvus-lite that fails to import (2.5.1 without pkg_resources) must FAIL
+# the tests, not skip them.
+def _installed(name: str) -> bool:
+    import importlib.util
+    return importlib.util.find_spec(name) is not None
+
+
+skip_milvus  = pytest.mark.skipif(not (_installed("pymilvus") and _installed("milvus_lite")),
+                                  reason="pymilvus or milvus-lite not installed")
 
 # ── Shared test logic ─────────────────────────────────────────
 
@@ -419,6 +428,34 @@ class TestMilvusBackend:
         b._client.create_collection(b.COLLECTION, schema=schema, index_params=index)
         with pytest.raises(RuntimeError, match="fixed schema without a 'scope' field"):
             b.store("k", "q", "r", [1.0, 0.0])
+
+    @skip_milvus
+    def test_a_new_backend_finds_what_an_earlier_one_stored(self, tmp_path):
+        """0.10.0: a lookup opens the existing collection; through 0.9.3 it missed until this instance stored."""
+        from sulci.backends.milvus import MilvusBackend
+        db = str(tmp_path / "milvus_reopen.db")
+        first = MilvusBackend(db_path=db)
+        first.store("k", "q", "stored-earlier", [1.0, 0.0], tenant_id="t1", user_id="alice")
+        first._client.close()
+        again = MilvusBackend(db_path=db)
+        assert again.search([1.0, 0.0], 0.85, tenant_id="t1", user_id="alice")[0] == "stored-earlier"
+
+    @skip_milvus
+    def test_a_collection_written_by_another_process_is_loaded(self, tmp_path):
+        """0.10.0: a collection written by another process is found and searched. On milvus-lite 3.2.2 (which the
+        extra now excludes) this raised "in state 'released'" until the backend loaded it; 2.5.1 searches an
+        unloaded collection anyway, so here it guards the open path, and the recorded-client test the load."""
+        import subprocess
+        import sys
+        from sulci.backends.milvus import MilvusBackend
+        db = str(tmp_path / "milvus_other.db")
+        writer = ("from sulci.backends.milvus import MilvusBackend\n"
+                  f"MilvusBackend(db_path={db!r}).store('k', 'q', 'from-the-writer', [1.0, 0.0], tenant_id='t1')\n")
+        subprocess.run([sys.executable, "-c", writer], check=True)
+        b = MilvusBackend(db_path=db)
+        b.store("k2", "q2", "from-the-reader", [0.0, 1.0], tenant_id="t1")
+        assert b.search([1.0, 0.0], 0.85, tenant_id="t1")[0] == "from-the-writer"
+        assert b.search([0.0, 1.0], 0.85, tenant_id="t1")[0] == "from-the-reader"
 
     @skip_milvus
     def test_an_entry_written_before_the_scope_key_is_a_miss(self, tmp_path):

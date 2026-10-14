@@ -63,28 +63,46 @@ class MilvusBackend:
         )
         self._ready = False
 
-    def _ensure(self, dim: int):
+    def _open(self) -> bool:
+        """0.10.0: use the collection if it exists — check its schema and LOAD it — and say whether it does.
+
+        Through 0.9.3 an existing collection was never opened: every lookup missed until this process stored
+        something (``search`` returned at once while ``_ready`` was False). It was never loaded either: a Milvus
+        server — and milvus-lite 3.x, which the extra excludes — refuse to search a collection that is not loaded
+        ("Collection 'sulci' is in state 'released'", measured on milvus-lite 3.2.2 for a collection another
+        process wrote); milvus-lite 2.5.1 searches it anyway. Measured 2026-10-14."""
         if self._ready:
-            return
+            return True
         if not self._client.has_collection(self.COLLECTION):
-            self._client.create_collection(
-                collection_name = self.COLLECTION,
-                dimension       = dim,
-                metric_type     = "COSINE",
-                auto_id         = True,
+            return False
+        # 0.10.0: every entry carries a "scope" field. A collection sulci created has dynamic fields; one created
+        # elsewhere with a fixed schema and no "scope" field would fail every insert and every lookup with a
+        # Milvus error — say what to do instead.
+        info   = self._client.describe_collection(self.COLLECTION)
+        fields = {f.get("name") for f in info.get("fields", [])}
+        if "scope" not in fields and not info.get("enable_dynamic_field", False):
+            raise RuntimeError(
+                f"Milvus collection {self.COLLECTION!r} has a fixed schema without a 'scope' field. sulci "
+                "0.10.0 files every entry under one: drop the collection (MilvusBackend.clear()) and let sulci "
+                "create it, or add a VARCHAR 'scope' field (max_length >= 68) or enable dynamic fields."
             )
-        else:
-            # 0.10.0: every entry carries a "scope" field. A collection sulci created has dynamic fields; one
-            # created elsewhere with a fixed schema and no "scope" field would fail every insert and every lookup
-            # with a Milvus error — say what to do instead.
-            info   = self._client.describe_collection(self.COLLECTION)
-            fields = {f.get("name") for f in info.get("fields", [])}
-            if "scope" not in fields and not info.get("enable_dynamic_field", False):
-                raise RuntimeError(
-                    f"Milvus collection {self.COLLECTION!r} has a fixed schema without a 'scope' field. sulci "
-                    "0.10.0 files every entry under one: drop the collection (MilvusBackend.clear()) and let sulci "
-                    "create it, or add a VARCHAR 'scope' field (max_length >= 68) or enable dynamic fields."
-                )
+        # Load only if it is not loaded: loading needs the Load privilege, which a read-only role on a Milvus
+        # server may lack, and a collection this or another sulci process already loaded needs nothing.
+        state = self._client.get_load_state(self.COLLECTION).get("state")
+        if getattr(state, "name", str(state)) != "Loaded":
+            self._client.load_collection(self.COLLECTION)
+        self._ready = True
+        return True
+
+    def _ensure(self, dim: int):
+        if self._open():
+            return
+        self._client.create_collection(           # created loaded
+            collection_name = self.COLLECTION,
+            dimension       = dim,
+            metric_type     = "COSINE",
+            auto_id         = True,
+        )
         self._ready = True
 
     def store(
@@ -111,7 +129,9 @@ class MilvusBackend:
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None, now: Optional[float] = None,
     ) -> tuple[Optional[str], float]:
-        if not self._ready:
+        # 0.10.0: an existing collection, not only one this process wrote. Until a collection exists, each lookup
+        # asks the server whether it does (one round trip) and misses.
+        if not self._open():
             return None, 0.0
         now     = now or time.time()
         # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope.

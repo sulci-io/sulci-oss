@@ -78,3 +78,25 @@ FakeEmbedder = _FakeEmbedder
 def fake_embedder():
     """Deterministic, offline Embedder. See tests/_fake_embedder.py."""
     return _FakeEmbedder()
+
+
+# 0.10.0: milvus-lite runs one server per database file and keeps it until the process exits —
+# MilvusClient.close() does not stop it. Every Milvus test opens a new file, so one pytest process piled up
+# servers and their descriptors: measured about 2.4 open files per server on Linux with lite 2.5.1 (5.4 with
+# 3.2.2), never released;
+# the "Backend tests" step failed at `ulimit -n 64` on Linux and with "Too many open files" at macOS's default
+# limit. Stop the servers a test started once it ends. Does nothing unless the test imported milvus-lite. So a
+# Milvus backend must not outlive its test (function-scoped fixtures only): after this it cannot reach its server.
+@_pytest.fixture(autouse=True)
+def _release_milvus_lite_servers():
+    yield
+    manager = _sys.modules.get("milvus_lite.server_manager")
+    if manager is None:
+        return
+    instance = getattr(manager, "server_manager_instance", None)
+    if instance is None or not hasattr(instance, "release_all"):
+        import warnings
+        warnings.warn("milvus_lite.server_manager no longer has server_manager_instance.release_all(): "
+                      "milvus-lite servers are not stopped between tests (see tests/conftest.py)")
+        return
+    instance.release_all()

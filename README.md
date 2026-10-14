@@ -94,6 +94,7 @@ pip install "sulci[faiss]"     # FAISS
 pip install "sulci[qdrant]"    # Qdrant
 pip install "sulci[redis]"     # Redis + RedisVL
 pip install "sulci[milvus]"    # Milvus Lite
+# ↑ 0.10.0: Milvus Lite on Linux and macOS. On Windows the extra installs pymilvus only: use MilvusBackend(uri=...).
 pip install sulci              # Sulci Cloud managed backend — no extra needed (httpx is included)
 ```
 

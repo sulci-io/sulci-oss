@@ -53,6 +53,22 @@ Docs only; no library code changed. Every statement re-read against the released
 
 ### Fixed
 
+- **`sulci[milvus]` installs Milvus Lite again.** pymilvus 3 no longer installs `milvus-lite`, so the extra gave a
+  `MilvusBackend` whose default — a local file — failed at construction ("milvus-lite is required for local
+  database connections"). The extra now names `milvus-lite` below 3 (not on Windows: use `uri=` there), keeps
+  `setuptools` below 82 (milvus-lite 2.x imports `pkg_resources`) and requires `pymilvus>=2.4.2`. milvus-lite 3.2.2
+  is excluded: on macOS it killed the process with a bus error when a collection was dropped while its own
+  background thread built an index. CI now installs the extra and runs the Milvus tests on Linux and macOS — it
+  never ran them.
+- **`MilvusBackend` opens an existing collection.** Every lookup missed until the process had stored something.
+  A lookup now opens an existing collection and loads it unless it is loaded: a Milvus server (and milvus-lite 3.x)
+  refuse to search a collection that is not — measured on milvus-lite 3.2.2 for a collection another process wrote.
+- **Python 3.9: `sulci[milvus]` keeps `grpcio` below 1.80.** With grpcio 1.80, milvus-lite 2.5.1 failed to start
+  about one time in eight ("Open local milvus failed"). Installing the extra also caps `setuptools` at 81.x (a
+  downgrade in an environment that has a newer one), and importing milvus-lite 2.x warns that `pkg_resources` is
+  deprecated. Both pins go on Python 3.10+ when milvus-lite 3.x can be used again; on 3.9 they stay. ⚠️ Run one
+  Milvus Lite 2.x process per user at a time: each shares `~/.cache/milvus`, and two starting or stopping together
+  failed with "Mmap manager has not been init" (measured).
 - **`RedisSessionStore`: an index no longer outlives every session it lists.** The per-tenant and per-user indexes
   (0.9.3) were pruned only by later writes to the same index, so the index of a user who never wrote again kept its
   expired sessions forever (measured on a real Redis: TTL -1, the expired session still listed). Each index key now

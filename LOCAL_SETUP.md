@@ -267,6 +267,7 @@ them, expect the second line. The 37 skips in the measured run break down as:
 | 14 | `redis-server not running on localhost:6379` / `RedisBackend: no local construction available` | Start a local Redis (see *Redis-dependent tests* at the end of this guide) |
 | 7 | `faiss-cpu not installed` / `FAISSBackend: no local construction available` | `pip install -e ".[faiss]"` |
 | 7 | `pymilvus not installed` / `MilvusBackend: no local construction available` | `pip install -e ".[milvus]"` (runs locally, no server) |
+| ↑ | 0.10.0: the reason reads `pymilvus or milvus-lite not installed`. The extra installs no milvus-lite on Windows, so there they stay skipped | Run them on Linux or macOS |
 | 5 | `OpenAIEmbedder: no local construction available` | Set `OPENAI_API_KEY` — makes real, billed API calls |
 | 4 | `SQLiteBackend` / `ChromaBackend does not enforce tenant isolation` | *0.9.2 only* — gone in 0.9.3, where both enforce it |
 
