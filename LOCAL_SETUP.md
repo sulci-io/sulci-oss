@@ -13,17 +13,24 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 > command was run on 2026-10-01; the parts that need a live gateway and a key
 > (`connect()` with a real key, `prompt=True`, the end-to-end staging smoke)
 > are optional checks for account holders and have **not** been re-run.
+>
+> **0.9.3 refresh (2026-10-14, Linux, Python 3.12):** the *Current state* table, the
+> collected-test count, the API surface and every `make` target named here were
+> re-checked against the tree (`make -n`, `check_api_surface.py --show`,
+> `pytest --collect-only`). The full suite was **not** re-run — the pass/skip
+> counts in Step 5 and *What a Clean Run Looks Like* are still the 0.9.2 run.
 
-## Current state — re-measured 2026-09-30
+## Current state — re-measured 2026-10-14
 
 | Fact | Value | Re-measure |
 |---|---|---|
-| Version | **0.9.2** (tag `v0.9.2`, on PyPI) | `grep '^version' pyproject.toml` |
+| Version | **0.9.3** (tag `v0.9.3`, on PyPI). `main` carries three unreleased commits beyond it — see CHANGELOG `[Unreleased]` | `grep '^version' pyproject.toml` |
 | Public methods on `Cache` | **8** | `python3 scripts/check_api_surface.py --show` |
 | Default backend | `"chroma"` | ditto — **not** sqlite |
 | Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
 | Default `db_path` | `"./sulci_db"` | ditto |
-| Backends | 6 free + 1 managed | |
+| Backends | 6 free + 1 managed; every one enforces `tenant_id` and `user_id` since 0.9.3 | `grep -rn ENFORCES_TENANT_ISOLATION sulci/backends` |
+| Tests collected | **1,006** at `v0.9.3`; 1,033 on `main` (2026-10-14) | `python -m pytest tests/ --collect-only -q \| tail -1` |
 
 `python3 scripts/check_api_surface.py --show` measures the whole surface by AST
 (no install needed); without `--show` it exits 1 if
@@ -235,8 +242,15 @@ exactly like a hang. To keep a log and still watch progress, use
 
 ### Expected result
 
+> ⚠️ **0.9.3 (2026-10-14):** the suite now collects **1,006** tests at `v0.9.3`
+> (1,033 on `main`). The pass/skip split below is the 0.9.2 run and has not been
+> re-measured; and the last row of the skip table no longer applies — since 0.9.3
+> every local backend declares `ENFORCES_TENANT_ISOLATION = True`, so the
+> conformance suite's isolation tests run instead of skipping (`tests/compat`
+> on 0.9.3 reports no "does not enforce tenant isolation" skip).
+
 v0.9.2, M2 Mac, Python 3.12, offline, no Redis or Qdrant server running.
-The suite collects **739** tests.
+The suite collected **739** tests.
 
 ```
 702 passed, 37 skipped, 0 failed     # Step 3 install + Step 8.5 agent packages (measured 2026-10-01)
@@ -254,7 +268,7 @@ them, expect the second line. The 37 skips in the measured run break down as:
 | 7 | `faiss-cpu not installed` / `FAISSBackend: no local construction available` | `pip install -e ".[faiss]"` |
 | 7 | `pymilvus not installed` / `MilvusBackend: no local construction available` | `pip install -e ".[milvus]"` (runs locally, no server) |
 | 5 | `OpenAIEmbedder: no local construction available` | Set `OPENAI_API_KEY` — makes real, billed API calls |
-| 4 | `SQLiteBackend` / `ChromaBackend does not enforce tenant isolation` | Never — by design, the contract doesn't apply |
+| 4 | `SQLiteBackend` / `ChromaBackend does not enforce tenant isolation` | *0.9.2 only* — gone in 0.9.3, where both enforce it |
 
 **Any failure or collection error on a fresh setup is a real problem** — most
 often a missing extra (see the warning in Step 3).
@@ -341,8 +355,10 @@ python -m pytest tests/ -v --cov=sulci --cov-report=term-missing
 ### Make targets
 
 ```bash
-make test               # core pytest suite (excludes integrations)
+make test               # core files: test_core, test_context, test_backends, test_connect,
+                        #   test_cloud_backend, test_config, test_telemetry, test_nudge
 make test-integrations  # LangChain + LlamaIndex integration tests
+make test-surfaces      # MCP + LiteLLM + proxy (no model weights; bare `pytest`, as CI runs it)
 make test-async         # AsyncCache tests only
 make test-all           # full suite
 make test-cov           # full suite with coverage report
@@ -1212,7 +1228,9 @@ python smoke_test_async.py
 | `make checkin`: `agent_example_langgraph.py` / `agent_example_crewai.py` `FAIL exit=1 0.1s` | Agent frameworks not installed | Step 8.5: install them, then re-pin `mcp>=2.0.0` |
 | `ValueError: not enough values to unpack` | v0.1 unpacking style | `cache.get()` returns a **3-tuple** — `response, sim, ctx_depth = cache.get(...)` |
 | MiniLM takes 2–3 s on first call | Model cold load | Normal. Warm the model at app startup, not per request |
-| `RuntimeWarning: sulci: upgraded the SQLite cache schema … discarded N entries written before 0.9.2` | First open of a pre-0.9.2 SQLite cache under 0.9.2. The schema is migrated in place and every old row is dropped, because its scope can't be determined | Expected, once per database. The cache starts cold and refills on misses |
+| `RuntimeWarning: sulci: upgraded the SQLite cache schema … discarded N entries written before 0.9.2` | First open of a pre-0.9.2 SQLite cache under 0.9.2 or later. The schema is migrated in place and every old row is dropped, because its scope can't be determined | Expected, once per database. The cache starts cold and refills on misses |
+| `ValueError: tenant_id='global' is reserved` (or `user_id`, or an empty / falsy id) | 0.9.3 refuses ids that address the shared scope | Pass `None` for "no tenant" / "no user" |
+| `ValueError` naming `metadata` keys | 0.9.3 refuses `metadata` keys named `key`, `query`, `response`, `tenant_id`, `user_id`, `expires`, `created` | Rename those keys in your metadata |
 | `sqlite3.OperationalError: ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint` | A 0.9.1 (or older) checkout writing to a SQLite cache that 0.9.2 has already migrated. Downgrading a migrated database isn't supported | Point the older version at a fresh `db_path`, or delete that cache directory |
 | `git push` returns 403 | GitHub credentials missing or expired | `gh auth login`, then `gh auth setup-git`. Don't put a token in the remote URL — it is stored in plain text in `.git/config` |
 | `_telemetry_enabled` is True unexpectedly | `connect()` called elsewhere | Check app code and test fixtures for `sulci.connect()` — telemetry is opt-in only |
@@ -1269,9 +1287,9 @@ without `chromadb`.)
 
 - **The 5 warnings are expected.** They are `UserWarning`s from tests that
   deliberately leave `context_threshold` unset (see `docs/context-threshold.md`).
-- **Skips are expected** for backends whose packages you didn't install, tests
-  that need a live server, and four permanent by-design skips. Step 5 breaks
-  them down; `-rs` lists the reason for each.
+- **Skips are expected** for backends whose packages you didn't install and tests
+  that need a live server. (At 0.9.2 there were also four by-design tenant-isolation
+  skips; 0.9.3 removed them.) Step 5 breaks them down; `-rs` lists the reason for each.
 - **Failures and collection errors are not expected.** Not every missing extra
   produces a skip — some fail or error instead (Step 3, Troubleshooting).
 
@@ -1279,9 +1297,11 @@ without `chromadb`.)
 
 ## Project Structure (Reference)
 
-Generated from the repo on 2026-09-30 (v0.9.1); unchanged in 0.9.2. Per-file test counts are
+Generated from the repo on 2026-09-30 (v0.9.1); re-checked against `v0.9.3` on
+2026-10-14 — 0.9.3 added `sulci/_metadata.py`, `sulci/_scope_ids.py`,
+`sulci/backends/_scope.py` and `sulci/sessions/scope.py`. Per-file test counts are
 deliberately left out — they go stale with every release. For the current total,
-run `python -m pytest tests/ --collect-only -q | tail -1` (739 at v0.9.2).
+run `python -m pytest tests/ --collect-only -q | tail -1` (1,006 at v0.9.3).
 
 ```
 .
@@ -1327,7 +1347,7 @@ run `python -m pytest tests/ --collect-only -q | tail -1` (739 at v0.9.2).
 │   ├── embeddings/             ← minilm (default, local), openai; protocol.py
 │   ├── integrations/           ← langchain, llamaindex, litellm, mcp_server
 │   ├── proxy/                  ← sulci-proxy (OpenAI-compatible caching proxy)
-│   ├── sessions/               ← SessionStore: memory, redis; protocol.py
+│   ├── sessions/               ← SessionStore: memory, redis; protocol.py; scope.py (0.9.3 scoped ids)
 │   ├── sinks/                  ← EventSink: null, telemetry, redis_stream; protocol.py
 │   └── tests/compat/           ← SessionStore + EventSink conformance suites
 └── tests/                      ← test_*.py per feature, plus compat/ (backend + embedder
@@ -1369,8 +1389,9 @@ Console scripts installed by the package: `sulci-mcp` (MCP server) and
 
 ## Branch Reference
 
-- **`main`** is the current release line (v0.9.2 as of 2026-10-01 — check
-  `pyproject.toml`). All work merges here via PR.
+- **`main`** is the current release line (v0.9.3, tagged 2026-10-10, plus three
+  unreleased commits as of 2026-10-14 — check `pyproject.toml` and CHANGELOG
+  `[Unreleased]`). All work merges here via PR.
 - Work happens on short-lived branches. Prefixes in use: `feat/` or `feature/`,
   `fix/`, `docs/`, `chore/`, `test/`, and `release/vX.Y.Z` for releases.
 - Merged branches are not always deleted, so `git branch -r` lists many that are

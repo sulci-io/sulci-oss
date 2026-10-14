@@ -4,25 +4,34 @@ Thank you for your interest in contributing!
 
 ## Development setup
 
+[`LOCAL_SETUP.md`](./LOCAL_SETUP.md) is the full, measured guide. The short form:
+
 ```bash
 git clone https://github.com/sulci-io/sulci-oss.git
 cd sulci-oss
-python -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e ".[sqlite,dev]"
+pip install -e ".[sqlite,redis,qdrant,langchain,llamaindex,mcp,litellm,proxy,dev]" pytest-timeout
 ```
+
+Install the whole list: without the `mcp` or `litellm` extras `pytest tests/`
+stops at collection with errors, and without `redis` three sink tests fail
+rather than skip (LOCAL_SETUP.md Step 3).
 
 ## Running tests
 
 ```bash
-# Core tests (no extra dependencies)
-pytest tests/test_core.py -v
+# Core tests
+python -m pytest tests/test_core.py -v
 
-# All tests (skips backends whose deps aren't installed)
-pytest tests/ -v
+# All tests (backends whose packages or servers are missing skip)
+python -m pytest tests/ -v -rs
 
 # With coverage
-pytest tests/ -v --cov=sulci --cov-report=term-missing
+python -m pytest tests/ -v --cov=sulci --cov-report=term-missing
+
+# Before a PR: smoke + per-file tests + examples + benchmark regression
+make checkin            # make checkin-fast on macOS
 ```
 
 ## Adding a new backend
@@ -35,11 +44,15 @@ contract every backend must satisfy.
    (`*,` separator) for `tenant_id`, `user_id`, and other partition
    kwargs — see existing backends for the pattern.
 
-2. **Declare `ENFORCES_TENANT_ISOLATION`** as a class attribute. `True`
-   if `search()` actually filters out other tenants (Qdrant pattern);
-   `False` if `tenant_id` is stored as a label only.
-   ✅ 0.9.3: every shipped local backend isolates and declares `True`; a new backend is expected to filter
-   `search()` on `tenant_id` AND `user_id` (`None` = the shared scope `"global"`) inside the search itself.
+2. **Isolate, and declare `ENFORCES_TENANT_ISOLATION = True`.** Since 0.9.3
+   every shipped local backend filters `search()` on `tenant_id` AND `user_id`
+   inside the search itself (`None` = the shared scope `"global"`, and nothing
+   else), upserts by `(key, tenant_id, user_id)` — `sulci.backends._scope.scoped_id`
+   gives a scoped storage id — and, if it keeps `metadata`, passes it through
+   `sulci._metadata.checked_metadata()` first. A new backend is expected to do
+   the same; `docs/protocols.md` is the contract. (`False` remains a legal value
+   the conformance suite accepts, and then skips the isolation tests — but no
+   shipped backend uses it.)
 
 3. **Register in `sulci/core.py` `_load_backend()`** so users can
    construct `Cache(backend="yourbackend")`.
@@ -159,8 +172,10 @@ pip install -e . --no-deps
 #    format (sections: Added, Changed, Fixed, Deprecated, Removed,
 #    Security, Notes).
 
-# 4. Run the full pre-PR check before tagging.
+# 4. Run the full pre-PR check, and the release pre-flight, before tagging.
 make checkin
+make release-check          # version restatements, retired figures, sulci[all] on the floor
+make check-tag TAG=vX.Y.Z   # the tag you are about to push matches pyproject.toml
 
 # 5. Open a PR. After CI green, merge to main using a merge commit
 #    (NOT squash) so individual sub-phase commits are preserved in the

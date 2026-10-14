@@ -5,7 +5,10 @@
 This document describes the two public protocols that govern how
 sulci's pluggable components are shaped: the **Backend** protocol
 (for vector storage drivers) and the **Embedder** protocol (for
-text-embedding models).
+text-embedding models). A short section at the end covers the
+**SessionStore** protocol, which 0.9.3 changed.
+
+> Current to **sulci 0.9.3** (re-checked 2026-10-14 against `v0.9.3`).
 
 If you want to plug a new vector store, embedding model, or storage
 medium into sulci, this is the contract you implement.
@@ -15,7 +18,8 @@ medium into sulci, this is the contract you implement.
 ## Why protocols?
 
 Sulci ships seven backends (sqlite, chroma, qdrant, faiss, redis, milvus, sulci-cloud)
-and two embedders (minilm, openai). Each implementation predates v0.4.0
+and two embedder classes (`MiniLMEmbedder`, which serves the `minilm`, `mpnet` and
+`bge` models, and `OpenAIEmbedder`). Each implementation predates v0.4.0
 and was working in production. The protocols introduced in v0.4.0 do not
 change those implementations — they formalize the surface they already
 expose, so that:
@@ -146,9 +150,11 @@ def clear(self) -> None:
 
 Remove all entries. Destructive, idempotent.
 
-Typically used in tests; production should prefer TTL-based expiry
-or per-user/per-tenant deletion (which is *not* part of the v0.4.0
-protocol — it's an enterprise-tier concern).
+Typically used in tests; production should prefer TTL-based expiry.
+Per-user or per-tenant deletion of entries is *not* part of the
+`Backend` protocol (0.9.3). The managed backend has its own
+`delete_user()`; for a self-hosted backend it is the implementer's
+own extension.
 
 For backends like Qdrant where `clear` could either delete the
 underlying schema or just the data: the protocol semantics are
@@ -166,27 +172,24 @@ class MyBackend:
 A class-level boolean declaring whether this backend honors the
 tenant isolation contract on the read path.
 
-- `True` — `search()` filters out entries from other tenants. The
-  conformance suite runs `TestTenantIsolation` against this backend.
-- `False` — backend accepts `tenant_id` as a labeling field but does
-  not filter on it. The conformance suite skips isolation tests.
-  This is acceptable for backends where multi-tenant isolation is a
-  non-goal (e.g., embedded SQLite for solo developers).
+- `True` — `search()` filters out entries from other tenants and users.
+  The conformance suite runs `TestTenantIsolation` against this backend.
+- `False` — the backend does not filter on `tenant_id`. The conformance
+  suite still accepts it and skips the isolation tests, but no shipped
+  local backend uses it any more; a custom backend is expected to
+  isolate and declare `True`.
 
-The shipped backends declare:
+The shipped backends declare (0.9.3):
 
 | Backend | `ENFORCES_TENANT_ISOLATION` |
 |---|---|
-| QdrantBackend | `True` |
-| ChromaBackend | `False` (tenant_id stored as label, not filtered) |
-| SQLiteBackend, RedisBackend, FAISSBackend, MilvusBackend | `False` |
-| SulciCloudBackend | `False` (enforced server-side; OSS conformance can't reach the gateway) |
+| QdrantBackend, ChromaBackend, SQLiteBackend, RedisBackend, FAISSBackend, MilvusBackend | `True` — `search()` filters on `tenant_id` AND `user_id`, `None` meaning the shared scope `"global"`, inside the search |
+| SulciCloudBackend | `False` — enforced server-side by the gateway; the OSS conformance suite can't reach a gateway to verify it |
+
+Before 0.9.3 only `QdrantBackend` declared `True`; the other five accepted
+`tenant_id` and ignored it.
 
 Custom backends must declare this attribute. Conformance fails if it's missing.
-
-✅ 0.9.3: every local backend declares `True` and filters `search()` on `tenant_id` AND `user_id` (`None`
-meaning the shared scope `"global"`); the table above describes 0.9.2. Only `SulciCloudBackend` still reads
-`False`, for the reason given. A custom backend is expected to isolate the same way and declare `True`.
 
 ---
 
@@ -335,8 +338,34 @@ source files (`sulci/backends/protocol.py`,
   of change, and it landed in a minor release because there were
   no shipped consumers of v0.4.0's behavior yet.
 
-Per ADR 0005, future protocol modifications require a superseding
-ADR before merge.
+Per ADR 0005 (kept in sulci-platform:
+`docs/architecture/adrs/0005-multi-backend-commitment.md`), protocol
+modifications require a superseding ADR before merge. Its Amendment 1
+(2026-10-11) records that 0.9.3 changed the Backend and SessionStore
+protocols without a deprecation cycle, deliberately, and that the
+deprecation rule resumes at the first official release.
+
+---
+
+## SessionStore protocol (context-aware caching)
+
+Defined in `sulci/sessions/protocol.py`; shipped as `InMemorySessionStore`
+and `RedisSessionStore`. Methods: `get(session_id)`, `append(session_id,
+vector, max_turns=8)`, `clear(session_id)`, `summary(session_id=None)`, and —
+**required since 0.9.3** — `clear_scope(scope) -> int` and `clear_all() -> int`.
+
+- `Cache` hands a store **scoped** session ids
+  (`sulci.sessions.scoped_session_id(tenant_id, user_id, session_id)`), so a
+  session belongs to one tenant and, when personalized, one user.
+  `clear_scope` removes every session whose id starts with a tenant's or a
+  user's scope prefix (`sulci.sessions.scope.tenant_scope` / `user_scope`), and
+  must not scan another tenant's keys to do it when the store is shared.
+- `Cache.clear()` calls `clear_all()`. `Cache` refuses, at construction, an
+  injected store that lacks either method.
+- A `SessionStore` holds embedding vectors of the user's turns, not text. (The built-in
+  in-process manager `Cache` uses when no store is injected also keeps the turns' text.)
+- `RedisSessionStore` (0.9.3) defaults to the prefix `sulci:sessions:`, needs
+  Redis 6.2+, and does not support Redis Cluster.
 
 ---
 

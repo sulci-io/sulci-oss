@@ -117,39 +117,60 @@ matter so much. They verify the library's one job is done correctly.
 
 The OSS library's filter logic is implemented in each Backend's
 `search()` method. The protocol prescribes the contract; each
-implementation honors it (or doesn't, declared via the
-`ENFORCES_TENANT_ISOLATION` class attribute).
+implementation declares that it honors it with the
+`ENFORCES_TENANT_ISOLATION` class attribute.
 
-| Backend | Enforces tenant isolation? | How |
+**Since 0.9.3 every shipped backend enforces both `tenant_id` and
+`user_id`** on every lookup, with the scope inside the search so other
+scopes' copies of a question cannot crowd the caller's own out. `None`
+means the shared scope (stored as `"global"`) and nothing else.
+
+| Backend | `ENFORCES_TENANT_ISOLATION` | How (0.9.3) |
 |---|---|---|
-| QdrantBackend | Yes | Qdrant payload `Filter(must=[FieldCondition(...)])` applied at query time |
-| ChromaBackend | No (label-only) | `tenant_id` stored in metadata; not filtered on read |
-| SQLiteBackend | No | `tenant_id` stored and part of the row's identity since 0.9.2 (the same query in two tenants is two rows); not filtered on read |
-| RedisBackend | No | `tenant_id` accepted and ignored — not stored |
-| FAISSBackend | No | Same as Redis |
-| MilvusBackend | No | Same as Redis |
-| SulciCloudBackend | (gateway-side) | Cloud gateway enforces via API key → tenant mapping; OSS conformance opts out because there's no local gateway to verify against |
+| QdrantBackend | `True` | Qdrant payload `Filter(must=[...])` on `tenant_id` and `user_id` at query time |
+| ChromaBackend | `True` | `where` filter on `tenant_id` and `user_id` in the query; entries stored under a scoped id (`sulci.backends._scope.scoped_id`) |
+| SQLiteBackend | `True` | `WHERE tenant_id = ? AND user_id = ?`; a row is unique on `(key, tenant_id, user_id)` since 0.9.2 |
+| RedisBackend | `True` | each entry stores `tenant_id` and `user_id` under a scoped key; a lookup reads only matching entries |
+| FAISSBackend | `True` | a per-scope position list; a lookup searches only its own scope's vectors, exactly |
+| MilvusBackend | `True` | filter expression on `tenant_id` and `user_id`, every value escaped |
+| SulciCloudBackend | `False` — enforced **gateway-side** | the managed gateway scopes by the API key's tenant and the request's `user_id`; the flag reads `False` only because the OSS conformance suite cannot reach a gateway to verify it |
 
-Backends with `ENFORCES_TENANT_ISOLATION = False` accept the
-`tenant_id` kwarg without raising — they're protocol-conformant — but
-their `search()` doesn't filter on it. Those backends are appropriate
-for single-tenant deployments where the application has no concept of
-multiple tenants. **Don't use them for multi-tenant SaaS.**
+Before 0.9.3 only Qdrant (and the managed gateway) enforced
+`tenant_id`; the other five accepted it and ignored it, and a lookup
+without `user_id` read every user's entries. Entries written before
+0.9.3 on Redis, FAISS and Milvus carry no tenant and match no scope;
+`clear()` those stores after upgrading (see the 0.9.3 *Security*
+entries in the [CHANGELOG](../CHANGELOG.md)).
 
-✅ **0.9.3: this no longer describes any shipped backend.** Chroma, SQLite, Redis, FAISS and Milvus filter every
-lookup on the tenant and the user (`None` = the shared scope `"global"` only), with the scope inside the search;
-Redis, FAISS and Milvus now store `tenant_id`. All of them declare `ENFORCES_TENANT_ISOLATION = True`, so the
-conformance suite's `TestTenantIsolation` runs against each one installed where it runs. The table above
-describes 0.9.2.
+> Unreleased on `main` (not on PyPI; CHANGELOG `[Unreleased]`): Milvus
+> files each entry under a digest-based scope key
+> (`sulci.sessions.scope.user_scope`) and filters on that key alone,
+> instead of on the ids.
 
-📌 0.10.0: Milvus files each entry under one scope key — `sulci.sessions.scope.user_scope(tenant_id, user_id)`,
-built from SHA-256 digests (`t-:u-:` is the shared scope) — and filters on that key alone; it no longer stores or
-filters on the ids themselves. Entries written before 0.10.0 are misses.
+The conformance test suite (`tests/compat/`) runs the
+`TestTenantIsolation` group against every backend declaring
+`ENFORCES_TENANT_ISOLATION = True` that it can construct locally. A
+custom backend is expected to declare `True` and pass that group.
 
-The conformance test suite (`tests/compat/`) automatically runs the
-`TestTenantIsolation` group only against backends declaring
-`ENFORCES_TENANT_ISOLATION = True`. Custom backends that handle
-multiple tenants should declare `True` and pass that group's tests.
+### Ids the library refuses (0.9.3)
+
+`Cache.get` / `Cache.set` (and so `cached_call`, `AsyncCache` and the
+integrations) raise `ValueError` before anything is read, written or
+sent for a `tenant_id` — or, with `personalized=True`, a `user_id` —
+that is `"global"`, any falsy value other than `None` (`""`, `0`,
+`False`, `b""`), or text that is not valid Unicode. `"global"` is the
+shared scope's sentinel; a caller passing it would read and write the
+shared scope as its own. Pass `None` for "no tenant" / "no user".
+
+### Conversation history is scoped too (0.9.3)
+
+With `context_window > 0`, the `Cache` hands its session store a
+`session_id` scoped by tenant and, when personalized, by user
+(`sulci.sessions.scoped_session_id`), so the same `session_id` from
+another tenant or user is another conversation. `get_context`,
+`clear_context` and `context_summary` take `tenant_id=` / `user_id=`
+to name a session; `Cache.clear()` removes every session from any
+store.
 
 ---
 
@@ -166,12 +187,15 @@ fails, the failure tells you which user-impacting scenario is broken.
 
 The cache misses, the LLM is called, the response gets stored:
 
-```pythoncache.set(
-query    = "What's the warranty on the Acme P500 pump?",
-response = "The Acme P500 has a 5-year limited warranty.",
-tenant_id = "acme_corp",
-user_id   = "agent_001",
+```python
+cache = Cache(backend="qdrant")          # personalized=False (the default): user_id is ignored
+
+cache.set(
+    query     = "What's the warranty on the Acme P500 pump?",
+    response  = "The Acme P500 has a 5-year limited warranty.",
+    tenant_id = "acme_corp",
 )
+```
 
 > **Acme agent #2 (different agent, same company):** "How long is
 > the P500 covered under warranty?"
@@ -180,12 +204,17 @@ The cache **hits** — same tenant, semantically-similar query. The
 response is returned without calling the LLM. This is sulci's
 core value: cache hits within a tenant save cost and latency.
 
-```pythoncache.get(
-query     = "How long is the P500 covered under warranty?",
-tenant_id = "acme_corp",
-user_id   = "agent_002",
+```python
+cache.get(
+    query     = "How long is the P500 covered under warranty?",
+    tenant_id = "acme_corp",
 )
-→ returns ("The Acme P500 has a 5-year limited warranty.", 0.92, 0)
+# → ("The Acme P500 has a 5-year limited warranty.", <similarity>, 0)
+```
+
+(Agents of one company share answers here because the `Cache` is not
+personalized. With `personalized=True` and a `user_id` on each call,
+agent #2 would miss — Scenario 3.)
 
 **What could go wrong:** if the application forgets to pass
 `tenant_id`, all entries land in the `"global"` partition. That works
@@ -198,26 +227,30 @@ pass `tenant_id` in multi-tenant deployments.
 > **Globex agent:** "What's the bill code for John Smith's surgery
 > on March 15?"
 
-```pythoncache.set(
-query     = "Bill code for John Smith's surgery on March 15?",
-response  = "Patient John Smith MRN 4471823, code 49505. Balance $1,247.83.",
-tenant_id = "globex_health",
+```python
+cache.set(
+    query     = "Bill code for John Smith's surgery on March 15?",
+    response  = "Patient John Smith MRN 4471823, code 49505. Balance $1,247.83.",
+    tenant_id = "globex_health",
 )
+```
 
 > **Initech caller (different company, semantically-similar query):**
 > "What's the policy for billing the patient surgery on March 15?"
 
-The vector similarity between these two queries is ~0.85. Without
+The two queries are semantically close. Without
 tenant isolation, this would match — and Initech would receive PHI
 for a Globex patient.
 
 With tenant isolation:
 
-```pythonresp, sim, depth = cache.get(
-query     = "What's the policy for billing the patient surgery on March 15?",
-tenant_id = "initech_software",
+```python
+resp, sim, depth = cache.get(
+    query     = "What's the policy for billing the patient surgery on March 15?",
+    tenant_id = "initech_software",
 )
-→ returns (None, 0.0, 0)   ← clean miss
+# → (None, 0.0, 0)   ← clean miss
+```
 
 The Globex entry is filtered out before similarity is even
 considered. The result is a clean miss; Initech's LLM is called
@@ -239,22 +272,28 @@ Same company, two agents with different access permissions.
 > **Acme enterprise-sales agent (agent_001):** "What pricing tier
 > does Northrop Industries get?"
 
-```pythoncache.set(
-query     = "What pricing tier does Northrop Industries get?",
-response  = "Northrop is Tier-3 enterprise: 22% discount, net-60 terms.",
-tenant_id = "acme_corp",
-user_id   = "agent_001_enterprise",
+```python
+cache = Cache(backend="qdrant", personalized=True)   # user_id now scopes lookups
+
+cache.set(
+    query     = "What pricing tier does Northrop Industries get?",
+    response  = "Northrop is Tier-3 enterprise: 22% discount, net-60 terms.",
+    tenant_id = "acme_corp",
+    user_id   = "agent_001_enterprise",
 )
+```
 
 > **Acme residential-sales agent (agent_002):** "What pricing does
 > Northrop get?"
 
-```pythonresp, sim, depth = cache.get(
-query     = "What pricing does Northrop get?",
-tenant_id = "acme_corp",
-user_id   = "agent_002_residential",
+```python
+resp, sim, depth = cache.get(
+    query     = "What pricing does Northrop get?",
+    tenant_id = "acme_corp",
+    user_id   = "agent_002_residential",
 )
-→ returns (None, 0.0, 0)
+# → (None, 0.0, 0)
+```
 
 agent_002 doesn't have enterprise-customer access in their CRM.
 They miss the cache and the LLM is called fresh, producing an
@@ -264,29 +303,36 @@ that agent_001 saw never leaks to agent_002.
 
 **Whether to set `user_id`** is a deployment decision. Some
 applications have role-based access controls where different users
-must see different responses to the same query — those should pass
-`user_id`. Others have shared knowledge bases where all users in a
-tenant should hit the same cache — those can leave `user_id`
-unset. Sulci's protocol supports both.
+must see different responses to the same query — those should build
+the `Cache` with `personalized=True` and pass `user_id` on both `set`
+and `get`. Others have shared knowledge bases where all users in a
+tenant should hit the same cache — those leave `personalized=False`
+(the default), and `Cache` then ignores `user_id`. With
+`personalized=True`, a lookup without a `user_id` sees only entries
+stored without one.
 
 ### Scenario 4 — Solo-developer single-tenant deployment
 
 > **Solo dev:** "How do I deploy a Python app to AWS Lambda?"
 
-```pythoncache.set(
-query    = "How do I deploy a Python app to AWS Lambda?",
-response = "Package code as a .zip, upload via aws lambda create-function.",
-# No tenant_id, no user_id
+```python
+cache.set(
+    query    = "How do I deploy a Python app to AWS Lambda?",
+    response = "Package code as a .zip, upload via aws lambda create-function.",
+    # No tenant_id, no user_id
 )
+```
 
 > **Solo dev later:** "What's the process for getting a Python app
 > onto Lambda?"
 
-```pythonresp, sim, depth = cache.get(
-query = "What's the process for getting a Python app onto Lambda?",
-# No tenant_id, no user_id
+```python
+resp, sim, depth = cache.get(
+    query = "What's the process for getting a Python app onto Lambda?",
+    # No tenant_id, no user_id
 )
-→ returns ("Package code as a .zip, upload via aws lambda create-function.", 0.94, 0)
+# → ("Package code as a .zip, upload via aws lambda create-function.", <similarity>, 0)
+```
 
 This is the simplest deployment. No tenants, no users. Everything
 goes into the `"global"` partition (sulci's internal sentinel for
@@ -305,25 +351,34 @@ yours to set on each call. Here are common patterns.
 
 ### From a JWT / session token
 
-```pythonfrom sulci import Cache
-import jwtcache = Cache(backend="qdrant")def handle_chat_request(request, http_headers):
-token  = http_headers.get("Authorization", "").removeprefix("Bearer ")
-claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])# Derive partition keys from authenticated identity.
-tenant_id = claims["org_id"]      # the customer's organization
-user_id   = claims["sub"]          # the individual end-userresponse, sim, _ = cache.get(
-    query     = request.query,
-    tenant_id = tenant_id,
-    user_id   = user_id,
-)
-if response is None:
-    response = call_llm(request.query, system_prompt_for(tenant_id))
-    cache.set(
+```python
+from sulci import Cache
+import jwt
+
+cache = Cache(backend="qdrant", personalized=True)
+
+def handle_chat_request(request, http_headers):
+    token  = http_headers.get("Authorization", "").removeprefix("Bearer ")
+    claims = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    # Derive partition keys from authenticated identity.
+    tenant_id = claims["org_id"]      # the customer's organization
+    user_id   = claims["sub"]         # the individual end-user
+
+    response, sim, _ = cache.get(
         query     = request.query,
-        response  = response,
         tenant_id = tenant_id,
         user_id   = user_id,
     )
-return response
+    if response is None:
+        response = call_llm(request.query, system_prompt_for(tenant_id))
+        cache.set(
+            query     = request.query,
+            response  = response,
+            tenant_id = tenant_id,
+            user_id   = user_id,
+        )
+    return response
+```
 
 The principle: **`tenant_id` and `user_id` come from authenticated
 identity, never from request body.** Letting a caller pass their own
@@ -332,19 +387,26 @@ tenant's cache. Always derive from a token your app issued.
 
 ### From an API key map
 
-```pythonTENANT_FROM_API_KEY = {
-"sk_acme_xxxxxxxxxxxx":   "acme_corp",
-"sk_globex_yyyyyyyyyy":   "globex_health",
-"sk_initech_zzzzzzzzz":   "initech_software",
-}def handle_request(request, headers):
-api_key   = headers["Authorization"].removeprefix("Bearer ")
-tenant_id = TENANT_FROM_API_KEY.get(api_key)
-if tenant_id is None:
-raise Unauthorized()user_id = headers.get("X-Customer-User-Id")  # optional, customer-suppliedresponse, sim, _ = cache.get(
-    query     = request.query,
-    tenant_id = tenant_id,
-    user_id   = user_id,
-)
+```python
+TENANT_FROM_API_KEY = {
+    "sk_acme_xxxxxxxxxxxx":   "acme_corp",
+    "sk_globex_yyyyyyyyyy":   "globex_health",
+    "sk_initech_zzzzzzzzz":   "initech_software",
+}
+
+def handle_request(request, headers):
+    api_key   = headers["Authorization"].removeprefix("Bearer ")
+    tenant_id = TENANT_FROM_API_KEY.get(api_key)
+    if tenant_id is None:
+        raise Unauthorized()
+    user_id = headers.get("X-Customer-User-Id") or None   # optional; map "" to None (0.9.3 refuses "")
+
+    response, sim, _ = cache.get(
+        query     = request.query,
+        tenant_id = tenant_id,
+        user_id   = user_id,
+    )
+```
 
 The API key is the source of truth for `tenant_id`. The customer's
 own user identifier (which they pass through in a header) becomes
@@ -353,10 +415,12 @@ those values, that's the customer's concern within their own tenant.
 
 ### From an LLM framework integration (LangChain, LlamaIndex)
 
-Sulci's LangChain and LlamaIndex integrations forward cache kwargs
-through their respective adapter classes. The `Cache` constructor
-accepts the same `tenant_id`/`user_id` parameters; consult those
-integrations' docstrings for framework-specific patterns.
+The integrations scope by tenant in their own ways: `sulci-mcp
+--tenant-id` (or `SULCI_MCP_TENANT_ID`), the proxy's
+`x-sulci-tenant-id` header (combined with the model unless
+`--share-across-models`), and LiteLLM's `namespace_by_model=True`. Since
+0.9.3 each of these scopes for real on every backend. Consult each
+integration's docstring for its exact form.
 
 ---
 
@@ -364,8 +428,11 @@ integrations' docstrings for framework-specific patterns.
 
 ### Does sulci hash tenant_id before storing it?
 
-No. The `tenant_id` value you pass is stored verbatim in the
-backend's metadata or payload field. If you're concerned about
+Not in the cache entry. The `tenant_id` and `user_id` you pass are
+stored verbatim in each backend's metadata or payload fields (Chroma
+and Redis also derive a hashed storage id from them, and conversation
+history keys use SHA-256 digests of the ids, but the entry still
+carries the raw values). If you're concerned about
 tenant identifiers being readable by anyone with backend access,
 hash them in your application before passing to sulci.
 
@@ -379,30 +446,36 @@ use cases — sulci is a cache, not a system of record.
 
 ### Can a tenant see how many entries another tenant has?
 
-The OSS library's `cache.stats()` returns aggregate counts for the
-entire backend, not per-tenant. There's no protocol method that
-exposes per-tenant counts to a tenant. If you need per-tenant
+`cache.stats()` returns this `Cache` instance's own counters (hits,
+misses, saved cost, active sessions) across every tenant it served —
+not per-tenant, and not the backend's contents. There's no protocol
+method that exposes per-tenant counts to a tenant. If you need per-tenant
 metrics for billing or capacity planning, that's an operator-side
 concern (you can query the backend directly), not a tenant-facing
 API.
 
 ### What happens if I pass an empty string as tenant_id?
 
-`tenant_id=""` is treated as a literal empty-string partition key.
-It's distinct from `tenant_id=None` (which becomes `"global"`).
-Behavior is pinned by `test_empty_string_does_not_match_none` in
-`tests/test_qdrant_tenant_isolation.py`. We recommend you don't pass
-empty strings — pick `None` or a real tenant identifier.
+Since 0.9.3, `Cache.get` / `Cache.set` raise `ValueError` for
+`tenant_id=""` (and for `"global"` and any other falsy value but
+`None`) — every backend filed `""` under the shared `"global"` scope,
+so it was not a partition of its own. Pass `None` or a real tenant
+identifier. (A backend called directly, without `Cache`, is pinned by
+`test_empty_string_does_not_match_none` in
+`tests/test_qdrant_tenant_isolation.py`.)
 
 ### What about deletion? GDPR / CCPA right-to-erasure?
 
-The OSS protocol's `clear()` removes everything. Per-user or
-per-tenant deletion is not in the v0.4.0 OSS protocol surface. For
-deployments with regulatory deletion requirements, this is an
-enterprise-tier concern; see
-[sulci.io/enterprise](https://sulci.io/enterprise) for what the
-managed product offers, or contact us if you need help building it
-into a custom backend.
+The `Backend` protocol's `clear()` removes everything, and
+`Cache.clear()` also removes every conversation session. Per-user or
+per-tenant deletion of cache entries is not in the OSS `Backend`
+protocol (0.9.3). The session store has `clear_scope(scope)`, so a
+tenant's or user's conversation history can be removed on its own.
+The managed backend offers per-user erasure:
+`SulciCloudBackend.delete_user(user_id)` (`DELETE
+/v1/cache/user/{user_id}`), which raises `SulciErasureError` unless the
+gateway confirms it. See [sulci.io/enterprise](https://sulci.io/enterprise)
+for the managed product.
 
 ### Is tenant_id encrypted at rest?
 

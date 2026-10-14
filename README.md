@@ -21,7 +21,7 @@ Sulci Cache is a drop-in Python library that caches LLM responses by **semantic 
 | Every query hits the LLM API | Semantically similar queries return instantly from cache |
 | $0.005 per call, every time  | Cache hits need a local embedding, not an LLM call       |
 | 1–3 second response time     | Cache hits: ~87 ms p50 on the benchmark machine (below)  |
-| No memory across sessions    | Context-aware: understands conversation history          |
+| No memory across sessions    | Context-aware lookups: recent conversation turns are blended into the lookup |
 
 **Benchmark results — measured on the shipped MiniLM embedder**, 5,000-query
 corpus, `threshold=0.85`. Ranges are across four seeded draws
@@ -45,9 +45,14 @@ python3 benchmark/run.py --use-sulci --fresh --no-sweep --seed 1
 benchmark machine, not a property of the cache. Measure it on your own hardware
 before planning against it.
 
-**Context-aware mode** blends prior conversation turns into the lookup vector so
-follow-ups resolve against the session rather than the whole cache. How much
-that helps depends entirely on your query mix, and **this README does not carry
+**Context-aware mode** blends prior conversation turns into the lookup vector, so
+a vague follow-up such as *"what about the second one?"* is moved toward stored
+questions that resemble the conversation and can find a fully specified answer
+already in the cache. It does **not** keep apart answers stored under the same
+words: entries are stored under their own query's embedding, with no context, so
+an answer stored as *"how do I fix it?"* is a candidate for every conversation
+that asks it. Store answers under a self-contained version of the question. How
+much blending helps depends entirely on your query mix, and **this README does not carry
 a number for it.** Run `python3 benchmark/run.py --use-sulci --fresh --no-sweep
 --context` and read the harness's own note: the context corpus is 125 follow-ups
 across 25 sessions, which is small.
@@ -133,9 +138,10 @@ pip install openai              # for OpenAI
 
 ## LangChain Integration
 
-Sulci Cache is the only LangChain cache that implements context-aware lookup
-vector blending — blending prior conversation turns into the similarity lookup,
-not just matching the current prompt in isolation.
+The LangChain adapter supports context-aware lookup: with `context_window > 0`
+it blends prior conversation turns into the similarity lookup rather than
+matching the current prompt in isolation (see *Context-Aware Blending* below for
+what that does and does not do).
 
 ```python
 from langchain_core.globals import set_llm_cache
@@ -298,38 +304,42 @@ Sulci itself supports Python 3.9. `mcp`, `litellm` and `fastapi` all declare
 LangChain adapter are unaffected. Same constraint as `sulci[llamaindex]`.
 
 
-## ⚠️ Tenant isolation is enforced by Qdrant and Sulci Cloud only
+## Tenant and user isolation
 
-`tenant_id` is accepted by every backend. Two enforce isolation (see
-[`docs/API-SURFACE.md`](docs/API-SURFACE.md)):
+Since **0.9.3, every backend enforces `tenant_id` and `user_id`** on every lookup:
 
 | backend | isolation |
 |---|---|
-| qdrant | **enforced** — filters on `tenant_id` |
+| chroma, faiss, milvus, qdrant, redis, sqlite | **enforced** — `search()` reads only the caller's own tenant and user, inside the search itself; each declares `ENFORCES_TENANT_ISOLATION = True` |
 | sulci (cloud) | **enforced server-side** by the Sulci Cloud gateway, keyed off the API key (one key per tenant). Its `ENFORCES_TENANT_ISOLATION` flag reads `False` only because the OSS test suite cannot reach the gateway to verify it. |
-| chroma, faiss, milvus, redis, sqlite | not enforced |
 
-On the other five the argument is accepted and ignored, so entries from
-different tenants can be served for each other. This matters most for the
-three surfaces above, which all offer scoping as a safety property —
-`--tenant-id`, `namespace_by_model=True`, per-model proxy scoping. On the
-default `sqlite` backend **each of those is a no-op**, and each will emit a
-`ScopeNotEnforcedWarning` saying so rather than pretending otherwise.
-
-✅ **0.9.3: every backend enforces it.** Chroma, FAISS, Milvus, Redis and SQLite now read only the caller's
-own tenant and user, as Qdrant does (`None` is the shared scope and nothing else), so the three surfaces above
-scope for real on every backend and `ScopeNotEnforcedWarning` no longer exists. The table above describes 0.9.2.
-
-If you need real isolation today: use `backend="qdrant"` or the managed `sulci` backend, or give each scope
-its own `db_path`, or turn the feature off and share deliberately.
+`None` means the shared scope and nothing else: an entry stored without a
+tenant is not visible to a lookup with one, and the reverse. The three surfaces
+above — `sulci-mcp --tenant-id`, `namespace_by_model=True`, the proxy's
+`x-sulci-tenant-id` and per-model scoping — therefore scope for real on every
+backend.
 
 **`user_id` is a separate scope.** It takes effect only with `personalized=True`
-— with the default `personalized=False` it is ignored on every backend. With
+— with the default `personalized=False`, `Cache` ignores it. With
 `personalized=True`, pass `user_id` on both `set` and `get`: a lookup with a
-`user_id` matches only that user's entries, while a lookup without one is
-unscoped and, on every backend except `qdrant`, can match any user's entry.
-On `sqlite` and `milvus`, versions before 0.9.2 did not reliably keep users
-apart; see the [CHANGELOG](CHANGELOG.md).
+`user_id` matches only that user's entries, and a lookup without one matches
+only entries stored without one.
+
+**Refused ids.** `Cache.get` / `set` (and so `cached_call`, `AsyncCache` and the
+integrations) raise `ValueError` for a `tenant_id` — or, with
+`personalized=True`, a `user_id` — that is `"global"` or any falsy value other
+than `None` (`""`, `0`, `False`), and for an id that is not valid Unicode text.
+`"global"` is the sentinel the shared scope is stored under. Map empty ids to
+`None` before calling `Cache`.
+
+**Upgrading from 0.9.2 or earlier:** on Redis, FAISS and Milvus an entry stored
+before 0.9.3 carries no tenant and is never matched again; on Chroma and Redis
+an old entry keeps its old id, so storing the same question again does not
+replace it. `clear()` a Chroma, Redis, FAISS or Milvus store once after
+upgrading. Versions
+before 0.9.3 did not isolate tenants on any backend but Qdrant, and before 0.9.2
+SQLite and Milvus did not reliably keep users apart; see the
+[CHANGELOG](CHANGELOG.md) *Security* entries for 0.9.2 and 0.9.3.
 
 ---
 
@@ -410,7 +420,9 @@ cache = Cache(backend="sulci", api_key="sk-sulci-...", threshold=0.85)
 cache = Cache(backend="sulci", threshold=0.85)
 ```
 
-See [sulci.io](https://sulci.io) for current plans.
+See [sulci.io](https://sulci.io) for current plans. The free OSS-Connect key is
+open now; paid plans (Pro, Business) open for self-serve signup at general
+availability — until then, request access from the pricing page.
 
 ### One-line setup — telemetry just works (v0.7.0+)
 
@@ -435,7 +447,7 @@ This works for every tier and every backend choice:
 | Persona | Backend | api_key role |
 |---|---|---|
 | **Pro / Business (paid managed)** | `"sulci"` | cache auth + telemetry |
-| **OSS-Connect (free, self-host + dashboard)** | `"sqlite"` / `"chroma"` / `"qdrant"` / etc. | **telemetry only** — cache lives locally |
+| **OSS-Connect (free, self-host + dashboard)** | `"sqlite"` / `"chroma"` / `"qdrant"` / etc. | **telemetry only** — cache lives locally. (The same key also reaches `backend="sulci"`, capped at 10,000 managed requests a month.) |
 | **Pure self-hosted (no Sulci account)** | local backend | omit `api_key` — no telemetry, no cloud |
 
 **One rule covers all three:**
@@ -663,37 +675,41 @@ cache = Cache(
 | `cache.get(query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None)`                   | `(str\|None, float, int)` | response, similarity, context_depth (tenant_id added in v0.4.0; plan added in v0.5.6) |
 | `cache.set(query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None)` | `None`                    | Store entry, advance context window (plan added in v0.5.6)                            |
 | `cache.cached_call(query, llm_fn, *, threshold=None, tenant_id=None, user_id=None, session_id=None, cost_per_call=None, plan=None)` | `dict`        | response, source, similarity, latency_ms, cache_hit, context_depth (plan added in v0.5.6) |
-| `cache.get_context(session_id)`                                                        | `ContextWindow`           | Return session's context window                                    |
-| `cache.clear_context(session_id)`                                                      | `None`                    | Reset session history                                              |
-| `cache.context_summary(session_id=None)`                                               | `dict`                    | Snapshot of one or all sessions                                    |
+| `cache.get_context(session_id, *, tenant_id=None, user_id=None)`                       | `ContextWindow`           | Return session's context window                                    |
+| `cache.clear_context(session_id, *, tenant_id=None, user_id=None)`                     | `None`                    | Reset session history                                              |
+| `cache.context_summary(session_id=None, *, tenant_id=None, user_id=None)`              | `dict`                    | Snapshot of one or all sessions                                    |
 | `cache.stats()`                                                                        | `dict`                    | hits, misses, hit_rate, saved_cost, total_queries, active_sessions |
 | `cache.clear()`                                                                        | `None`                    | Evict all entries, reset stats and sessions                        |
 
 > **Important:** `cache.get()` returns a **3-tuple** `(response, similarity, context_depth)` — not a 2-tuple like v0.1. Always unpack all three values.
 
-> 📌 0.9.3: a session belongs to one tenant and, with `personalized=True`, one user — the same `session_id` from
-> another tenant or user is another conversation. `get_context`, `clear_context` and `context_summary` take
-> `tenant_id=` and `user_id=` (keyword-only) to name it; pass what you pass to `get` / `set`.
+> **Sessions are scoped (0.9.3).** A session belongs to one tenant and, with `personalized=True`, one user — the
+> same `session_id` from another tenant or user is another conversation. Pass `get_context`, `clear_context` and
+> `context_summary` the same `tenant_id=` / `user_id=` you pass to `get` / `set`. `context_summary()` with a
+> `tenant_id` or `user_id` but no `session_id` raises `TypeError`.
 
 **That is the whole public surface — eight methods, not nine.** The constructor
 defaults and method signatures above match an AST measurement of `sulci/core.py`
-at 0.9.2 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
+at 0.9.3 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
 before trusting any restatement of this table found elsewhere; the full measured
 surface is in [`docs/API-SURFACE.md`](docs/API-SURFACE.md).
 
 **`delete_user` is not on `Cache`.** It is a method on `SulciCloudBackend`
-(`sulci/backends/cloud.py:233`), reached through the backend or by calling
+(`sulci/backends/cloud.py:280` at 0.9.3), reached through the backend or by calling
 `DELETE /v1/cache/user/{id}` directly. `Cache` does not proxy it — `cache.delete_user(...)`
 raises `AttributeError` — and the six self-hosted backends do not implement it,
 because it is not in the `Backend` protocol. Whole-cache erasure via
 `cache.clear()` works on every backend and is the portable path.
 
-From 0.9.3 both `delete_user` and `clear` on the managed backend report failure: a non-2xx answer logs a
-WARNING and returns `None`, or raises `SulciErasureError` with `raise_on_error=True`; success returns the
-gateway's answer, including the number of entries deleted.
-📌 Before release this became stricter: both **raise** `SulciErasureError` whenever the gateway does not
-confirm the erasure (there is no `raise_on_error`, and nothing is logged), and so does `cache.clear()` on
-the managed backend, before resetting anything. Catch it where a failed erasure must not stop the caller.
+**Managed-backend erasure raises when it is not confirmed (0.9.3).**
+`SulciCloudBackend.delete_user` and `clear` return the gateway's answer
+(`{"status": "ok", "deleted": N, ...}`) only when the gateway confirms the
+erasure; otherwise — a transport error, any non-2xx answer such as `503
+erasure_incomplete`, a 2xx answer that is not that JSON, or an id that cannot be
+encoded — they raise `sulci.backends.cloud.SulciErasureError`, and so does
+`cache.clear()` on the managed backend, before resetting stats or sessions.
+Catch it where a failed erasure must not stop the caller. The user id is
+percent-encoded into one path segment, so any id is addressed exactly.
 
 ### Advanced constructor options
 
@@ -786,7 +802,9 @@ lookup_vec = α · embed(query) + (1−α) · Σ(decay^i · turn_i)
 - `α` = `query_weight` (default **0.70**) — how much the current query dominates
 - `decay` = `context_decay` (default **0.50**) — halves weight per older turn
 - Only **user query** vectors are stored in context (not LLM responses)
-- Raw un-blended vectors stored in cache; blending happens at lookup time only
+- Raw un-blended vectors stored in cache; blending happens at lookup time only —
+  so an entry stored under a vague follow-up's words matches that wording in any
+  conversation. Store answers under self-contained questions.
 
 **Context-aware benchmark:** run it rather than reading a number here, and
 run it on the shipped engine — `--use-sulci` is opt-in, and without it this
@@ -810,13 +828,13 @@ embedder, carried no n, described the corpus as 800 pairs when
 
 | Backend         | ID       | Best for                                | Tenant isolation |
 | --------------- | -------- | --------------------------------------- | ---------------- |
-| SQLite          | `sqlite` | Local dev, edge, serverless, zero infra | no |
-| ChromaDB        | `chroma` | Fastest path to working, Python-native  | no |
-| FAISS           | `faiss`  | GPU acceleration, massive scale         | no |
-| Qdrant          | `qdrant` | Production, metadata filtering          | **yes** |
-| Redis + RedisVL | `redis`  | Existing Redis infra                    | no |
-| Milvus Lite     | `milvus` | Dev-to-prod without code changes        | no |
-| **Sulci Cloud** | `sulci`  | **Zero infra — managed service**        | **yes** (server-side) |
+| SQLite          | `sqlite` | Local dev, edge, serverless, zero infra | yes (0.9.3) |
+| ChromaDB        | `chroma` | Fastest path to working, Python-native  | yes (0.9.3) |
+| FAISS           | `faiss`  | Local, file-backed (`faiss-cpu`); exact search within a scope since 0.9.3 | yes (0.9.3) |
+| Qdrant          | `qdrant` | Production, metadata filtering          | yes |
+| Redis + RedisVL | `redis`  | Existing Redis infra                    | yes (0.9.3) |
+| Milvus Lite     | `milvus` | Dev-to-prod without code changes        | yes (0.9.3) |
+| **Sulci Cloud** | `sulci`  | **Zero infra — managed service**        | yes (server-side) |
 
 All self-hosted backends are free tier or self-hostable at zero cost. For
 latency on your own hardware, run the benchmark (below); a hit is dominated by
@@ -908,8 +926,9 @@ export HF_HUB_OFFLINE=1 LITELLM_LOCAL_MODEL_COST_MAP=True   # after the first, o
 python -m pytest tests/ -q -rs
 ```
 
-At v0.9.2 the suite collects 739 tests; with this install expect 697 passed and
-42 skipped. Skips are backends or servers you
+At v0.9.3 the suite collects 1,006 tests (`python -m pytest tests/ --collect-only -q`,
+measured 2026-10-14; the pass/skip split was last measured at 0.9.2 — see
+`LOCAL_SETUP.md` Step 5). Skips are backends or servers you
 don't have; failures or collection errors are not expected. Some missing extras
 cause failures rather than skips, which is why the install line is long.
 

@@ -22,6 +22,11 @@ that's fine; it's the *adaptive/fleet* layer that is the moat.
 
 ## 2. Release integrity (protects users AND your account)
 
+Since 2026-08-14 (first used by the 0.9.1 release) the publish workflow also has a `release-guard` job
+(`scripts/check_tag_version.py`): a tag that disagrees with `pyproject.toml`
+fails before anything is built. Run `make check-tag TAG=vX.Y.Z` and
+`make release-check` before tagging.
+
 > **Status (2026-06-05):** all three items are DONE and live-verified by the
 > `v0.7.3` release (OSS PR #100 + Publish-to-PyPI run #48 — OIDC exchange in
 > the logs, attestations on the PyPI file listing).
@@ -74,5 +79,8 @@ If anything real surfaces: rotate the credential FIRST, then scrub history with
 
 - LICENSE (Apache-2.0) — includes the patent grant + termination clause: anyone who
   sues you over patents covering sulci loses their license to use it.
-- NOTICE — keep "Sulci — Patent Pending" + copyright line current.
+- NOTICE — keep the copyright line (`Copyright 2026 Sulci Labs Inc.`), the trademark
+  notice and the patent notice current. Since 2026-09-05 the patent notice also states
+  that the application is assigned to Kathiravan Sengodan, not to Sulci Labs Inc.
+  (`e4d3dd5`), matching the README and the served legal pages.
 - pyproject description — "Patent Pending" string is your public notice; keep it.

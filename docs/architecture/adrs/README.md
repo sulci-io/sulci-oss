@@ -61,7 +61,13 @@ Proposed ──▶ Accepted ──▶ Superseded by ADR-NNNN
 | # | Title | Status | Date |
 |---|---|---|---|
 | [0001](0001-cache-auto-connect-telemetry.md) | `Cache()` auto-connects telemetry when an `api_key` is resolvable | Accepted | 2026-05-26 |
+| [0002](0002-smoke-fast-cpu-mode.md) | `make smoke-fast` forces CPU inference on macOS | Accepted | 2026-07-06 |
 
 > **Cross-repo note:** sulci-oss ADR-0001 has a sulci-platform mirror at
 > ADR-0021. Both ship as part of the coordinated v0.7.0 release
-> (`sulci-cache==0.7.0` + `sulci-gateway==0.7.0`).
+> (`sulci==0.7.0` on PyPI + gateway 0.7.0).
+>
+> **Protocol decisions live in sulci-platform.** The `Backend`, `Embedder`,
+> `SessionStore` and `EventSink` protocols cite ADR 0005, which is in
+> `sulci-platform/docs/architecture/adrs/`; ADR 0005 Amendment 1 (2026-10-11)
+> records the 0.9.3 protocol changes.

@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation refresh for GA — 2026-10-14
+
+(entries added by the lead at the end of the refresh)
+
 ### Changed
 
 - **⚠️ Breaking: `MilvusBackend` filters on a scope key, and entries stored before 0.10.0 are misses.** Each entry
@@ -47,7 +51,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   `key_prefix` before relying on erasure — a 0.9.3 writer does not extend an expiry set by a 0.10.0 one, so a session
   it adds can fall out of the index.
 
-## [0.9.3] — Security: cache scope, erasure and conversation history
+## [0.9.3] — 2026-10-10 — Security: cache scope, erasure and conversation history
 
 Six security fixes and the behaviour changes that come with them — read **Security** and the **Breaking** entries under **Changed** before upgrading. The managed backend's `delete_user` / `clear` now raise on an unconfirmed erasure; every self-hosted backend now enforces `tenant_id` and `user_id`; `metadata` may not use the entry's own field names; sessions belong to one tenant and user.
 
@@ -212,7 +216,7 @@ example, prefix them with both), and clear an injected store yourself when you c
   by the `store` of every backend that keeps `metadata`. `sulci._metadata.without_reserved` is replaced by
   `checked_metadata`, which returns a new dict or raises.
 
-## [0.9.2] — SQLite and Milvus: enforce cache scope
+## [0.9.2] — 2026-10-01 — SQLite and Milvus: enforce cache scope
 
 ### Security
 
@@ -260,6 +264,9 @@ It is enforced by `qdrant` only (and server-side by the hosted service). On
 so two tenants no longer overwrite each other's entry, but lookups are still
 not filtered by it. `milvus` does not store or filter on `tenant_id`.
 
+> ⚠️ **Superseded 2026-10-14 (GA doc refresh):** 0.9.3 made every backend filter
+> lookups on `tenant_id` and `user_id`. See [0.9.3] *Security*.
+
 ### Changed
 
 - **`SQLiteBackend` rows are unique on `(key, tenant_id, user_id)`**, and a
@@ -278,6 +285,14 @@ not filtered by it. `milvus` does not store or filter on `tenant_id`.
 - Docs now say that `user_id` is ignored unless `personalized=True`, and that
   a lookup without `user_id` is unscoped on every backend except `qdrant`.
 
+### Also in this release (added 2026-10-14 from `git log v0.9.1..v0.9.2`)
+
+- `NOTICE` states that U.S. Patent Application No. 64/018,452 is assigned to
+  Kathiravan Sengodan, not to Sulci Labs Inc., matching the served pages (`e4d3dd5`, #156).
+- Tests and CI only: a denied device code ends `connect()` on the next poll in the
+  tests; each test is bounded by `pytest-timeout`; Redis is probed once; the
+  v0.9.0 integration install is guarded on code changes (#158).
+
 ### Known limitations
 
 - **`chroma` and `redis` still upsert by `key` alone**, contrary to the
@@ -285,7 +300,10 @@ not filtered by it. `milvus` does not store or filter on `tenant_id`.
   the first one's entry. That entry is lost, not served to the wrong user: the
   first user's next lookup misses. To be fixed in a later release.
 
-## [0.9.1] — the two Qdrant cost levers become reachable
+> ⚠️ **Superseded 2026-10-14 (GA doc refresh):** fixed in 0.9.3 — Chroma and Redis store
+> each entry under an id scoped to its tenant and user (`sulci.backends._scope.scoped_id`).
+
+## [0.9.1] — 2026-08-30 — the two Qdrant cost levers become reachable
 
 `QdrantBackend.__init__` gains `on_disk` and `quantization`. Both were
 documented as Qdrant capabilities and neither was reachable from this class:
@@ -348,6 +366,22 @@ defaults in force, so upgrading does not alter an existing deployment. There is
 a test asserting exactly this, because it is the property that makes the
 release safe to ship.
 
+### Also in this release (added 2026-10-14 from `git log v0.9.0..v0.9.1`)
+
+- **Packaging:** the `litellm` extra and `sulci[all]` cap `litellm<1.97.0` —
+  1.97.0 fails `Message` forward-ref resolution on Python 3.10
+  (BerriAI/litellm#36384) (`5dd0f16`).
+- **Copyright:** copyright, licence and trademark attribution move to Sulci Labs
+  Inc. (`9245a8a`, #153).
+- **Benchmark:** `--agent` honours `--seed` and defaults to seed 42 (#145); the
+  four seeded MiniLM context draws are committed under
+  `benchmark/results/minilm/` (#154); loose output beside pinned draws is refused
+  (#150).
+- **Release tooling and CI:** the publish workflow's `release-guard` fails when the
+  tag disagrees with `pyproject.toml` (#144); a CI job installs `sulci[all]` (#149);
+  `scripts/check_agent_draws.py` (#147) and recursive suite discovery for the CI
+  coverage check (#135).
+
 
 ## [0.9.0] — 2026-08-13 — three new integration surfaces, and the figures that ship with them
 
@@ -388,6 +422,11 @@ property — `sulci-mcp --tenant-id`, `namespace_by_model=True`, the proxy's
 per-model scoping — and **each is a no-op on the default sqlite backend.** They
 now emit `ScopeNotEnforcedWarning` naming the feature and the fix rather than
 failing silently.
+
+> ⚠️ **Superseded 2026-10-14 (GA doc refresh):** since 0.9.3 every backend enforces
+> `tenant_id` and `user_id` and declares `ENFORCES_TENANT_ISOLATION = True` (only the
+> managed `SulciCloudBackend` reads `False`, enforced server-side); `ScopeNotEnforcedWarning`
+> no longer exists. See [0.9.3] *Security*.
 
 
 ### `Cache` had one threshold for two kinds of lookup (2026-08-12)

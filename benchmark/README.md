@@ -143,6 +143,14 @@ template reuse.
 re-asking the same things converges fast, and that is structurally true rather
 than an artifact of the generator.
 
+> ⚠️ **Superseded 2026-10-14 (GA doc refresh):** the MiniLM row above (27% / 99.4%,
+> 2026-08-04) was one draw at the agent bench's hardcoded seed 1729 — `--seed` did
+> not reach `run_agent_bench` until `fc701fb`. The register's figures, from the four
+> committed draws at `benchmark/results/minilm/seed-{1,2,3,42}`, are **cold 33.4%
+> `[30.0–35.0]`, warm 99.74% `[99.69–99.81]`, aggregate 95.01% `[94.99–95.05]`**
+> (`sulci-platform/docs/marketing/CLAIMS.md`; checked by `make check-agent-draws`).
+> Cite those, not 27%.
+
 ---
 
 ## Results (v0.4.0)
@@ -175,6 +183,12 @@ of provenance that sits one level away from the thing being copied.
 | product_faq | 92.4% | 0.6% | $0.91 |
 | medical_information | 95.3% | 0.0% | $0.92 |
 | general_knowledge | 94.4% | 18.8% | $0.93 |
+
+> ⚠️ **Superseded 2026-10-14 (GA doc refresh):** `~0.74ms` in the table above is a
+> retired figure — `scripts/check_release_ready.py` lists it as the TF-IDF hit latency
+> and the register replaces it with **87.19ms `[86.96–87.73]`** p50 on the shipped
+> MiniLM engine (four seeded draws; environment-dependent). The v0.4.0 table is a
+> record of that run, not a current figure; do not cite any row of it.
 
 **On semantic accuracy (51.3%):** This is a lower bound, not the true false
 positive rate. The benchmark cache stores short synthetic responses (~12 words).
