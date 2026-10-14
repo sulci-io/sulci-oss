@@ -8,9 +8,21 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Documentation refresh for GA — 2026-10-14
+### Documentation — GA refresh, 2026-10-14
 
-(entries added by the lead at the end of the refresh)
+Docs only; no library code changed. Every statement re-read against the released 0.9.3 (tag `v0.9.3`).
+
+- **Tenant and user isolation is described as it ships in 0.9.3:** every self-hosted backend enforces
+  `tenant_id` and `user_id` (README, `docs/multi_tenancy_and_isolation.md`, `docs/protocols.md`,
+  `examples/`). The old "enforced by one backend of seven" statements carry dated superseded notes.
+- **The LangChain adapter is documented as stateless** — it passes no `session_id`, so `context_window`
+  has no effect there; the README's context-aware LangChain samples are removed and point to the
+  LlamaIndex adapter or `cached_call(..., session_id=...)`.
+- README: refused ids, erasure behaviour on the managed backend (`SulciErasureError`), FAISS described as
+  exact search within a scope, no comparative claims. `LOCAL_SETUP.md`, `CONTRIBUTING.md` (full dev install;
+  `make release-check` / `make check-tag`) and `SECURITY.md` (supported: latest 0.9.x) brought to 0.9.3.
+- This file: release dates on the 0.9.1–0.9.3 headings, and dated notes beside the 0.9.1 and 0.9.2 entries
+  for changes those entries did not list.
 
 ### Changed
 
