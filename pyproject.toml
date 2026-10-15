@@ -41,7 +41,11 @@ dependencies = ["httpx>=0.27.0"]
 
 [project.optional-dependencies]
 chroma   = ["chromadb>=0.4.0",     "sentence-transformers>=2.2.0"]
-qdrant   = ["qdrant-client>=1.7.0","sentence-transformers>=2.2.0"]
+# 0.10.0 (oss-0026): the floors below are the oldest releases sulci's own tests pass on (Python 3.12, Linux, measured
+# 2026-10-15; the boundaries confirmed on 3.11 by an independent review). qdrant-client: search() uses query_points,
+# added in 1.10.0 — on 1.9.2, 27 of 64 Qdrant tests failed ("'QdrantClient' object has no attribute 'query_points'"),
+# on 1.7.0 28; 1.10.0 passed all 64.
+qdrant   = ["qdrant-client>=1.10.0","sentence-transformers>=2.2.0"]
 faiss    = ["faiss-cpu>=1.7.4",    "sentence-transformers>=2.2.0"]
 redis    = ["redis>=5.0.0",        "redisvl>=0.1.0", "sentence-transformers>=2.2.0"]
 sqlite   = ["sentence-transformers>=2.2.0"]
@@ -53,7 +57,12 @@ sqlite   = ["sentence-transformers>=2.2.0"]
 # milvus-lite 2.x imports pkg_resources, which setuptools 82 removed. On Python 3.9 with grpcio 1.80 (the newest
 # built for 3.9) milvus-lite 2.5.1 failed to start about one time in eight ("Open local milvus failed"); 1.75-1.78
 # never did. Measured 2026-10-14.
-milvus   = ["pymilvus>=2.4.2", "milvus-lite>=2.4.1,<3; sys_platform != 'win32'",
+# 0.10.0 (oss-0026): pymilvus 2.4.9 and older no longer import on a fresh install (their environs dependency fails on
+# marshmallow 4: "module 'marshmallow' has no attribute '__version_info__'"); 2.4.10 does. With pymilvus 2.4.15,
+# milvus-lite 2.4.1 to 2.4.3 fail 22 of sulci's 88 Milvus tests (entries missed, e.g. by an explicit lookup time), and
+# 2.4.1 one more (it cannot report whether a collection is loaded); 2.4.4 passes all 88, with pymilvus 2.4.10 too.
+# Measured 2026-10-15 on Python 3.12 and 3.11; given pymilvus 2.4.10 alone, pip picks milvus-lite 2.4.12: all pass.
+milvus   = ["pymilvus>=2.4.10", "milvus-lite>=2.4.4,<3; sys_platform != 'win32'",
             "setuptools<82; sys_platform != 'win32'",
             "grpcio<1.80; python_version < '3.10' and sys_platform != 'win32'", "sentence-transformers>=2.2.0"]
 openai   = ["openai>=1.0.0"]
@@ -79,12 +88,12 @@ litellm  = ["litellm>=1.90.0,<1.97.0"]
 proxy    = ["fastapi>=0.110.0", "uvicorn>=0.27.0", "httpx>=0.27.0"]
 all      = [
     "chromadb>=0.4.0",
-    "qdrant-client>=1.7.0",
+    "qdrant-client>=1.10.0",
     "faiss-cpu>=1.7.4",
     "redis>=5.0.0",
     "redisvl>=0.1.0",
-    "pymilvus>=2.4.2",
-    "milvus-lite>=2.4.1,<3; sys_platform != 'win32'",
+    "pymilvus>=2.4.10",
+    "milvus-lite>=2.4.4,<3; sys_platform != 'win32'",
     "setuptools<82; sys_platform != 'win32'",
     "grpcio<1.80; python_version < '3.10' and sys_platform != 'win32'",
     "sentence-transformers>=2.2.0",

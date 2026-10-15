@@ -86,6 +86,14 @@ Docs only; no library code changed. Every statement re-read against the released
 
 ### Changed
 
+- **The `qdrant`, `milvus` and `all` extras require versions sulci works with.** The floors admitted releases sulci's
+  tests fail on. Measured on Python 3.12 (Linux), each in a fresh environment with sulci's Qdrant or Milvus tests, and
+  the boundaries confirmed on 3.11 by an independent review: `qdrant-client` 1.9.2 failed 27 of 64 and 1.7.0 28
+  (`search` uses `query_points`, added in 1.10.0), 1.10.0 passed all; `pymilvus` 2.4.9 and older no longer import on a
+  fresh install (their `environs` dependency fails on marshmallow 4), 2.4.10 does; with `pymilvus` 2.4.15,
+  `milvus-lite` 2.4.1 to 2.4.3 failed 22 or 23 of 88, 2.4.4 passed all 88 (with `pymilvus` 2.4.10 too). The extras now
+  require `qdrant-client>=1.10.0`, `pymilvus>=2.4.10` and `milvus-lite>=2.4.4`. Notes elsewhere that cite older
+  versions record what was measured then. Python 3.9 was not measured, nor the `chroma` and `faiss` floors.
 - **⚠️ Breaking: `MilvusBackend` filters on a scope key, and entries stored before 0.10.0 are misses.** Each entry
   now carries a `scope` field — the same digest-based key `sulci.sessions.scope.user_scope(tenant_id, user_id)`
   gives sessions — and a lookup filters on that key alone, so no caller-supplied text reaches a Milvus filter
@@ -181,6 +189,7 @@ Docs only; no library code changed. Every statement re-read against the released
   is excluded: on macOS it killed the process with a bus error when a collection was dropped while its own
   background thread built an index. CI now installs the extra and runs the Milvus tests on Linux and macOS — it
   never ran them.
+  📌 oss-0026: the extra now requires `pymilvus>=2.4.10` and `milvus-lite>=2.4.4` (measured: older ones fail).
 - **`MilvusBackend` opens an existing collection.** Every lookup missed until the process had stored something.
   A lookup now opens an existing collection and loads it unless it is loaded: a Milvus server (and milvus-lite 3.x)
   refuse to search a collection that is not — measured on milvus-lite 3.2.2 for a collection another process wrote.
