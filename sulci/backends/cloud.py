@@ -61,38 +61,9 @@ import httpx
 from typing import Optional
 
 from sulci import __version__
-
-
-class SulciErasureError(RuntimeError):
-    """Raised by ``SulciCloudBackend.delete_user`` / ``clear`` — and so by ``Cache.clear()`` on the managed
-    backend — whenever the gateway does not confirm the erasure: a transport error, any non-2xx answer, a 2xx
-    answer that is not ``{"status": "ok", ...}``, or a user id that cannot be encoded (nothing is sent).
-    The message names the operation, the status and the error code, never the user id.
-
-    Attributes:
-        operation: ``"delete_user"`` or ``"clear"``.
-        status:    the HTTP status, or ``None`` when no response arrived.
-        error:     the gateway's error code (``"validation_error"``, ``"erasure_incomplete"``,
-                   ``"unexpected_response"``, …); with no response, the transport error's TYPE
-                   (``"ConnectError"``) — its text, which can carry the URL and so the user id,
-                   stays on ``__cause__``; ``"unencodable user_id (…)"`` when nothing was sent.
-        body:      the parsed JSON answer, when there was one.
-    """
-
-    def __init__(self, operation: str, status, error: str, body=None):
-        self.operation, self.status, self.error, self.body = operation, status, error, body
-        where = "no response" if status is None else f"HTTP {status}"
-        super().__init__(f"sulci {operation} failed: {where}: {_short(error)}")
-
-    def __reduce__(self):  # picklable (multiprocessing, task queues)
-        return (type(self), (self.operation, self.status, self.error, self.body))
-
-
-def _short(value, limit: int = 200) -> str:
-    """repr() for a log line or message: control characters escaped, so a value cannot forge a line;
-    truncated, so a 100 kB id does not become a 100 kB log line."""
-    r = repr(value)
-    return r if len(r) <= limit else r[:limit] + f"…(+{len(r) - limit} chars)"
+# 0.10.0: SulciErasureError lives in sulci.errors — Cache.delete_user raises it on every backend, this module on
+# the managed one. Imported here because this module raises it.
+from sulci.errors import SulciErasureError
 
 
 def _user_path(user_id) -> str:

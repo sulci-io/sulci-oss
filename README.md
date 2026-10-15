@@ -680,6 +680,7 @@ cache = Cache(
 | `cache.context_summary(session_id=None, *, tenant_id=None, user_id=None)`              | `dict`                    | Snapshot of one or all sessions                                    |
 | `cache.stats()`                                                                        | `dict`                    | hits, misses, hit_rate, saved_cost, total_queries, active_sessions |
 | `cache.clear()`                                                                        | `None`                    | Evict all entries, reset stats and sessions                        |
+| `cache.delete_user(user_id, *, tenant_id=None)` (0.10.0)                               | `{"entries", "sessions"}` | Erase one user of one tenant: entries + sessions                   |
 
 > **Important:** `cache.get()` returns a **3-tuple** `(response, similarity, context_depth)` — not a 2-tuple like v0.1. Always unpack all three values.
 
@@ -710,6 +711,20 @@ encoded — they raise `sulci.backends.cloud.SulciErasureError`, and so does
 `cache.clear()` on the managed backend, before resetting stats or sessions.
 Catch it where a failed erasure must not stop the caller. The user id is
 percent-encoded into one path segment, so any id is addressed exactly.
+
+> **📌 0.10.0: `delete_user` is on `Cache`** — the table's last row. The "eight methods, not nine" and
+> "`delete_user` is not on `Cache`" paragraphs above describe 0.9.3; the surface is nine methods.
+> `cache.delete_user("u-42", tenant_id="t1")` erases that user's cache entries and conversation history in that
+> tenant, on a backend that implements `Backend.delete_user`, and returns `{"entries": N, "sessions": M}`. It needs
+> `personalized=True` — without it `user_id` is ignored and nothing is filed per user, so it raises `ValueError`
+> and `clear()` is the erasure route. On the managed backend it calls the gateway route above, and `tenant_id` is
+> refused (the API key decides the tenant). A failure raises `sulci.errors.SulciErasureError` (moved from
+> `sulci.backends.cloud`, which still raises it) saying what was erased; repeat the call to complete it. When it
+> returns, no lookup through Sulci can reach that user's data; the bytes may remain on disk until the store vacuums
+> or compacts, and copies outside Sulci (event sinks, logs, backups) are yours to erase. Use a stable,
+> system-assigned user id: Sulci cannot tell that an email address and an internal id are one person. During 0.10.0
+> development SQLite implements it first and the other self-hosted backends follow before the release; on a
+> backend without it the call raises `NotImplementedError`.
 
 ### Advanced constructor options
 

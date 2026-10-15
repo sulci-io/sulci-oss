@@ -34,7 +34,9 @@ from sulci.backends.protocol   import Backend
 from sulci._metadata import checked_metadata
 from sulci._scope_ids import refuse_reserved_scope
 from sulci.sessions.scope import scoped_session_id as _scoped_session_id
+from sulci.sessions.scope import user_scope as _user_scope
 from sulci.sessions.errors import SulciSessionError
+from sulci.errors import SulciErasureError, _short
 
 import logging as _logging
 _log = _logging.getLogger("sulci")
@@ -149,6 +151,11 @@ class _ProtocolAdaptedSessionStore:
                 f"({type(exc).__name__}: {exc})"
             ) from exc
 
+    def clear_scope(self, scope: str) -> int:
+        # 0.10.0: Cache.delete_user erases a user's history through the protocol's clear_scope. The store's own
+        # exception propagates: Cache wraps it in SulciErasureError, saying which half of the erasure happened.
+        return self._inner.clear_scope(scope)
+
     def active_sessions(self) -> list:
         # Same enumeration limitation as clear_all().
         return []
@@ -166,6 +173,11 @@ class _ProtocolAdaptedSessionStore:
             "ttl_seconds":     None,
             "sessions":        {},  # per-session breakdown not available
         }
+
+
+def _is_count(value) -> bool:
+    """0.10.0: a count an erasure reports — an int (not a bool), zero or more."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 # ── warning stacklevel ───────────────────────────────────────────────────────
@@ -268,6 +280,9 @@ class Cache:
         ttl_seconds:     Cache entry time-to-live. None = no expiry.
         personalized:    Scope lookups to the user_id passed on get/set/
                          cached_call. A call without user_id is unscoped.
+                         0.10.0: per-user erasure (delete_user) needs it —
+                         without it user_id is ignored, entries and history
+                         are filed under no user, and delete_user refuses.
         db_path:         Local storage path (ChromaDB, SQLite, FAISS).
         context_window:  Number of recent turns to remember per session.
                          0  = stateless (default, original behaviour).
@@ -1233,8 +1248,8 @@ class Cache:
         the built-in store or an injected one (0.9.3: an injected store's were left in place).
 
         If the backend cannot confirm the erasure — the managed backend raises
-        ``sulci.backends.cloud.SulciErasureError`` (0.9.3) — the exception propagates before
-        anything else is reset, so stats and sessions still describe the cache that is still there.
+        ``sulci.errors.SulciErasureError`` (0.9.3, in ``sulci.backends.cloud`` until 0.10.0) — the exception
+        propagates before anything else is reset, so stats and sessions still describe the cache that is still there.
         0.10.0: if an injected session store then fails, ``sulci.sessions.SulciSessionError`` — the
         entries WERE cleared and the ``clear`` event is emitted; the conversation histories were NOT
         cleared, and stats are left as they were.
@@ -1264,6 +1279,136 @@ class Cache:
             raise SulciSessionError(
                 f"Cache.clear: the entries WERE cleared, but {session_error}"
             ) from session_error.__cause__
+
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> dict:
+        """Erase one end user of one tenant: their cache entries and their conversation history.
+
+        0.10.0. Removes every entry the backend filed under (``tenant_id``, ``user_id``) — expired ones too — and
+        every session of that user in the session store (the built-in one or an injected one), and returns
+        ``{"entries": N, "sessions": M}``. A user with nothing stored gives ``{"entries": 0, "sessions": 0}``, so
+        the call can be repeated: a retry after a failure completes the erasure. Pass the ``user_id`` and
+        ``tenant_id`` your application passed to ``get``, ``set`` and ``cached_call`` — a stable, system-assigned
+        id: Sulci stores whatever string it is given, so an email address in one call and an internal id in the
+        next are two users to it.
+
+        Raises:
+            ValueError: ``user_id`` is ``None``, ``""``, ``"global"``, another falsy value or not valid Unicode
+                text, or ``tenant_id`` is reserved — the same rule as ``get`` and ``set``. Nothing is touched.
+            ValueError: the cache is not personalized (``personalized=False``): it files no entry or session
+                under a user, so there is nothing to erase per user; ``clear()`` is the erasure route. Nothing is
+                touched.
+            TypeError: ``tenant_id`` on the managed backend, where the API key decides the tenant. Nothing is
+                sent.
+            NotImplementedError: the backend has no ``delete_user`` (``Backend`` protocol, 0.10.0). Nothing is
+                touched.
+            sulci.errors.SulciErasureError: the backend failed (``entries`` and ``sessions`` are ``None``; the
+                session store was not touched), or the session store failed after the entries WERE erased
+                (``entries`` is their count, ``sessions`` is ``None``), or, on the managed backend, the gateway
+                did not confirm the erasure (the counts it confirms, if any). Retry the call.
+
+        The call is not a transaction: an entry or turn written for the same user while it runs may survive it,
+        so stop serving the user first; a repeated call removes what survived. When it returns, no lookup
+        through Sulci, by any user or tenant, can return an entry or blend a turn filed under this user. It does
+        not guarantee the bytes are gone from disk (SQLite pages until ``VACUUM``; deleted points until a vector
+        store compacts; a Redis snapshot written earlier), nor from copies Sulci does not control: event sinks,
+        logs, telemetry already sent, backups, an LLM provider's logs.
+
+        Entries stored while the cache was not personalized are not attributable to a user and are not erased.
+        After a complete erasure one ``delete_user`` event is emitted, WITHOUT the user id: an event sink is a
+        copy of data the erasure cannot reach.
+        """
+        refuse_reserved_scope(tenant_id, user_id, personalized=True)
+        if user_id is None:
+            raise ValueError("delete_user() needs the user_id to erase; None names no user (entries stored "
+                             "without a user are in the shared scope, which only clear() removes)")
+        if self._is_remote_transport and tenant_id is not None:
+            raise TypeError("delete_user(): tenant_id is not accepted on the managed backend — the API key decides "
+                            "the tenant, and the user is erased in that tenant across all of its keys")
+        if not self.personalized:
+            raise ValueError(
+                "delete_user() needs a Cache built with personalized=True. Without it, get(), set() and "
+                "cached_call() ignore user_id: entries and conversation history are filed under no user, so none "
+                "of them can be found and erased per user. Nothing was erased. clear() erases the whole cache.")
+        erase = getattr(self._backend, "delete_user", None)
+        if not callable(erase):
+            raise NotImplementedError(
+                f"{type(self._backend).__name__} has no delete_user(): it cannot erase one user's entries "
+                "(sulci.backends.Backend, 0.10.0). Nothing was erased.")
+
+        if self._is_remote_transport:
+            result = self._delete_user_remote(user_id)
+        else:
+            try:
+                entries = erase(user_id, tenant_id=tenant_id)
+            except Exception as exc:
+                raise SulciErasureError(
+                    "delete_user", None, type(exc).__name__,
+                    detail=(f"the backend failed to erase the user's entries ({type(exc).__name__}); the "
+                            "conversation history was not touched. Retry the call.")) from exc
+            if not _is_count(entries):
+                raise SulciErasureError(
+                    "delete_user", None, "not_a_count",
+                    detail=(f"the backend's delete_user() returned {type(entries).__name__}, not a count, so the "
+                            "erasure is not confirmed; the conversation history was not touched"))
+            sessions = 0
+            if self._sessions is not None:
+                try:
+                    sessions = self._sessions.clear_scope(_user_scope(tenant_id, user_id))
+                except Exception as exc:
+                    raise SulciErasureError(
+                        "delete_user", None, type(exc).__name__, entries=entries,
+                        detail=(f"the user's {entries} cache entries WERE erased, but the session store failed "
+                                f"to erase their conversation history ({type(exc).__name__}); it was NOT "
+                                "erased. Retry the call.")) from exc
+                if not _is_count(sessions):
+                    raise SulciErasureError(
+                        "delete_user", None, "not_a_count", entries=entries,
+                        detail=(f"the user's {entries} cache entries WERE erased, but the session store's "
+                                f"clear_scope() returned {type(sessions).__name__}, not a count, so the erasure "
+                                "of their conversation history is not confirmed. Retry the call."))
+            result = {"entries": entries, "sessions": sessions}
+
+        try:
+            self._event_sink.emit(CacheEvent(
+                event_type      = "delete_user",
+                tenant_id       = tenant_id,
+                user_id         = None,          # never the erased user's id: a sink is a copy erasure cannot reach
+                backend_id      = self.backend,
+                embedding_model = self.embedding_model,
+                timestamp       = time.time(),
+            ))
+        except Exception:
+            pass
+        return result
+
+    def _delete_user_remote(self, user_id) -> dict:
+        """The managed backend: DELETE /v1/cache/user/{id}, mapped to delete_user's shape. The gateway erases the
+        user's entries and sessions in the API key's tenant; this Cache holds neither locally."""
+        try:
+            body = self._backend.delete_user(user_id)
+        except SulciErasureError as exc:
+            # A 503 erasure_incomplete answer says which half completed (entries_status / sessions_status). As on the
+            # self-hosted path, .entries / .sessions carry the count of a half that completed and None for one that
+            # did not; a partial count the gateway gives for a failed half stays in .body, and the message says it.
+            b = exc.body if isinstance(exc.body, dict) else {}
+            done = {half: b[key] for half, key in (("entries", "deleted"), ("sessions", "sessions_deleted"))
+                    if b.get(f"{half}_status") == "ok" and _is_count(b.get(key))}
+            if not done:
+                raise
+            entries, sessions = done.get("entries"), done.get("sessions")
+            said = [f"the user's {entries} cache entries WERE erased" if entries is not None
+                    else "the cache entries were NOT all erased",
+                    f"{sessions} sessions WERE erased" if sessions is not None
+                    else "the conversation history was NOT all erased"]
+            raise SulciErasureError(
+                exc.operation, exc.status, exc.error, exc.body, entries, sessions,
+                detail=f"HTTP {exc.status}: {_short(exc.error)} — {'; '.join(said)}. Retry the call.") from exc
+        entries, sessions = body.get("deleted"), body.get("sessions_deleted")
+        if not (_is_count(entries) and _is_count(sessions)):
+            raise SulciErasureError(
+                "delete_user", None, "unexpected_response", body,
+                detail="the gateway answered ok but did not give both counts (deleted, sessions_deleted)")
+        return {"entries": entries, "sessions": sessions}
 
     def __repr__(self) -> str:
         ctx = f", context_window={self.context_window}" if self.context_window else ""

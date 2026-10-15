@@ -295,6 +295,17 @@ class SessionStore:
         self._windows.clear()
         self._last_active.clear()
 
+    def clear_scope(self, scope: str) -> int:
+        """0.10.0: remove every session whose id starts with ``scope`` — a user's prefix
+        (``sulci.sessions.scope.user_scope``), which ``Cache.delete_user`` passes — and return how many.
+        Idle sessions not yet evicted are removed and counted too. The same rule as the protocol stores'
+        ``clear_scope``; ``Cache`` keys every window by a scoped id."""
+        removed = 0
+        for sid in [sid for sid in list(self._windows) if sid.startswith(scope)]:
+            removed += self._windows.pop(sid, None) is not None     # one evicted meanwhile is not counted twice
+            self._last_active.pop(sid, None)
+        return removed
+
     def active_sessions(self) -> list[str]:
         """List currently active session IDs."""
         self._evict_stale()

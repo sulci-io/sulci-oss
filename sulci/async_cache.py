@@ -286,6 +286,11 @@ class AsyncCache:
         """Async — evict all entries, reset stats and sessions. Raises as ``Cache.clear()`` does."""
         return await asyncio.to_thread(self._cache.clear)
 
+    async def adelete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> dict:
+        """Async — erase one user of one tenant: entries and conversation history (0.10.0). Returns
+        ``{"entries": N, "sessions": M}`` and raises as ``Cache.delete_user()`` does."""
+        return await asyncio.to_thread(self._cache.delete_user, user_id, tenant_id=tenant_id)
+
     # ── Sync passthrough ──────────────────────────────────────────────────────
     # Provided so AsyncCache can be used in mixed sync/async codebases
     # without switching types.
@@ -368,6 +373,10 @@ class AsyncCache:
     def clear(self) -> None:
         """Sync passthrough — cache.clear()."""
         return self._cache.clear()
+
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> dict:
+        """Sync passthrough — cache.delete_user() (0.10.0)."""
+        return self._cache.delete_user(user_id, tenant_id=tenant_id)
 
     def get_context(self, session_id: str, *, tenant_id: Optional[str] = None, user_id: Optional[str] = None):
         """Sync passthrough — cache.get_context()."""

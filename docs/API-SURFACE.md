@@ -3,6 +3,10 @@
 **Measured:** 2026-10-10 against `sulci` **0.9.3** — `check_api_surface.py --show`; the 0.9.3 additions are the
 📌 rows and notes below (context methods' `tenant_id` / `user_id`). The 0.9.2 measurement follows.
 
+📌 2026-10-14 (oss-0016, unreleased 0.10.0): `Cache.delete_user`, `AsyncCache.adelete_user` and the
+`AsyncCache.delete_user` passthrough — the 📌 0.10.0 rows below — measured with `check_api_surface.py --show` on the
+oss-0016 tree. `pyproject.toml` reads 0.9.3 until the 0.10.0 version bump, so the version above stays.
+
 **Measured:** 2026-10-01 against `sulci` **0.9.2**
 
 📌 **Re-verified, not re-measured.** The surface was measured 2026-07-24 at
@@ -121,6 +125,7 @@ whitespace values fall through to the next tier.
 ## `Cache` — exactly eight public methods
 
 There are eight. Not nine.
+📌 0.10.0: nine — `delete_user` (the last row) is the ninth.
 
 | Method | Keyword-only kwargs | Returns |
 |---|---|---|
@@ -135,6 +140,7 @@ There are eight. Not nine.
 | `context_summary(session_id=None, *, …)` — 📌 0.9.3 | `tenant_id`, `user_id` | `dict` |
 | `stats()` | — | `dict` |
 | `clear()` | — | `None` |
+| `delete_user(user_id, *, …)` — 📌 0.10.0 | `tenant_id` | `{"entries": N, "sessions": M}` |
 
 Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
@@ -222,6 +228,29 @@ HTTP-and-cloud-backend-only capability and say so everywhere. Until that is
 decided, **documentation must describe the capability that exists**, which is:
 `cache.clear()` on any backend, `DELETE /v1/cache/user/{id}` on the hosted tier.
 
+📌 **Decided 2026-10-14, for 0.10.0 (oss-0016): `delete_user` is a `Cache` method and a `Backend` protocol
+method.** The section above describes 0.9.3 and is kept as the record.
+
+- `Cache.delete_user(user_id, *, tenant_id=None) -> {"entries": N, "sessions": M}` erases one end user of one
+  tenant: the backend's entries filed under (tenant, user), expired ones included, through `Backend.delete_user`,
+  then the user's conversation sessions through the session store's `clear_scope(user_scope(tenant, user))` — the
+  built-in store or an injected one. `AsyncCache.adelete_user` and the sync passthrough `delete_user` mirror it.
+- It refuses before touching anything: `ValueError` for a `user_id` that is `None`, `""`, `"global"`, falsy or not
+  valid Unicode text, or a reserved `tenant_id`; `ValueError` when the cache is not `personalized=True` (nothing is
+  filed per user there; `clear()` is the route); `TypeError` for `tenant_id` on the managed backend (the API key
+  decides the tenant); `NotImplementedError` when the backend has no `delete_user`.
+- A failure raises `SulciErasureError` — now in `sulci.errors` (`sulci.backends.cloud` imports it from there) —
+  with `.entries` and `.sessions`: the count of each half that completed, `None` for a half that did not (on the
+  managed backend a partial count for a failed half stays in `.body`). The call is idempotent; a retry completes it.
+- On the managed backend it sends `DELETE /v1/cache/user/{id}` and maps the gateway's `deleted` and
+  `sessions_deleted` onto the same two keys.
+- After a complete erasure it emits one `delete_user` event, without the user id.
+- `Backend.delete_user(user_id, *, tenant_id=None) -> int` (ADR 0005 Amendment 2) removes exactly that scope's
+  entries, returns a true count, is idempotent, does not validate, and raises on failure. SQLite has it from
+  oss-0016; Redis, Chroma, Qdrant, Milvus and FAISS follow, one patch each, before 0.10.0 is tagged.
+- `cache._backend.delete_user(...)` remains the managed backend's own method; call `Cache.delete_user` instead.
+  The specification is `docs/architecture/specs/delete-user-erasure.md` in sulci-platform.
+
 ---
 
 ## `AsyncCache` — a complete mirror of *which* kwargs, not of *how*
@@ -242,6 +271,8 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `get_context` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
 | `clear_context` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
 | `context_summary` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
+| `adelete_user` — 📌 0.10.0 | `tenant_id` |
+| `delete_user` (sync passthrough) — 📌 0.10.0 | `tenant_id` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,

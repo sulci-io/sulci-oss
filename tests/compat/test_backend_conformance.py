@@ -224,3 +224,85 @@ class TestTenantIsolation:
             tenant_id="tenant_a",
         )
         assert resp == "tenant_A_data"
+
+
+# =============================================================================
+# User erasure — 0.10.0 (ADR 0005 Amendment 2). Runs for each backend that has delete_user; a backend without
+# it skips BEFORE it is constructed, so the count of skips does not depend on whether its server is up.
+# =============================================================================
+
+@pytest.fixture
+def erasable_backend(backend_class, request):
+    if not callable(getattr(backend_class, "delete_user", None)):
+        pytest.skip(f"{backend_class.__name__} has no delete_user (0.10.0: added backend by backend)")
+    return request.getfixturevalue("backend_instance")     # constructs, clears before and after, or skips
+
+
+class TestUserErasure:
+    """``Backend.delete_user(user_id, *, tenant_id=None) -> int``: removes exactly the entries filed under
+    (tenant_id or "global", user_id) — expired ones too — returns how many, and a second call returns 0."""
+
+    EMB_DIM = 384
+
+    def _vec(self, i: int) -> list[float]:
+        v = [0.0] * self.EMB_DIM
+        v[i % self.EMB_DIM] = 1.0
+        return v
+
+    def _seed(self, b) -> None:
+        past = 1.0                                   # 1970: expired
+        b.store("k1", "q1", "t1/u42/1", self._vec(1), tenant_id="t1", user_id="u42")
+        b.store("k2", "q2", "t1/u42/2", self._vec(2), tenant_id="t1", user_id="u42")
+        b.store("k3", "q3", "t1/u42/expired", self._vec(3), tenant_id="t1", user_id="u42", expires=past)
+        b.store("k1", "q1", "t2/u42", self._vec(1), tenant_id="t2", user_id="u42")
+        b.store("k1", "q1", "t1/u7", self._vec(1), tenant_id="t1", user_id="u7")
+        b.store("k1", "q1", "t1/shared", self._vec(1), tenant_id="t1")
+        b.store("k1", "q1", "global/u42", self._vec(1), user_id="u42")
+
+    def test_signature(self, backend_class):
+        if not callable(getattr(backend_class, "delete_user", None)):
+            pytest.skip(f"{backend_class.__name__} has no delete_user")
+        params = inspect.signature(backend_class.delete_user).parameters
+        assert list(params)[:2] == ["self", "user_id"]
+        assert params["tenant_id"].kind == inspect.Parameter.KEYWORD_ONLY
+        assert params["tenant_id"].default is None
+
+    def test_returns_the_count_of_the_users_entries_expired_included(self, erasable_backend):
+        self._seed(erasable_backend)
+        assert erasable_backend.delete_user("u42", tenant_id="t1") == 3
+
+    def test_the_user_has_nothing_left(self, erasable_backend):
+        b = erasable_backend
+        self._seed(b)
+        b.delete_user("u42", tenant_id="t1")
+        for i in (1, 2, 3):
+            assert b.search(self._vec(i), 0.5, tenant_id="t1", user_id="u42", now=0.5)[0] is None
+
+    def test_the_same_user_in_another_tenant_is_intact(self, erasable_backend):
+        b = erasable_backend
+        self._seed(b)
+        b.delete_user("u42", tenant_id="t1")
+        assert b.search(self._vec(1), 0.5, tenant_id="t2", user_id="u42")[0] == "t2/u42"
+        assert b.search(self._vec(1), 0.5, user_id="u42")[0] == "global/u42"
+
+    def test_other_users_and_the_shared_user_of_the_tenant_are_intact(self, erasable_backend):
+        b = erasable_backend
+        self._seed(b)
+        b.delete_user("u42", tenant_id="t1")
+        assert b.search(self._vec(1), 0.5, tenant_id="t1", user_id="u7")[0] == "t1/u7"
+        assert b.search(self._vec(1), 0.5, tenant_id="t1")[0] == "t1/shared"
+
+    def test_no_tenant_is_the_global_tenant(self, erasable_backend):
+        b = erasable_backend
+        self._seed(b)
+        assert b.delete_user("u42") == 1
+        assert b.search(self._vec(1), 0.5, user_id="u42")[0] is None
+        assert b.search(self._vec(1), 0.5, tenant_id="t1", user_id="u42")[0] == "t1/u42/1"
+
+    def test_a_second_call_returns_zero(self, erasable_backend):
+        self._seed(erasable_backend)
+        erasable_backend.delete_user("u42", tenant_id="t1")
+        assert erasable_backend.delete_user("u42", tenant_id="t1") == 0
+
+    def test_a_user_with_nothing_stored(self, erasable_backend):
+        assert erasable_backend.delete_user("nobody", tenant_id="t1") == 0

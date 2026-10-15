@@ -11,7 +11,7 @@ Latency  : 5–50 ms (slower than FAISS/Chroma but needs nothing)
 Best for : prototyping, low-traffic apps, edge deployments, CI/CD
 """
 from __future__ import annotations
-import os, sqlite3, json, struct, time, math, warnings
+import os, sqlite3, json, struct, threading, time, math, warnings
 from typing import Optional
 
 from sulci._metadata import checked_metadata
@@ -57,6 +57,12 @@ class SQLiteBackend:
         self._db_file = db_file
         self._conn  = sqlite3.connect(db_file, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # 0.10.0: one connection, shared by every thread that uses this backend (AsyncCache runs each call in a
+        # worker thread). Statements and commits from two threads interleaved on it: measured with one writer
+        # thread beside another, about one call in five raised (InterfaceError, "cannot commit - no transaction is
+        # active", SystemError), and delete_user could return 0 with the user's rows still there. Every use of
+        # the connection after construction holds this lock.
+        self._lock  = threading.RLock()
         self._setup()
 
     def _setup(self):
@@ -140,16 +146,7 @@ class SQLiteBackend:
         # The key is derived from the query text alone (Cache.set), so the
         # scope must be part of the conflict target: the same query stored
         # for two users or two tenants is two rows, never one overwritten.
-        self._conn.execute("""
-            INSERT INTO cache
-                (key, query, response, embedding, tenant_id, user_id,
-                 expires, created, metadata)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(key, tenant_id, user_id) DO UPDATE SET
-                response  = excluded.response,
-                embedding = excluded.embedding,
-                expires   = excluded.expires
-        """, (
+        row = (
             key, query, response,
             self._pack(embedding),
             tenant_id or "global",
@@ -157,8 +154,19 @@ class SQLiteBackend:
             expires or 0.0,
             time.time(),
             json.dumps(checked_metadata(metadata)),   # 0.9.3: the same rule as Cache.set
-        ))
-        self._conn.commit()
+        )
+        with self._lock:
+            self._conn.execute("""
+                INSERT INTO cache
+                    (key, query, response, embedding, tenant_id, user_id,
+                     expires, created, metadata)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(key, tenant_id, user_id) DO UPDATE SET
+                    response  = excluded.response,
+                    embedding = excluded.embedding,
+                    expires   = excluded.expires
+            """, row)
+            self._conn.commit()
 
     def search(
         self,
@@ -169,10 +177,11 @@ class SQLiteBackend:
     ) -> tuple[Optional[str], float]:
         now       = now or time.time()
         # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global".
-        rows      = self._conn.execute(
-            "SELECT response, embedding, expires FROM cache WHERE tenant_id = ? AND user_id = ?",
-            (tenant_id or "global", user_id or "global"),
-        ).fetchall()
+        with self._lock:
+            rows  = self._conn.execute(
+                "SELECT response, embedding, expires FROM cache WHERE tenant_id = ? AND user_id = ?",
+                (tenant_id or "global", user_id or "global"),
+            ).fetchall()
         best_sim  = 0.0
         best_resp = None
         for row in rows:
@@ -187,5 +196,19 @@ class SQLiteBackend:
         return None, best_sim
 
     def clear(self) -> None:
-        self._conn.execute("DELETE FROM cache")
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute("DELETE FROM cache")
+            self._conn.commit()
+
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
+        """0.10.0: remove every entry filed under (``tenant_id or "global"``, ``user_id or "global"``) — expired
+        ones too — and return how many (the ``Backend`` protocol's contract). One statement, served by
+        ``idx_scope``. The rows' pages are freed in the file only when it is vacuumed; until then the bytes may
+        remain on disk, unreachable through Sulci."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM cache WHERE tenant_id = ? AND user_id = ?",
+                (tenant_id or "global", user_id or "global"),
+            )
+            self._conn.commit()
+            return cur.rowcount

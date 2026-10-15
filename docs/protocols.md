@@ -36,6 +36,9 @@ Both protocols are `typing.Protocol` definitions decorated with
 (`tests/compat/`) goes further — it checks parameter names, kinds,
 defaults, and behavioral round-trip semantics.
 
+📌 0.10.0: `delete_user` is one of the required methods, so `isinstance(b, Backend)` is `False` for a backend
+written for 0.9.3 until it implements `delete_user()` (below). `Cache` does not check `isinstance`.
+
 ---
 
 ## Backend protocol
@@ -162,6 +165,27 @@ underlying schema or just the data: the protocol semantics are
 storage structure (collections, indexes, etc.) so subsequent
 operations work without rebuilding.
 
+### `delete_user()` — 📌 0.10.0
+
+```python
+def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
+```
+
+Added to the protocol in 0.10.0 (ADR 0005 Amendment 2); the 0.9.3 paragraph under `clear()` above is the record of
+what came before. Remove every entry filed under (`tenant_id or "global"`, `user_id`), expired ones too, and
+nothing else; return how many were removed. `Cache.delete_user` is the only caller: it validates the ids, refuses a
+cache that is not personalized, erases the user's sessions from the session store, and wraps a failure here in
+`sulci.errors.SulciErasureError`.
+
+- MUST leave the same user in another tenant, other users of the tenant, and the shared user `"global"` intact.
+- MUST return a true count. A client that does not report one: count the matches, then delete those ids.
+- MUST be idempotent (a second call returns 0) and MUST NOT validate the ids: file a missing tenant or user as
+  `"global"`, as `store` does.
+- MUST raise on failure — unlike `search` — and never remove part of the user's entries and report success.
+- MAY cost time linear in the number of entries; it is not on the lookup path.
+
+A backend without `delete_user` still works with `Cache`, but `Cache.delete_user` raises `NotImplementedError` on it.
+
 ### `ENFORCES_TENANT_ISOLATION` class attribute
 
 ```python
@@ -284,6 +308,7 @@ Three test groups, each with different infrastructure requirements:
 | `TestStructural` | `isinstance(b, Backend)`, parameter names + kinds + defaults via `inspect.signature`, presence of `ENFORCES_TENANT_ISOLATION` | Always |
 | `TestRoundTrip` | `store()` + `search()` returns the stored response; `clear()` empties the backend | When `_try_construct_backend` returns a live instance |
 | `TestTenantIsolation` | Cross-tenant search misses; same-tenant search hits | When `ENFORCES_TENANT_ISOLATION = True` AND backend is constructable |
+| `TestUserErasure` — 📌 0.10.0 | `delete_user` signature; the count includes expired entries; nothing left for the user; the same user in another tenant, other users and the shared user intact; a second call returns 0 | When the class has `delete_user` AND the backend is constructable |
 
 ### Run
 
@@ -344,6 +369,9 @@ modifications require a superseding ADR before merge. Its Amendment 1
 (2026-10-11) records that 0.9.3 changed the Backend and SessionStore
 protocols without a deprecation cycle, deliberately, and that the
 deprecation rule resumes at the first official release.
+
+📌 0.10.0: the addition of `Backend.delete_user` (see `delete_user()` above) is to be recorded as Amendment 2,
+written in sulci-platform before 0.10.0 is released.
 
 ---
 

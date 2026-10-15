@@ -17,6 +17,11 @@ All shipped backends accept this kwarg. Since 0.9.3 every shipped backend
 enforces it, and `user_id`, on every lookup (before, only QdrantBackend
 and the managed backend did). See ADR 0005 for the rationale.
 
+0.10.0 (ADR 0005 Amendment 2): `delete_user(user_id, *, tenant_id=None)
+-> int` — remove one user's entries in one tenant and return how many.
+`Cache.delete_user` calls it; a backend without it cannot erase a user
+through `Cache` (NotImplementedError, naming the backend).
+
 Usage
 -----
 Verify your custom backend conforms:
@@ -33,9 +38,12 @@ Verify your custom backend conforms:
             ...
         def clear(self):
             ...
+        def delete_user(self, user_id, *, tenant_id=None):   # 0.10.0
+            ...
 
     # Duck-typed conformance (Protocol is structural):
     isinstance(MyBackend(), Backend)  # True if methods match by name
+    # 0.10.0: delete_user is one of those names — a backend without it is not an instance.
     # NOTE: runtime_checkable only validates method NAMES, not signatures.
     # Run sulci.tests.compat.test_backend_conformance for full validation.
 
@@ -173,5 +181,43 @@ class Backend(Protocol):
 
         Typically used in tests. In production, prefer TTL-based expiry
         and per-user deletion rather than clearing everything.
+        """
+        ...
+
+    def delete_user(
+        self,
+        user_id: str,
+        *,
+        tenant_id: Optional[str] = None,
+    ) -> int:
+        """
+        0.10.0 (ADR 0005 Amendment 2). Remove every entry filed under
+        (``tenant_id or "global"``, ``user_id``) — expired ones too — and
+        nothing else. Returns how many entries were removed.
+
+        ``Cache.delete_user`` is the only caller. It validates the ids,
+        refuses a cache that is not personalized, erases the user's
+        conversation history from the session store, and wraps a failure
+        here in ``sulci.errors.SulciErasureError``. So this method:
+
+        - removes exactly one scope: the same ``user_id`` in another
+          tenant, other users of the same tenant, and the shared user
+          ``"global"`` are left intact;
+        - returns a true count: the number of entries removed, after which
+          the user has none left. A backend whose client does not return a
+          count counts the matches first, then deletes them by id, so the
+          count and the deletion are about the same entries;
+        - is idempotent: a second call returns 0;
+        - does not validate: ``Cache`` already refused reserved ids, and a
+          backend called directly treats its arguments as given, filing a
+          missing tenant or user as ``"global"`` exactly as ``store`` does;
+        - raises on failure, its own exception, and never removes part of
+          the user's entries and reports success (unlike ``search``, which
+          must not raise: a failed erasure must not look like one that
+          happened);
+        - is not in a hot path: a cost linear in the number of entries is
+          acceptable.
+
+        Verify with the conformance suite's ``TestUserErasure``.
         """
         ...

@@ -24,6 +24,30 @@ Docs only; no library code changed. Every statement re-read against the released
 - This file: release dates on the 0.9.1–0.9.3 headings, and dated notes beside the 0.9.1 and 0.9.2 entries
   for changes those entries did not list.
 
+### Added
+
+- **`Cache.delete_user(user_id, *, tenant_id=None)` erases one end user of one tenant** — their cache entries and
+  their conversation history — and returns `{"entries": N, "sessions": M}`. `AsyncCache.adelete_user` and a sync
+  passthrough mirror it. It needs `personalized=True` (otherwise `ValueError`: nothing is filed per user, and
+  `clear()` is the route), refuses the ids `get` and `set` refuse, and on the managed backend sends
+  `DELETE /v1/cache/user/{id}` (a `tenant_id` there is a `TypeError`: the API key decides the tenant). A failure
+  raises `SulciErasureError` with `.entries` / `.sessions` — the count of each half that completed, `None` for a
+  half that did not; a repeated call completes the erasure. One `delete_user` event is emitted afterwards, without the user id. Measured on 0.9.3: `Cache` had no
+  such method (`AttributeError`), and on SQLite a user's entries and sessions stayed until `clear()`.
+- **`Backend.delete_user(user_id, *, tenant_id=None) -> int`** joins the `Backend` protocol (ADR 0005 Amendment 2):
+  remove exactly one (tenant, user) scope's entries, expired ones too, return a true count, idempotent, raising on
+  failure. `SQLiteBackend` implements it; the other self-hosted backends follow before 0.10.0 is released, and until
+  then `Cache.delete_user` raises `NotImplementedError` on them. The conformance suite gains `TestUserErasure`.
+  ⚠️ Breaking for `isinstance`: `Backend` is `runtime_checkable`, so `isinstance(b, sulci.backends.Backend)` is
+  `False` for a backend without `delete_user` — a custom backend written for 0.9.3 among them. `Cache` does not
+  check it: such a backend still serves `get`, `set` and `clear`.
+- The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
+- `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
+  there. It gains `entries`, `sessions` and `detail`.
+- Old data: entries stored while a cache was not personalized are not attributable to a user, and Milvus entries
+  written before 0.10.0 are unreachable by a scope filter — `clear()` removes both. Turning `personalized` on later
+  does not make earlier entries erasable per user.
+
 ### Changed
 
 - **⚠️ Breaking: `MilvusBackend` filters on a scope key, and entries stored before 0.10.0 are misses.** Each entry
@@ -52,6 +76,11 @@ Docs only; no library code changed. Every statement re-read against the released
   normally and nothing was logged. The built-in in-process session store is unaffected.
 
 ### Fixed
+
+- **`SQLiteBackend` is safe to share between threads**, as `AsyncCache` shares it (each call runs in a worker
+  thread). Every use of its one connection now holds a lock. Measured before: with one thread storing beside
+  another, about one call in five raised (`InterfaceError`, "cannot commit - no transaction is active",
+  `SystemError`), and `delete_user` could return 0 with the user's rows still in the file.
 
 - **`sulci[milvus]` installs Milvus Lite again.** pymilvus 3 no longer installs `milvus-lite`, so the extra gave a
   `MilvusBackend` whose default — a local file — failed at construction ("milvus-lite is required for local
