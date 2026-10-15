@@ -550,3 +550,120 @@ class TestMilvusBackend:
             # 0.10.0: and within its tenant — the same user id under another tenant is someone else
             assert b.search(vec, 0.85, tenant_id="t2", user_id=value)[0] is None, value
         assert b.search(vec, 0.85, user_id="nobody")[0] is None
+
+
+# ── Milvus Lite: a stored entry is readable before store() returns (oss-0019) ──────────────────────────────────
+
+class _LagClient:
+    """Insert returns ids; get() answers nothing for the first `lag` reads of each id, as Milvus Lite did on a Mac."""
+    def __init__(self, lag):
+        self.lag, self.gets, self.next_id = lag, [], 0
+
+    def insert(self, collection, rows):
+        self.next_id += 1
+        self._left = self.lag
+        return {"insert_count": 1, "ids": [self.next_id]}
+
+    def get(self, collection, ids, output_fields=None, timeout=None):
+        assert timeout is not None and timeout > 0           # every read is bounded (oss-0019)
+        self.gets.append(list(ids))
+        if self._left > 0:
+            self._left -= 1
+            return []
+        return [{"id": ids[0], "scope": "s"}]
+
+
+def _lag_backend(lag, lite=True):
+    from sulci.backends.milvus import MilvusBackend
+    b = MilvusBackend.__new__(MilvusBackend)
+    b._client, b._ready, b._lite = _LagClient(lag), True, lite
+    b._ensure = lambda dim: None
+    return b
+
+
+class TestMilvusLiteReadsBack:
+    """Measured on a maintainer's Mac (milvus-lite 2.5.1): a lookup straight after an insert missed the entry in 6 of
+    50 trials and found it 0.5 s later; reading the row back by id before returning closed it (0 of 50)."""
+
+    def test_store_returns_once_the_row_reads_back(self):
+        b = _lag_backend(lag=2)
+        b.store("k", "q", "a", [1.0, 0.0])
+        assert b._client.gets == [[1], [1], [1]]               # two empty reads, then the row
+
+    def test_a_row_visible_at_once_costs_one_read(self):
+        b = _lag_backend(lag=0)
+        b.store("k", "q", "a", [1.0, 0.0])
+        assert b._client.gets == [[1]]
+
+    def test_a_milvus_server_is_not_polled(self):
+        b = _lag_backend(lag=2, lite=False)
+        b.store("k", "q", "a", [1.0, 0.0])
+        assert b._client.gets == []
+
+    def test_a_row_that_never_reads_back_warns_once_and_returns_in_time(self, monkeypatch, caplog):
+        import logging
+        import sulci.backends.milvus as m
+        monkeypatch.setattr(m, "_LITE_VISIBLE_TIMEOUT_SECONDS", 0.1)
+        b = _lag_backend(lag=10 ** 6)
+        t0 = time.monotonic()
+        with caplog.at_level(logging.WARNING, logger="sulci"):
+            b.store("k", "q", "a", [1.0, 0.0])                  # returns: the entry WAS stored
+        assert time.monotonic() - t0 < 0.1 + 0.2
+        assert len(b._client.gets) >= 2
+        warned = [r.getMessage() for r in caplog.records if r.name == "sulci"]
+        assert len(warned) == 1 and "not readable after" in warned[0]
+
+    def test_a_failing_read_back_warns_and_does_not_fail_the_store(self, caplog):
+        import logging
+        b = _lag_backend(lag=0)
+
+        def broken(*a, **k):
+            raise ConnectionError("lite went away")
+        b._client.get = broken
+        with caplog.at_level(logging.WARNING, logger="sulci"):
+            b.store("k", "q", "a", [1.0, 0.0])
+        warned = [r.getMessage() for r in caplog.records if r.name == "sulci"]
+        assert len(warned) == 1 and "ConnectionError" in warned[0]
+
+    def test_an_insert_without_ids_warns_once_and_is_not_polled(self, caplog):
+        import logging
+        b = _lag_backend(lag=2)
+        b._client.insert = lambda collection, rows: {"insert_count": 1}
+        with caplog.at_level(logging.WARNING, logger="sulci"):
+            b.store("k", "q", "a", [1.0, 0.0])
+            b.store("k2", "q2", "a2", [0.0, 1.0])
+        assert b._client.gets == []
+        assert len([r for r in caplog.records if "returned no ids" in r.getMessage()]) == 1
+
+    @pytest.mark.parametrize("uri,lite", [(None, True), ("", True), ("./cache.db", True), ("/tmp/x.db", True),
+                                          ("cache.db", True), ("http://localhost:19530", False),
+                                          ("https://x.zillizcloud.com", False), ("tcp://h:19530", False),
+                                          ("grpc://h:19530", False), ("unix:/tmp/m.sock", False),
+                                          ("http://host/path.db", False), ("HTTP://host/x.db", False),
+                                          ("http:x.db", False), ("tcp:x.db", False), ("unix:///tmp/m.db", False),
+                                          ("x.DB", False), ("file:///tmp/x.db", True)])
+    def test_which_uris_are_milvus_lite(self, uri, lite):
+        from sulci.backends.milvus import _is_lite
+        assert _is_lite(uri) is lite
+
+    @skip_milvus
+    def test_on_milvus_lite_every_store_reads_back_before_it_returns(self, tmp_path):
+        from sulci.backends.milvus import MilvusBackend
+        b = MilvusBackend(db_path=str(tmp_path / "lite.db"))
+        assert b._lite is True
+        real_get, reads = b._client.get, []
+
+        def counted(*a, **k):
+            rows = real_get(*a, **k)
+            reads.append(bool(rows))
+            return rows
+        b._client.get = counted
+        try:
+            for i in range(20):
+                v = [0.0] * 8
+                v[i % 8] = 1.0
+                b.store(f"k{i}", f"q{i}", f"a{i}", v, tenant_id="t", user_id=f"u{i}")
+                assert reads and reads[-1] is True                  # it returned on a read that found the row
+                assert b.search(v, 0.9, tenant_id="t", user_id=f"u{i}")[0] == f"a{i}"
+        finally:
+            b.clear()

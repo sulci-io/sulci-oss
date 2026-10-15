@@ -10,10 +10,12 @@ Free tier: Milvus Lite (embedded) or Zilliz Cloud free tier
 Latency  : 5–20 ms embedded, <5 ms Zilliz Cloud
 """
 from __future__ import annotations
+import logging
 import re
 import sys
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 from sulci.sessions.scope import user_scope
 
@@ -46,6 +48,29 @@ def _scope_key(tenant_id: Optional[str], user_id: Optional[str]) -> str:
 #: attempt fails. A start that failed outright (ConnectionConfigException) is not, nor is a Milvus server (uri=).
 _LITE_START_ATTEMPTS = 3
 _LITE_RETRY_PAUSE_SECONDS = 0.5
+
+#: 0.10.0 (oss-0019). Milvus Lite does not always make an insert visible before insert() returns. Measured on a
+#: maintainer's Mac (milvus-lite 2.5.1, pymilvus 3.0.2): a lookup straight after the last of 301 inserts missed the
+#: entry just stored in 6 of 50 trials (earlier runs: 2 of 10, 5 of 20) — Cache.get, MilvusBackend.search and a search
+#: at consistency "Strong" alike — and found it 0.5 s later; on Linux it never missed. So on Milvus Lite, store() reads
+#: the new row back by id until it is there. Measured on that Mac over 50 trials: the lookup never missed (0 of 50);
+#: about one store in five needed a second read and none more than two reads; the median store went from 0.33 to
+#: 1.15 ms, p95 from 0.85 to 8.0 ms. Reading back with the filtered vector search itself also gave 0 of 50, at a
+#: slightly higher cost (median 1.24 ms). On Linux, where the miss never appeared, the read costs about as much (an
+#: independent review measured +1.4 ms median per store). A Milvus server (uri= with a network scheme) is not polled:
+#: it keeps its own consistency level.
+_LITE_VISIBLE_POLL_SECONDS = 0.005
+_LITE_VISIBLE_TIMEOUT_SECONDS = 2.0
+_log = logging.getLogger("sulci")
+_SERVER_SCHEMES = ("unix", "http", "https", "tcp", "grpc")      # pymilvus's own rule (orm/connections.py)
+
+
+def _is_lite(uri: Optional[str]) -> bool:
+    """True for Milvus Lite: no uri (``db_path=``), or a uri pymilvus itself opens as a local Milvus Lite file — its
+    scheme is none of unix/http/https/tcp/grpc and it ends in ``.db`` (``uri="./cache.db"``)."""
+    if not uri:
+        return True
+    return urlparse(uri).scheme.lower() not in _SERVER_SCHEMES and uri.endswith(".db")
 
 
 def _release_lite_server(db_path: str) -> None:
@@ -103,6 +128,7 @@ class MilvusBackend:
             MilvusClient(uri=uri, token=token) if uri
             else _open_lite(MilvusClient, db_path)       # 0.10.0: a start that failed is retried
         )
+        self._lite  = _is_lite(uri)                      # 0.10.0 (oss-0019): store() waits until it can read back
         self._ready = False
 
     def _open(self) -> bool:
@@ -156,13 +182,46 @@ class MilvusBackend:
         metadata: Optional[dict] = None,
     ) -> None:
         self._ensure(len(embedding))
-        self._client.insert(self.COLLECTION, [{
+        result = self._client.insert(self.COLLECTION, [{
             "vector":   embedding,
             "query":    query,
             "response": response,
             "scope":    _scope_key(tenant_id, user_id),     # 0.10.0: what search() filters on; no raw ids
             "expires":  expires or 0.0,
         }])
+        if self._lite:
+            self._await_visible(result)
+
+    def _await_visible(self, result) -> None:
+        """0.10.0 (oss-0019): on Milvus Lite, return once the row just inserted can be read back (see
+        ``_LITE_VISIBLE_POLL_SECONDS``). The entry WAS stored whatever happens here, so nothing raises: if it cannot be
+        read back within ``_LITE_VISIBLE_TIMEOUT_SECONDS``, or the read itself fails, this store logs one WARNING on the
+        ``sulci`` logger and returns, and a lookup may miss the entry until Milvus Lite makes it visible. (pymilvus
+        may log its own error for a read that hit its timeout.)"""
+        try:
+            ids = list(result["ids"])
+        except Exception:
+            ids = []
+        if not ids:
+            if not getattr(self, "_warned_no_ids", False):              # once per backend, not once per store
+                self._warned_no_ids = True
+                _log.warning("sulci MilvusBackend: Milvus Lite's insert() returned no ids; entries are stored but "
+                             "not read back, and a lookup straight after a store may miss it")
+            return
+        deadline = time.monotonic() + _LITE_VISIBLE_TIMEOUT_SECONDS
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if self._client.get(self.COLLECTION, ids=ids, output_fields=["scope"],
+                                    timeout=max(remaining, _LITE_VISIBLE_POLL_SECONDS)):
+                    return
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"not readable after {_LITE_VISIBLE_TIMEOUT_SECONDS:.1f} s")
+                time.sleep(_LITE_VISIBLE_POLL_SECONDS)
+        except Exception as exc:
+            _log.warning("sulci MilvusBackend: an entry stored in Milvus Lite could not be read back (%s: %s); it was "
+                         "stored, and a lookup may miss it until Milvus Lite makes it visible",
+                         type(exc).__name__, exc)
 
     def search(
         self,

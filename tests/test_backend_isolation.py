@@ -188,6 +188,7 @@ def _milvus():
     from sulci.backends.milvus import MilvusBackend
     b = MilvusBackend.__new__(MilvusBackend)
     b._client, b._ready = _MilvusClient(), True
+    b._lite = False                         # a recorded client: store() does not read back (oss-0019)
     b._ensure = lambda dim: None
     return b
 

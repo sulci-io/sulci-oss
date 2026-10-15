@@ -87,6 +87,17 @@ Docs only; no library code changed. Every statement re-read against the released
 
 ### Fixed
 
+- **Milvus Lite: `store()` returns once the new entry can be read back.** Milvus Lite did not always make an insert
+  visible before `insert()` returned: measured on macOS (milvus-lite 2.5.1, pymilvus 3.0.2), a lookup straight after
+  the last of 301 inserts missed the entry just stored in 6 of 50 trials — through `Cache.get`, `MilvusBackend.search`
+  and a search at consistency "Strong" alike — and found it 0.5 s later; on Linux it never missed. Now, on Milvus Lite
+  (a local file, by `db_path=` or a `uri=` ending in `.db` without a network scheme), `store()` reads the new row back
+  by id until it is there. Measured on that Mac over 50 trials: the lookup never missed (0 of 50); about one store in
+  five needed a second read; the median store went from 0.33 to 1.15 ms, p95 from 0.85 to 8.0 ms. On Linux, where
+  the miss never appeared, the read costs about the same (+1.4 ms median per store, measured). If the row cannot
+  be read back within 2 s, or the read fails, that store logs a WARNING and returns — the entry was stored, and a
+  lookup may miss it until Milvus Lite shows it. A Milvus server is unchanged.
+
 - **`RedisBackend` reads, clears and erases only its own entries.** Its `SCAN` pattern was the key prefix with its
   glob characters unescaped, and every key under it counted. Measured on two instances on one Redis: with prefixes
   `P[x]:` and `Px:`, the first one's `search` served the second one's answer; with `X:` and `X:a:`, `clear()` on the
