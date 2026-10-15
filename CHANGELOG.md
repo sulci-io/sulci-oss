@@ -110,6 +110,17 @@ Docs only; no library code changed. Every statement re-read against the released
   same as before (measured at 500 entries of 384 dimensions). Still one process per `db_path`: two processes, or two
   `FAISSBackend` objects on one directory, each write the files over the other's.
 
+- **`QdrantBackend` in local mode (`db_path=`): calls from several threads run one at a time.** `AsyncCache` runs each
+  backend call on a thread of its own, and qdrant-client's local mode writes through one SQLite connection and reads
+  in-memory arrays that a write may be resizing. Measured on main before this fix: 400 concurrent `AsyncCache.aset`
+  calls raised `sqlite3.InterfaceError` ("bad parameter or other API misuse") inside qdrant-client in 5 of 5 runs on
+  Linux (qdrant-client 1.19.1), and killed the Python process with a segmentation fault in 3 of 3 on macOS (1.17.1).
+  `store`, `search`, `delete_user` and `clear` now hold one lock per backend in local mode: every run on both found
+  all 20 sampled entries, and a store or a lookup costs the same as before (measured at 300 entries of 384
+  dimensions). Both machines' SQLite was built THREADSAFE=1; where it is built otherwise, qdrant-client refuses calls
+  from any thread but the one that opened the store, lock or not. A Qdrant server (`url=`) serves concurrent requests
+  itself and is not locked.
+
 - **Milvus Lite: `store()` returns once the new entry can be read back.** Milvus Lite did not always make an insert
   visible before `insert()` returned: measured on macOS (milvus-lite 2.5.1, pymilvus 3.0.2), a lookup straight after
   the last of 301 inserts missed the entry just stored in 6 of 50 trials — through `Cache.get`, `MilvusBackend.search`

@@ -431,6 +431,77 @@ class TestQdrantBackend:
         _run_backend_contract(backend)
 
 
+class TestQdrantThreads:
+    """0.10.0 (oss-0023): in local mode, calls from several threads reach qdrant-client one at a time. Measured on main
+    before it: 400 concurrent AsyncCache.aset calls raised sqlite3.InterfaceError inside qdrant-client in 5 of 5 runs.
+    test_every_client_call_holds_the_lock is the guard for each method; the concurrency test shows the failure."""
+
+    @staticmethod
+    def _vec(i):
+        import random
+        r = random.Random(i)
+        v = [r.gauss(0, 1) for _ in range(64)]
+        n = sum(x * x for x in v) ** 0.5
+        return [x / n for x in v]
+
+    @skip_qdrant
+    def test_every_client_call_holds_the_lock(self, tmp_path):
+        from sulci.backends.qdrant import QdrantBackend
+        b = QdrantBackend(db_path=str(tmp_path / "q"), dimension=64)
+        real, held = b._client, []
+
+        class Client:                                # the client, recording whether each call held the lock
+            def __getattr__(self, name):
+                held.append((name, b._lock._is_owned()))
+                return getattr(real, name)
+        b._client = Client()
+        b.store("k1", "q", "r1", self._vec(1), tenant_id="t", user_id="u")
+        assert b.search(self._vec(1), 0.9, tenant_id="t", user_id="u")[0] == "r1"
+        assert b.delete_user("u", tenant_id="t") == 1
+        b.clear()
+        assert {n for n, _ in held} >= {"upsert", "query_points", "count", "delete"}
+        assert all(owned for _, owned in held), [n for n, owned in held if not owned]
+
+    @skip_qdrant
+    def test_concurrent_stores_and_lookups(self, tmp_path):
+        import threading
+        from sulci.backends.qdrant import QdrantBackend
+        b = QdrantBackend(db_path=str(tmp_path / "q"), dimension=64)
+        errors = []
+
+        def worker(k):
+            try:
+                for i in range(k, 160, 8):
+                    b.store(f"k{i}", f"q{i}", f"r{i}", self._vec(i), user_id=f"u{i % 3}")
+                    b.search(self._vec(i), 0.99, user_id=f"u{i % 3}")
+            except Exception as e:                   # surfaced below, not lost in the thread
+                errors.append(e)
+        threads = [threading.Thread(target=worker, args=(k,)) for k in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+        assert [b.search(self._vec(i), 0.99, user_id=f"u{i % 3}")[0] for i in range(160)] == \
+            [f"r{i}" for i in range(160)]
+
+    @skip_qdrant
+    def test_a_server_is_not_locked(self, monkeypatch):
+        import contextlib
+        import qdrant_client
+        from sulci.backends.qdrant import QdrantBackend
+
+        class Server:                                # a client for url=, without a server behind it
+            def __init__(self, **kw):
+                pass
+
+            def get_collections(self):
+                return type("C", (), {"collections": [type("N", (), {"name": "sulci"})()]})()
+        monkeypatch.setattr(qdrant_client, "QdrantClient", Server)
+        b = QdrantBackend(url="http://qdrant.invalid:6333")
+        assert isinstance(b._lock, contextlib.nullcontext)
+
+
 # ── Redis ─────────────────────────────────────────────────────
 
 class TestRedisBackend:

@@ -17,7 +17,7 @@ Latency  : <5 ms local. `quantization` and `on_disk` change this and the
            unmeasured and is deliberately not restated here.
 """
 from __future__ import annotations
-import time, uuid, warnings
+import contextlib, threading, time, uuid, warnings
 from typing import Any, Optional
 
 from sulci._metadata import checked_metadata
@@ -85,6 +85,20 @@ class QdrantBackend:
             QdrantClient(url=url, api_key=api_key) if url
             else QdrantClient(path=db_path)
         )
+        # 0.10.0 (oss-0023): in local mode (db_path=) store, search_match, delete_user and clear hold self._lock, so
+        # calls from several threads reach qdrant-client one at a time. AsyncCache runs each backend call on a thread of
+        # its own. qdrant-client's local mode writes its points through one SQLite connection that two threads must not
+        # use at once, and keeps them in in-memory arrays that a lookup reads while a write may be resizing them:
+        # lookups need the lock too (an independent review measured IndexError with search_match alone unlocked).
+        # Measured on main (oss-0022): 400 concurrent AsyncCache.aset calls raised sqlite3.InterfaceError ("bad
+        # parameter or other API misuse") inside qdrant-client in 5 of 5 runs on Linux (qdrant-client 1.19.1), and
+        # killed the Python process with a segmentation fault in 3 of 3 on a maintainer's Mac (1.17.1); with the lock,
+        # every run on both found all its entries. Both SQLite builds were THREADSAFE=1, so qdrant-client let any thread
+        # use the connection; where it is built otherwise (qdrant-client says THREADSAFE=2 is common on macOS),
+        # qdrant-client refuses calls from any thread but the one that opened it, lock or not. A Qdrant server (url=) is
+        # reached over HTTP and serves concurrent requests itself: no lock. An RLock, so a test can ask whether the
+        # calling thread holds it.
+        self._lock = threading.RLock() if not url else contextlib.nullcontext()
 
         # Only pass what the caller actually asked for. Passing on_disk=None
         # and quantization_config=None is equivalent to omitting them today,
@@ -188,28 +202,29 @@ class QdrantBackend:
         user_id: Optional[str] = None, expires: Optional[float] = None,
         metadata: Optional[dict] = None,
     ) -> None:
-        from qdrant_client.models import PointStruct
-        self._client.upsert(
-            collection_name = self.COLLECTION,
-            points = [PointStruct(
-                id      = str(uuid.uuid4()),
-                vector  = embedding,
-                payload = {
-                    # 0.9.3: the caller's metadata is refused if it uses a reserved name, and goes
-                    # FIRST, so the entry's own fields below always win (it used to come last).
-                    **checked_metadata(metadata),
-                    "key": key, "query": query, "response": response,
-                    "tenant_id": tenant_id or "global",
-                    "user_id": user_id or "global",
-                    "expires": expires or 0.0,
-                    # v0.7.2 — store-time timestamp so consumers (e.g.
-                    # sulci-platform top_queries) can report an honest
-                    # "last seen" for entries that have never been served,
-                    # instead of fabricating one at aggregation time.
-                    "created": time.time(),
-                },
-            )],
-        )
+        with self._lock:
+            from qdrant_client.models import PointStruct
+            self._client.upsert(
+                collection_name = self.COLLECTION,
+                points = [PointStruct(
+                    id      = str(uuid.uuid4()),
+                    vector  = embedding,
+                    payload = {
+                        # 0.9.3: the caller's metadata is refused if it uses a reserved name, and goes
+                        # FIRST, so the entry's own fields below always win (it used to come last).
+                        **checked_metadata(metadata),
+                        "key": key, "query": query, "response": response,
+                        "tenant_id": tenant_id or "global",
+                        "user_id": user_id or "global",
+                        "expires": expires or 0.0,
+                        # v0.7.2 — store-time timestamp so consumers (e.g.
+                        # sulci-platform top_queries) can report an honest
+                        # "last seen" for entries that have never been served,
+                        # instead of fabricating one at aggregation time.
+                        "created": time.time(),
+                    },
+                )],
+            )
 
     def search(
         self,
@@ -242,42 +257,43 @@ class QdrantBackend:
         keeps its 2-tuple contract by delegating here, so the Backend
         protocol and the other backends are untouched.
         """
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
-        now = now or time.time()
+        with self._lock:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            now = now or time.time()
 
-        # Build payload filter conditions. Tenant isolation is a hard
-        # boundary — entries from other tenants must never be returned,
-        # even if their similarity exceeds threshold. The store path
-        # writes tenant_id="global" when None is passed; the read path
-        # mirrors that by filtering to "global" for None — otherwise
-        # an unscoped read would silently see entries from named tenants
-        # and break the operational migration to multi-tenancy.
-        must_conditions = [
-            FieldCondition(
-                key="tenant_id",
-                match=MatchValue(value=tenant_id if tenant_id is not None else "global"),
-            ),
-            FieldCondition(
-                key="user_id",
-                match=MatchValue(value=user_id if user_id is not None else "global"),
-            ),
-        ]
-        filter_ = Filter(must=must_conditions)
+            # Build payload filter conditions. Tenant isolation is a hard
+            # boundary — entries from other tenants must never be returned,
+            # even if their similarity exceeds threshold. The store path
+            # writes tenant_id="global" when None is passed; the read path
+            # mirrors that by filtering to "global" for None — otherwise
+            # an unscoped read would silently see entries from named tenants
+            # and break the operational migration to multi-tenancy.
+            must_conditions = [
+                FieldCondition(
+                    key="tenant_id",
+                    match=MatchValue(value=tenant_id if tenant_id is not None else "global"),
+                ),
+                FieldCondition(
+                    key="user_id",
+                    match=MatchValue(value=user_id if user_id is not None else "global"),
+                ),
+            ]
+            filter_ = Filter(must=must_conditions)
 
-        results = self._client.query_points(
-            collection_name = self.COLLECTION,
-            query           = embedding,
-            query_filter    = filter_,
-            limit           = 5,
-            with_payload    = True,
-        )
-        for r in results.points:
-            p = r.payload or {}
-            if p.get("expires") and now > p["expires"]:
-                continue
-            if r.score >= threshold:
-                return p.get("response"), r.score, p.get("query")
-        return None, 0.0, None
+            results = self._client.query_points(
+                collection_name = self.COLLECTION,
+                query           = embedding,
+                query_filter    = filter_,
+                limit           = 5,
+                with_payload    = True,
+            )
+            for r in results.points:
+                p = r.payload or {}
+                if p.get("expires") and now > p["expires"]:
+                    continue
+                if r.score >= threshold:
+                    return p.get("response"), r.score, p.get("query")
+            return None, 0.0, None
 
     def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
         """0.10.0: remove every entry filed under (``tenant_id or "global"``, ``user_id or "global"``) — expired ones
@@ -292,32 +308,34 @@ class QdrantBackend:
         Against a server, a client timeout while a large deletion runs raises too, and the server may finish it; a
         repeated call then counts what is left. Entries written before sulci 0.4.0 have no ``tenant_id`` and are
         neither found by ``search`` nor erased here; ``clear()`` removes them."""
-        from qdrant_client.models import (FieldCondition, Filter, FilterSelector, MatchValue,
-                                          UpdateStatus)
-        scope = Filter(must=[
-            FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id or "global")),
-            FieldCondition(key="user_id", match=MatchValue(value=user_id or "global")),
-        ])
-        held = self._client.count(collection_name=self.COLLECTION, count_filter=scope, exact=True).count
-        result = self._client.delete(collection_name=self.COLLECTION,
-                                     points_selector=FilterSelector(filter=scope), wait=True)
-        if getattr(result, "status", None) != UpdateStatus.COMPLETED:
-            raise RuntimeError(f"QdrantBackend.delete_user: Qdrant answered {result!r} rather than a completed "
-                               f"deletion; the erasure is not confirmed — repeat the call")
-        return held
+        with self._lock:
+            from qdrant_client.models import (FieldCondition, Filter, FilterSelector, MatchValue,
+                                              UpdateStatus)
+            scope = Filter(must=[
+                FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id or "global")),
+                FieldCondition(key="user_id", match=MatchValue(value=user_id or "global")),
+            ])
+            held = self._client.count(collection_name=self.COLLECTION, count_filter=scope, exact=True).count
+            result = self._client.delete(collection_name=self.COLLECTION,
+                                         points_selector=FilterSelector(filter=scope), wait=True)
+            if getattr(result, "status", None) != UpdateStatus.COMPLETED:
+                raise RuntimeError(f"QdrantBackend.delete_user: Qdrant answered {result!r} rather than a completed "
+                                   f"deletion; the erasure is not confirmed — repeat the call")
+            return held
 
     def clear(self) -> None:
-        # Delete all points but keep the collection (and its HNSW index)
-        # intact. qdrant-client 1.x raises ValueError on subsequent
-        # operations against a missing collection, so a recreate-on-clear
-        # would also work but costs a full index rebuild on first store.
-        from qdrant_client.models import Filter
-        try:
-            self._client.delete(
-                collection_name = self.COLLECTION,
-                points_selector = Filter(must=[]),
-            )
-        except Exception:
-            # Empty collection or other transient error — clear is
-            # idempotent so we swallow.
-            pass
+        with self._lock:
+            # Delete all points but keep the collection (and its HNSW index)
+            # intact. qdrant-client 1.x raises ValueError on subsequent
+            # operations against a missing collection, so a recreate-on-clear
+            # would also work but costs a full index rebuild on first store.
+            from qdrant_client.models import Filter
+            try:
+                self._client.delete(
+                    collection_name = self.COLLECTION,
+                    points_selector = Filter(must=[]),
+                )
+            except Exception:
+                # Empty collection or other transient error — clear is
+                # idempotent so we swallow.
+                pass
