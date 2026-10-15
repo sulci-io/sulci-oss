@@ -730,6 +730,7 @@ percent-encoded into one path segment, so any id is addressed exactly.
 > grows with the number of keys there.
 > 📌 oss-0018: Chroma implements it as well.
 > 📌 oss-0020: Qdrant implements it as well.
+> 📌 oss-0021: Milvus implements it as well.
 
 ### Advanced constructor options
 

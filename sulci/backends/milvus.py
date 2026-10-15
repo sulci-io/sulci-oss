@@ -256,6 +256,33 @@ class MilvusBackend:
                 return entity.get("response"), sim
         return None, 0.0
 
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
+        """0.10.0: remove every entry filed under this tenant and user (``None`` and ``""`` mean the shared scope, as
+        in ``store``) — expired ones too: Milvus keeps them until deleted — and return how many (the ``Backend``
+        protocol's contract).
+
+        One ``delete`` by the scope key, the filter ``search`` uses; the count is Milvus's own answer. Measured on
+        Milvus Lite (milvus-lite 2.4.1 with pymilvus 2.4.2, milvus-lite 2.5.1 with pymilvus 2.5.18 and 3.0.2): the list
+        of primary keys deleted — exact — or, when none matched, ``{"delete_count": 0}`` (2.5.18 and 3.0.2 add
+        ``"cost"``; that dict prints as ``{}``). On macOS and on Linux (50 trials each, milvus-lite 2.5.1), a delete
+        straight after the user's last store counted every entry and left none that a lookup or a count could find. A
+        Milvus server from 2.3.2 answers ``{"delete_count": N}`` (per pymilvus's source; not measured here) and runs
+        the delete at Strong consistency; a lookup straight after it may still find an erased entry for a moment if
+        the collection reads at a weaker level. Any other answer raises (the delete may have run: the count is what is
+        unknown), as does a failed delete. Entries written before sulci 0.10.0 have no scope field and are neither
+        found by ``search`` nor erased here; ``clear()`` removes them. Until the collection exists there is nothing to
+        erase: 0."""
+        if not self._open():
+            return 0
+        result = self._client.delete(self.COLLECTION, filter=f'scope == "{_scope_key(tenant_id, user_id)}"')
+        if isinstance(result, list):
+            return len(result)
+        if isinstance(result, dict) and type(result.get("delete_count")) is int:
+            return result["delete_count"]
+        raise RuntimeError(f"MilvusBackend.delete_user: Milvus answered {result!r}, neither the keys deleted nor a "
+                           f"delete_count, so how many entries were erased is unknown (a repeated call erases any "
+                           f"left and counts only those)")
+
     def clear(self) -> None:
         self._client.drop_collection(self.COLLECTION)
         self._ready = False

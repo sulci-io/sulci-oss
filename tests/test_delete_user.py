@@ -816,3 +816,135 @@ class TestQdrantBackend:
         assert (e.value.error, e.value.entries, e.value.sessions) == ("ValueError", None, None)
         assert len(c._sessions._windows) == 1                                      # sessions not attempted
         assert _qdrant_scopes(b) == [("t1", "u-42")]                                # nothing deleted
+
+
+# ── MilvusBackend.delete_user (oss-0021) ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def milvus_backend(tmp_path):
+    pytest.importorskip("pymilvus")
+    pytest.importorskip("milvus_lite")
+    from sulci.backends.milvus import MilvusBackend
+    b = MilvusBackend(db_path=str(tmp_path / "milvus.db"))
+    yield b
+    b._client.close()
+
+
+def _milvus_scopes(b):
+    rows = b._client.query(b.COLLECTION, filter="id >= 0", output_fields=["scope", "response"], limit=1000)
+    return sorted(r.get("scope") or r["response"] for r in rows)
+
+
+class TestMilvusBackend:
+    """One delete by the scope key; the count is Milvus's answer. Measured before oss-0021: Cache.delete_user raised
+    NotImplementedError on Milvus; Milvus Lite answers a delete by filter with the list of primary keys deleted, or
+    {"delete_count": 0} when none matched (milvus-lite 2.4.1 + pymilvus 2.4.2, 2.5.1 + 2.5.18 and 3.0.2; the last two
+    add "cost", and that dict prints as {})."""
+
+    def test_through_cache(self, milvus_backend):
+        from sulci.sessions.scope import user_scope
+        b = milvus_backend
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        _seed(c)
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 2, "sessions": 1}
+        assert c.get("question alpha", tenant_id="t1", user_id="u-42")[0] is None
+        assert c.get("question alpha", tenant_id="t2", user_id="u-42")[0] == "alpha for t2/u-42"
+        assert c.get("question alpha", tenant_id="t1", user_id="u-7")[0] == "alpha for t1/u-7"
+        assert c.get("question alpha", tenant_id="t1")[0] == "alpha for t1/None"
+        assert _milvus_scopes(b) == sorted(user_scope(t, u) for t, u in [("t1", None), ("t1", "u-7"), ("t2", "u-42")])
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 0, "sessions": 0}
+
+    def test_an_expired_entry_is_erased_and_counted(self, milvus_backend):
+        b = milvus_backend
+        b.store("k", "q", "old", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42", expires=1.0)
+        b.store("k", "q", "old", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        assert b.delete_user("u-42", tenant_id="t1") == 2
+        assert _milvus_scopes(b) == []
+
+    def test_an_empty_tenant_or_user_is_the_shared_one(self, milvus_backend):
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), user_id="u-42")
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1")
+        assert b.delete_user("u-42", tenant_id="") == 1
+        assert b.delete_user("", tenant_id="t1") == 1
+        assert _milvus_scopes(b) == []
+
+    def test_the_id_global_is_not_the_shared_scope(self, milvus_backend):
+        # As in store(): None and "" mean the shared scope; "global" is an id like any other (Cache refuses it).
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), user_id="u-42")
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1")
+        assert b.delete_user("u-42", tenant_id="global") == 0
+        assert b.delete_user("global", tenant_id="t1") == 0
+        assert len(_milvus_scopes(b)) == 2
+
+    def test_an_entry_written_before_0_10_0_is_not_reached(self, milvus_backend):
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        b._client.insert(b.COLLECTION, [{"vector": FakeEmbedder().embed("q"), "query": "q", "response": "pre-0.10.0",
+                                         "expires": 0.0}])                     # no scope field
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert _milvus_scopes(b) == ["pre-0.10.0"]
+
+    def test_before_the_collection_exists_nothing_is_erased(self, milvus_backend, monkeypatch):
+        b = milvus_backend
+        monkeypatch.setattr(b._client, "delete", lambda *a, **kw: pytest.fail("deleted from no collection"))
+        assert b.delete_user("u-42", tenant_id="t1") == 0
+
+    def test_a_collection_written_by_another_process_is_opened_and_loaded(self, milvus_backend, monkeypatch):
+        # As search() does (0.10.0): it is loaded first. Milvus Lite 2.5.1 loads a released collection itself on a
+        # delete (measured), so whether the backend asked is what is checked.
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        b._client.release_collection(b.COLLECTION)
+        b._ready = False                                       # this process has not opened it
+        loads, real = [], b._client.load_collection
+
+        def spy(*a, **kw):
+            loads.append(a)
+            return real(*a, **kw)
+        monkeypatch.setattr(b._client, "load_collection", spy)
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert loads == [(b.COLLECTION,)]
+
+    def test_one_delete_by_the_scope_key(self, milvus_backend, monkeypatch):
+        from sulci.sessions.scope import user_scope
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        calls, real = [], b._client.delete
+
+        def spy(*a, **kw):
+            calls.append((a, kw))
+            return real(*a, **kw)
+        monkeypatch.setattr(b._client, "delete", spy)
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert calls == [((b.COLLECTION,), {"filter": f'scope == "{user_scope("t1", "u-42")}"'})]
+
+    @pytest.mark.parametrize("answer, count", [([11, 12, 13], 3), ({"delete_count": 3, "cost": 0}, 3),
+                                               ({"delete_count": 0}, 0), ({"delete_count": 0, "cost": 0}, 0)])
+    def test_each_answer_milvus_gives(self, milvus_backend, monkeypatch, answer, count):
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        monkeypatch.setattr(b._client, "delete", lambda *a, **kw: answer)
+        assert b.delete_user("u-42", tenant_id="t1") == count
+
+    @pytest.mark.parametrize("answer", [None, {}, {"cost": 0}, {"delete_count": "3"}, {"delete_count": None}, "3"])
+    def test_an_answer_with_no_count_raises(self, milvus_backend, monkeypatch, answer):
+        b = milvus_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        monkeypatch.setattr(b._client, "delete", lambda *a, **kw: answer)
+        with pytest.raises(RuntimeError, match="is unknown"):
+            b.delete_user("u-42", tenant_id="t1")
+
+    def test_a_failure_is_an_erasure_error_through_cache(self, milvus_backend, monkeypatch):
+        b = milvus_backend
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        c.set("q", "a", tenant_id="t1", user_id="u-42", session_id="s1")
+
+        def broken(*a, **kw):
+            raise ConnectionError("milvus went away")
+        monkeypatch.setattr(b._client, "delete", broken)
+        with pytest.raises(SulciErasureError) as e:
+            c.delete_user("u-42", tenant_id="t1")
+        assert (e.value.error, e.value.entries, e.value.sessions) == ("ConnectionError", None, None)
+        assert len(c._sessions._windows) == 1                                      # sessions not attempted

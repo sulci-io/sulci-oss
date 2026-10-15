@@ -251,6 +251,7 @@ method.** The section above describes 0.9.3 and is kept as the record.
   📌 oss-0017: Redis has it too (a SCAN of the instance's own entry keys: O(keys under the prefix)).
   📌 oss-0018: Chroma has it too (the user's ids, read a page at a time, deleted by id).
   📌 oss-0020: Qdrant has it too (an exact count with the scope's filter, then one delete by it, waited for).
+  📌 oss-0021: Milvus has it too (one delete by the scope key; the count is Milvus's answer).
 - `cache._backend.delete_user(...)` remains the managed backend's own method; call `Cache.delete_user` instead.
   The specification is `docs/architecture/specs/delete-user-erasure.md` in sulci-platform.
 

@@ -57,6 +57,14 @@ Docs only; no library code changed. Every statement re-read against the released
   erased without being counted, and two erasures of one user at once may both count the same entries. A delete
   Qdrant does not answer `completed` raises. Expired entries are held until deleted, so they are erased and counted;
   entries written before sulci 0.4.0 carry no `tenant_id` and are not reached (`clear()` removes them).
+  📌 oss-0021: `MilvusBackend` implements it: one `delete` by the entry's scope key, the filter `search` uses; the
+  count is Milvus's own answer. Measured on Milvus Lite (milvus-lite 2.4.1 with pymilvus 2.4.2; 2.5.1 with pymilvus
+  2.5.18 and 3.0.2): the list of primary keys deleted, exact, or `{"delete_count": 0}` when none matched; a delete
+  straight after the user's last store counted every entry and left none visible (macOS and Linux, 50 trials each).
+  A Milvus server from 2.3.2 answers `{"delete_count": N}` (per pymilvus's source; not measured here). An answer
+  with no count raises. As in `store`, `None` and `""` mean the shared scope and `"global"` is an id like any other.
+  Expired entries are held until deleted, so they are erased and counted; entries written before 0.10.0 have no
+  scope field and are not reached (`clear()` removes them).
 - The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
 - `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
   there. It gains `entries`, `sessions` and `detail`.
