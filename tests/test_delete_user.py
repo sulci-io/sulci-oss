@@ -494,3 +494,128 @@ class TestBuiltinClearScope:
         assert s.clear_scope(a) == 2
         assert list(s._windows) == [b + "s1"] and list(s._last_active) == [b + "s1"]
         assert s.clear_scope(a) == 0
+
+
+# ── RedisBackend.delete_user (oss-0017) ───────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def redis_backend():
+    if not _redis_available():
+        pytest.skip("redis-server not running on localhost:6379")
+    import redis
+    from sulci.backends.redis import RedisBackend
+    prefix = f"sulci:test:du17:{uuid.uuid4().hex[:8]}:"
+    b = RedisBackend(url="redis://localhost:6379/15", key_prefix=prefix)
+    yield b
+    for k in b._redis.scan_iter(match=prefix + "*"):
+        b._redis.delete(k)
+
+
+class TestRedisBackend:
+    """The hash name is a digest of (tenant, user, key), so delete_user SCANs the prefix and reads each hash's scope
+    fields. Measured before oss-0017: Cache.delete_user raised NotImplementedError on Redis; a RedisSessionStore on
+    its default prefix puts lists and sorted sets inside the backend's own prefix (5 lists and 8 sorted sets beside 6
+    entries in measure_redis17)."""
+
+    def test_through_cache_with_a_session_store_under_the_same_prefix(self, redis_backend):
+        from sulci.sessions import RedisSessionStore
+        b = redis_backend
+        store = RedisSessionStore(b._redis, key_prefix=b._prefix + "sessions:")
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False,
+                  session_store=store)
+        _seed(c)
+        c.set("question gamma", "g", tenant_id="t1", user_id="u-42b", session_id="s1")   # an id that shares a prefix
+        types = {b._redis.type(k) for k in b._redis.scan_iter(match=b._prefix + "*")}
+        assert {b"hash", b"list", b"zset"} <= types                                   # the case being tested
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 2, "sessions": 1}
+        assert c.get("question alpha", tenant_id="t1", user_id="u-42")[0] is None
+        assert c.get("question alpha", tenant_id="t2", user_id="u-42")[0] == "alpha for t2/u-42"
+        assert c.get("question gamma", tenant_id="t1", user_id="u-42b")[0] == "g"
+        assert c.get("question alpha", tenant_id="t1")[0] == "alpha for t1/None"
+        assert store.clear_scope(user_scope("t1", "u-7")) == 1                             # other users' history intact
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 0, "sessions": 0}
+
+    def test_more_keys_than_one_scan_page(self, redis_backend):
+        b = redis_backend
+        v = FakeEmbedder().embed("q")
+        for i in range(1300):
+            uid = "u-42" if i % 2 else "u-7"
+            b.store(f"k{i}", "q", "a", v, tenant_id="t1", user_id=uid)
+        assert b.delete_user("u-42", tenant_id="t1") == 650
+        left = [b._redis.hmget(k, "user_id")[0] for k in b._redis.scan_iter(match=b._prefix + "*")]
+        assert len(left) == 650 and set(left) == {b"u-7"}
+
+    def test_a_key_under_the_prefix_that_is_not_an_entry_is_left(self, redis_backend):
+        b = redis_backend
+        scope = {"tenant_id": "t1", "user_id": "u-42"}                 # the very scope being erased
+        b._redis.hset(b._prefix + "someone-elses", mapping=scope)      # not an entry's name (a digest)
+        b._redis.hset(b._prefix + "sessions:x", mapping=scope)
+        b._redis.set(b._prefix + "a-string", "x")
+        assert b.delete_user("u-42", tenant_id="t1") == 0
+        b.clear()
+        assert b._redis.exists(b._prefix + "someone-elses", b._prefix + "sessions:x", b._prefix + "a-string") == 3
+
+    def test_a_non_hash_with_an_entry_shaped_name_is_skipped(self, redis_backend):
+        b = redis_backend
+        b._redis.rpush(b._prefix + "ab" * 16, "x")                     # a list named like an entry
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert b._redis.exists(b._prefix + "ab" * 16)
+
+    @pytest.mark.parametrize("mine,theirs", [("X:", "X:a:"), ("P[x]:", "Px:"), ("Q*:", "Qz:"), ("B\\:", "B\\x:"),
+                                             ("R?:", "Rq:"), ("S]:", "S]:z:"), ("T[^a]:", "Tb:")],
+                             ids=["nested", "brackets", "star", "backslash", "question", "close-bracket", "class"])
+    def test_another_instances_entries_are_not_reached(self, redis_backend, mine, theirs):
+        """Before 0.10.0 the SCAN pattern was the prefix unescaped, so these pairs read and cleared each other's
+        entries (measure_prefixes17: P[x]: served Px:'s answer; X:'s clear() deleted X:a:'s entries)."""
+        from sulci.backends.redis import RedisBackend
+        root = redis_backend._prefix
+        a = RedisBackend(url="redis://localhost:6379/15", key_prefix=root + mine)
+        o = RedisBackend(url="redis://localhost:6379/15", key_prefix=root + theirs)
+        va, vo = FakeEmbedder().embed("q"), FakeEmbedder().embed("q")
+        o.store("k", "q", "theirs", vo, tenant_id="t1", user_id="u-42")
+        assert a.search(va, 0.5, tenant_id="t1", user_id="u-42")[0] is None
+        a.store("k", "q", "mine", va, tenant_id="t1", user_id="u-42")
+        assert a.search(va, 0.5, tenant_id="t1", user_id="u-42")[0] == "mine"
+        assert a.delete_user("u-42", tenant_id="t1") == 1
+        assert a.search(va, 0.5, tenant_id="t1", user_id="u-42")[0] is None
+        a.store("k", "q", "mine", va, tenant_id="t1", user_id="u-42")
+        a.clear()
+        assert a.search(va, 0.5, tenant_id="t1", user_id="u-42")[0] is None
+        assert o.search(vo, 0.5, tenant_id="t1", user_id="u-42")[0] == "theirs"
+
+    def test_an_empty_prefix_is_refused(self):
+        from sulci.backends.redis import RedisBackend
+        with pytest.raises(ValueError, match="key_prefix must not be empty"):
+            RedisBackend(url="redis://localhost:6379/15", key_prefix="")
+
+    def test_clear_still_removes_an_entry_written_before_0_9_3(self, redis_backend):
+        b = redis_backend
+        legacy = b._prefix + "0123456789abcdef"                         # 0.9.2: the query digest, 16 hex digits
+        b._redis.hset(legacy, mapping={"query": "q", "response": "old", "user_id": "global", "expires": "0"})
+        b.clear()
+        assert not b._redis.exists(legacy)
+
+    def test_an_error_other_than_wrongtype_propagates(self, redis_backend, monkeypatch):
+        from redis.exceptions import ResponseError
+        b = redis_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        real = b._redis.pipeline
+
+        def failing_pipeline(*a, **k):
+            p = real(*a, **k)
+            p.execute = lambda raise_on_error=True: [ResponseError("ERR max number of clients reached")]
+            return p
+        monkeypatch.setattr(b._redis, "pipeline", failing_pipeline)
+        with pytest.raises(ResponseError, match="max number of clients"):
+            b.delete_user("u-42", tenant_id="t1")
+        monkeypatch.undo()
+        assert b.delete_user("u-42", tenant_id="t1") == 1                                # nothing was deleted
+
+    def test_an_unreachable_server_is_an_erasure_error_through_cache(self):
+        from sulci.backends.redis import RedisBackend
+        b = RedisBackend(url="redis://127.0.0.1:1/0")
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        with pytest.raises(SulciErasureError) as e:
+            c.delete_user("u-42", tenant_id="t1")
+        assert e.value.error == "ConnectionError" and e.value.entries is None

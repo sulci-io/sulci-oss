@@ -41,6 +41,10 @@ Docs only; no library code changed. Every statement re-read against the released
   ⚠️ Breaking for `isinstance`: `Backend` is `runtime_checkable`, so `isinstance(b, sulci.backends.Backend)` is
   `False` for a backend without `delete_user` — a custom backend written for 0.9.3 among them. `Cache` does not
   check it: such a backend still serves `get`, `set` and `clear`.
+  📌 oss-0017: `RedisBackend` implements it. An entry's hash name is a digest of its scope, so it SCANs this
+  instance's entry keys and reads each one's `tenant_id` and `user_id` — O(keys under the prefix). An entry past its
+  expiry has usually been removed by Redis already (`store` sets `EXPIREAT`) and is then not counted; one still held
+  is erased and counted. Not for Redis Cluster (one `DEL` names many keys).
 - The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
 - `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
   there. It gains `entries`, `sessions` and `detail`.
@@ -76,6 +80,17 @@ Docs only; no library code changed. Every statement re-read against the released
   normally and nothing was logged. The built-in in-process session store is unaffected.
 
 ### Fixed
+
+- **`RedisBackend` reads, clears and erases only its own entries.** Its `SCAN` pattern was the key prefix with its
+  glob characters unescaped, and every key under it counted. Measured on two instances on one Redis: with prefixes
+  `P[x]:` and `Px:`, the first one's `search` served the second one's answer; with `X:` and `X:a:`, `clear()` on the
+  first deleted the second's entries. Now the prefix is escaped and only a key whose remainder is an entry's name
+  (32 hex digits; 16 for an entry written before 0.9.3) is read, cleared or erased. `clear()` therefore no longer
+  deletes other keys under the prefix, such as a `RedisSessionStore`'s on its default `sulci:sessions:` (`Cache.clear()`
+  still clears the sessions, through the store), and uses `SCAN` instead of the blocking `KEYS`. A hash written
+  before 0.9.3 by calling `RedisBackend.store` directly with a key that is not such a digest is no longer reached
+  by `clear()`; delete it by name. An empty `key_prefix` is refused with `ValueError` (it made every key in the
+  database the backend's own); end a prefix with a separator such as `:`.
 
 - **`SQLiteBackend` is safe to share between threads**, as `AsyncCache` shares it (each call runs in a worker
   thread). Every use of its one connection now holds a lock. Measured before: with one thread storing beside

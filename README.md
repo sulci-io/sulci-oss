@@ -725,6 +725,9 @@ percent-encoded into one path segment, so any id is addressed exactly.
 > system-assigned user id: Sulci cannot tell that an email address and an internal id are one person. During 0.10.0
 > development SQLite implements it first and the other self-hosted backends follow before the release; on a
 > backend without it the call raises `NotImplementedError`.
+>
+> 📌 oss-0017: Redis implements it as well. It scans every entry key under the backend's prefix, so its cost
+> grows with the number of keys there.
 
 ### Advanced constructor options
 

@@ -248,6 +248,7 @@ method.** The section above describes 0.9.3 and is kept as the record.
 - `Backend.delete_user(user_id, *, tenant_id=None) -> int` (ADR 0005 Amendment 2) removes exactly that scope's
   entries, returns a true count, is idempotent, does not validate, and raises on failure. SQLite has it from
   oss-0016; Redis, Chroma, Qdrant, Milvus and FAISS follow, one patch each, before 0.10.0 is tagged.
+  📌 oss-0017: Redis has it too (a SCAN of the instance's own entry keys: O(keys under the prefix)).
 - `cache._backend.delete_user(...)` remains the managed backend's own method; call `Cache.delete_user` instead.
   The specification is `docs/architecture/specs/delete-user-erasure.md` in sulci-platform.
 

@@ -20,6 +20,7 @@ requirements:
 """
 from __future__ import annotations
 import inspect
+import time
 from typing import Any
 
 import pytest
@@ -249,15 +250,30 @@ class TestUserErasure:
         v[i % self.EMB_DIM] = 1.0
         return v
 
-    def _seed(self, b) -> None:
-        past = 1.0                                   # 1970: expired
+    #: Two kinds of expired entry. k3 expired in 1970: a backend that keeps expired entries until they are deleted
+    #: must erase and count it; Redis never holds it (it removes a key at its EXPIREAT — oss-0017, measured).
+    #: k4 expires in an hour: every backend holds it, and a lookup at LATER treats it as expired.
+    LATER = 4_000_000_000.0                          # 2096
+
+    def _seed(self, b) -> int:
+        """Stores the user's four entries and the bystanders; returns how many of the user's the backend holds:
+        4, or 3 for a backend that declares DROPS_EXPIRED_AT_STORE (Redis). Declared, not probed: a probe through
+        the backend's own search() would let a search() that ignores `now` hide a delete_user that skips expired
+        entries."""
         b.store("k1", "q1", "t1/u42/1", self._vec(1), tenant_id="t1", user_id="u42")
         b.store("k2", "q2", "t1/u42/2", self._vec(2), tenant_id="t1", user_id="u42")
-        b.store("k3", "q3", "t1/u42/expired", self._vec(3), tenant_id="t1", user_id="u42", expires=past)
+        b.store("k3", "q3", "t1/u42/expired", self._vec(3), tenant_id="t1", user_id="u42", expires=1.0)
+        b.store("k4", "q4", "t1/u42/expiring", self._vec(4), tenant_id="t1", user_id="u42", expires=time.time() + 3600)
         b.store("k1", "q1", "t2/u42", self._vec(1), tenant_id="t2", user_id="u42")
         b.store("k1", "q1", "t1/u7", self._vec(1), tenant_id="t1", user_id="u7")
         b.store("k1", "q1", "t1/shared", self._vec(1), tenant_id="t1")
         b.store("k1", "q1", "global/u42", self._vec(1), user_id="u42")
+        # now=0.5 is before 1970's expiry, so a held k3 is found; LATER is after k4's.
+        held_k3 = not getattr(type(b), "DROPS_EXPIRED_AT_STORE", False)
+        found_k3 = b.search(self._vec(3), 0.5, tenant_id="t1", user_id="u42", now=0.5)[0] == "t1/u42/expired"
+        assert found_k3 == held_k3, f"k3 (expired 1970) held: {found_k3}, but DROPS_EXPIRED_AT_STORE says {not held_k3}"
+        assert b.search(self._vec(4), 0.5, tenant_id="t1", user_id="u42", now=self.LATER)[0] is None
+        return 3 + held_k3
 
     def test_signature(self, backend_class):
         if not callable(getattr(backend_class, "delete_user", None)):
@@ -268,14 +284,14 @@ class TestUserErasure:
         assert params["tenant_id"].default is None
 
     def test_returns_the_count_of_the_users_entries_expired_included(self, erasable_backend):
-        self._seed(erasable_backend)
-        assert erasable_backend.delete_user("u42", tenant_id="t1") == 3
+        held = self._seed(erasable_backend)
+        assert erasable_backend.delete_user("u42", tenant_id="t1") == held
 
     def test_the_user_has_nothing_left(self, erasable_backend):
         b = erasable_backend
         self._seed(b)
         b.delete_user("u42", tenant_id="t1")
-        for i in (1, 2, 3):
+        for i in (1, 2, 3, 4):
             assert b.search(self._vec(i), 0.5, tenant_id="t1", user_id="u42", now=0.5)[0] is None
 
     def test_the_same_user_in_another_tenant_is_intact(self, erasable_backend):
