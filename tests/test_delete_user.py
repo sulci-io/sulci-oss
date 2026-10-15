@@ -619,3 +619,74 @@ class TestRedisBackend:
         with pytest.raises(SulciErasureError) as e:
             c.delete_user("u-42", tenant_id="t1")
         assert e.value.error == "ConnectionError" and e.value.entries is None
+
+
+# ── ChromaBackend.delete_user (oss-0018) ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def chroma_backend(tmp_path):
+    pytest.importorskip("chromadb")
+    from sulci.backends.chroma import ChromaBackend
+    return ChromaBackend(db_path=str(tmp_path / "chroma"))
+
+
+class TestChromaBackend:
+    """Ids are read a page at a time with search()'s filter and deleted by id. Measured before oss-0018:
+    Cache.delete_user raised NotImplementedError on Chroma; chromadb 1.5.9's delete(where=...) answers
+    {"deleted": N}, but the releases sulci[chroma] allows from 0.4 return nothing, so the count does not use it."""
+
+    def test_through_cache(self, chroma_backend):
+        c = Cache(backend=chroma_backend, embedding_model=FakeEmbedder(), personalized=True, context_window=4,
+                  telemetry=False)
+        _seed(c)
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 2, "sessions": 1}
+        assert c.get("question alpha", tenant_id="t1", user_id="u-42")[0] is None
+        assert c.get("question alpha", tenant_id="t2", user_id="u-42")[0] == "alpha for t2/u-42"
+        assert c.get("question alpha", tenant_id="t1", user_id="u-7")[0] == "alpha for t1/u-7"
+        assert c.get("question alpha", tenant_id="t1")[0] == "alpha for t1/None"
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 0, "sessions": 0}
+
+    def test_several_pages(self, chroma_backend, monkeypatch):
+        b = chroma_backend
+        monkeypatch.setattr(b._client, "get_max_batch_size", lambda: 3)
+        reads = []
+        real_get = b._col.get
+
+        def counted_get(**kw):
+            reads.append(kw.get("limit"))
+            return real_get(**kw)
+        for i in range(10):
+            b.store(f"k{i}", "q", "a", FakeEmbedder().embed(f"q {i}"), tenant_id="t1", user_id="u-42")
+            b.store(f"k{i}", "q", "a", FakeEmbedder().embed(f"q {i}"), tenant_id="t1", user_id="u-7")
+        monkeypatch.setattr(b._col, "get", counted_get)
+        assert b.delete_user("u-42", tenant_id="t1") == 10
+        assert reads == [3, 3, 3, 3, 3]                       # four pages of at most 3, then the empty one
+        monkeypatch.undo()
+        left = b._col.get(include=["metadatas"])["metadatas"]
+        assert len(left) == 10 and {m["user_id"] for m in left} == {"u-7"}
+
+    def test_an_expired_entry_is_erased_and_counted(self, chroma_backend):
+        b = chroma_backend
+        b.store("k", "q", "old", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42", expires=1.0)
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert b._col.get(include=[])["ids"] == []
+
+    def test_a_delete_that_removes_nothing_raises_rather_than_loop(self, chroma_backend, monkeypatch):
+        b = chroma_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        monkeypatch.setattr(b._col, "delete", lambda **kw: None)
+        with pytest.raises(RuntimeError, match="already deleted was found again"):
+            b.delete_user("u-42", tenant_id="t1")
+
+    def test_a_failure_is_an_erasure_error_through_cache(self, chroma_backend, monkeypatch):
+        b = chroma_backend
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        c.set("q", "a", tenant_id="t1", user_id="u-42", session_id="s1")
+
+        def broken(**kw):
+            raise ValueError("chroma is down")
+        monkeypatch.setattr(b._col, "get", broken)
+        with pytest.raises(SulciErasureError) as e:
+            c.delete_user("u-42", tenant_id="t1")
+        assert (e.value.error, e.value.entries, e.value.sessions) == ("ValueError", None, None)
+        assert len(c._sessions._windows) == 1                                      # sessions not attempted

@@ -93,6 +93,37 @@ class ChromaBackend:
                 return doc, sim
         return None, 0.0
 
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
+        """0.10.0: remove every entry filed under (``tenant_id or "global"``, ``user_id or "global"``) — expired ones
+        too: Chroma keeps them until deleted — and return how many (the ``Backend`` protocol's contract).
+
+        The ids are read a page at a time with the same filter ``search`` uses, then deleted by id, until none is
+        left; the count is the number of ids read and deleted. Chroma's own answer is not used: measured on
+        chromadb 1.5.9, ``delete(...)`` answers ``{"deleted": N}`` with N the number of ids passed, existing or not,
+        and the 0.4 / 0.5 releases ``sulci[chroma]`` allows answer nothing. So the count is exact for one erasure
+        at a time; two erasures of the same user running at once (or a ``clear()`` beside one) may both count the
+        same entries. If an id already deleted comes back — Chroma did not delete it, or the same entry was stored
+        again for the user while this ran — it raises rather than loop; repeat the call. Entries written before
+        sulci 0.4.0 have no ``tenant_id`` and are neither found by ``search`` nor erased here; ``clear()`` removes
+        them. Deleted entries stay in Chroma's files until it compacts them."""
+        where = {"$and": [{"tenant_id": tenant_id or "global"}, {"user_id": user_id or "global"}]}
+        try:
+            page = min(1000, int(self._client.get_max_batch_size()))
+        except Exception:
+            page = 1000
+        removed, deleted = 0, set()
+        while True:
+            ids = self._col.get(where=where, include=[], limit=page)["ids"]
+            if not ids:
+                return removed
+            if deleted.intersection(ids):
+                raise RuntimeError("ChromaBackend.delete_user: an entry already deleted was found again (Chroma did "
+                                   "not delete it, or it was stored again while the erasure ran); the erasure did "
+                                   "not complete — repeat the call")
+            self._col.delete(ids=ids)
+            deleted.update(ids)
+            removed += len(ids)
+
     def clear(self) -> None:
         self._client.delete_collection("sulci")
         self._col = self._client.get_or_create_collection(

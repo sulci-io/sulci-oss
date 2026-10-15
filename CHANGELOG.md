@@ -45,6 +45,12 @@ Docs only; no library code changed. Every statement re-read against the released
   instance's entry keys and reads each one's `tenant_id` and `user_id` — O(keys under the prefix). An entry past its
   expiry has usually been removed by Redis already (`store` sets `EXPIREAT`) and is then not counted; one still held
   is erased and counted. Not for Redis Cluster (one `DEL` names many keys).
+  📌 oss-0018: `ChromaBackend` implements it. It reads the user's ids a page at a time with `search`'s own filter
+  and deletes them by id until none is left; the count is the ids read and deleted. Chroma's own answer is not used
+  (measured on chromadb 1.5.9: `delete` answers the number of ids passed, existing or not; 0.4 and 0.5 answer
+  nothing), so two erasures of one user at once may both count the same entries. Expired entries are held until
+  deleted, so they are erased and counted. Entries written before sulci 0.4.0 carry no `tenant_id`: neither `search`
+  nor `delete_user` reaches them, and `clear()` removes them.
 - The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
 - `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
   there. It gains `entries`, `sessions` and `detail`.
