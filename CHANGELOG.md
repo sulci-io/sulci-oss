@@ -101,6 +101,15 @@ Docs only; no library code changed. Every statement re-read against the released
 
 ### Fixed
 
+- **`FAISSBackend`: calls from several threads run one at a time.** `AsyncCache` runs each backend call on a thread of
+  its own, and FAISS's index and the backend's entry list were changed by several threads at once. Measured on main
+  before this fix (faiss-cpu 1.15.1, Linux): 400 concurrent `AsyncCache.aset` calls aborted the Python process
+  ("corrupted size vs. prev_size", "double free or corruption") or raised in 4 of 5 runs, and the run that finished
+  answered 4 of 20 lookups with another entry's response; 8 threads calling `store()` aborted it in 5 of 5. `store`,
+  `search` and `clear` now hold one lock per backend: 10 of 10 runs found all 20, and a store or a lookup costs the
+  same as before (measured at 500 entries of 384 dimensions). Still one process per `db_path`: two processes, or two
+  `FAISSBackend` objects on one directory, each write the files over the other's.
+
 - **Milvus Lite: `store()` returns once the new entry can be read back.** Milvus Lite did not always make an insert
   visible before `insert()` returned: measured on macOS (milvus-lite 2.5.1, pymilvus 3.0.2), a lookup straight after
   the last of 301 inserts missed the entry just stored in 6 of 50 trials — through `Cache.get`, `MilvusBackend.search`

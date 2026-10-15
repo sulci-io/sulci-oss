@@ -272,6 +272,7 @@ def _faiss_standin():
     b = FAISSBackend.__new__(FAISSBackend)
     b._index, b._meta, b._np = _RecordingIndex(), [], _FakeNp()
     b._scopes = {}                                  # 0.9.3 (oss-0005): FAISS keeps a scope map
+    b._lock = __import__("threading").RLock()       # 0.10.0 (oss-0022): store() holds the backend's lock
     b._ensure = lambda dim: None
     b._save = lambda: None
     return b

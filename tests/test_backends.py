@@ -350,6 +350,76 @@ class TestFAISSBackend:
         assert result == "FAISS response"
 
 
+class TestFAISSThreads:
+    """0.10.0 (oss-0022): calls from several threads run one at a time. Measured on main before it: 8 threads calling
+    store() aborted the process in 5 of 5 runs, and 400 concurrent AsyncCache.aset calls aborted or raised in 4 of 5.
+    test_every_call_holds_the_lock is the guard for search, clear and the file writes: the concurrency test alone
+    catches an unlocked store, not those (measured with mutants)."""
+
+    @staticmethod
+    def _vec(i):
+        import random
+        r = random.Random(i)
+        v = [r.gauss(0, 1) for _ in range(64)]
+        n = sum(x * x for x in v) ** 0.5
+        return [x / n for x in v]
+
+    @skip_faiss
+    def test_every_call_holds_the_lock(self, tmp_path):
+        from sulci.backends.faiss import FAISSBackend
+        b = FAISSBackend(db_path=str(tmp_path / "f"))
+        b.store("k0", "q", "r0", self._vec(0), user_id="u")
+        real, held = b._index, []
+
+        class Index:                                 # the index, recording whether each use held the lock
+            def __getattr__(self, name):
+                held.append((name, b._lock._is_owned()))
+                return getattr(real, name)
+        b._index = Index()
+        real_idx_path = b._idx_path
+
+        def idx_path():
+            held.append(("files", b._lock._is_owned()))
+            return real_idx_path()
+        b._idx_path = idx_path
+        import types, faiss
+        b._faiss = types.SimpleNamespace(write_index=lambda index, path: faiss.write_index(real, path))
+        b.store("k1", "q", "r1", self._vec(1), user_id="u")
+        assert b.search(self._vec(1), 0.9, user_id="u")[0] == "r1"
+        b.clear()
+        assert {n for n, _ in held} >= {"add", "reconstruct_batch", "ntotal", "files"}
+        assert all(owned for _, owned in held), [n for n, owned in held if not owned]
+
+    @skip_faiss
+    def test_concurrent_stores_and_lookups_keep_entries_and_vectors_together(self, tmp_path):
+        import threading
+        from sulci.backends.faiss import FAISSBackend
+        b = FAISSBackend(db_path=str(tmp_path / "f"))
+        errors = []
+
+        def worker(k):
+            try:
+                for i in range(k, 160, 8):
+                    b.store(f"k{i}", f"q{i}", f"r{i}", self._vec(i), user_id=f"u{i % 3}")
+                    b.search(self._vec(i), 0.99, user_id=f"u{i % 3}")
+            except Exception as e:                   # surfaced below, not lost in the thread
+                errors.append(e)
+        threads = [threading.Thread(target=worker, args=(k,)) for k in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert errors == []
+        assert b._index.ntotal == len(b._meta) == 160
+        for pos, m in enumerate(b._meta):            # each position's vector is its own entry's
+            i = int(m["response"][1:])
+            assert max(abs(x - y) for x, y in zip(b._index.reconstruct(pos), self._vec(i))) < 1e-6
+        assert [b.search(self._vec(i), 0.99, user_id=f"u{i % 3}")[0] for i in range(160)] == \
+            [f"r{i}" for i in range(160)]
+        b2 = FAISSBackend(db_path=str(tmp_path / "f"))   # and the files agree
+        assert b2._index.ntotal == len(b2._meta) == 160
+
+
 # ── Qdrant ────────────────────────────────────────────────────
 
 class TestQdrantBackend:
