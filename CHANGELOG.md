@@ -76,6 +76,7 @@ Docs only; no library code changed. Every statement re-read against the released
   cut may lose the last of them. A user with nothing stored rewrites nothing. Expired entries are held until deleted,
   so they are erased and counted; entries written before 0.9.3 carry no scope and are not reached (`clear()` removes
   them). The old files' bytes may stay on disk until the file system reuses them.
+  📌 oss-0025: `store()` now writes the same way; the files beside the old ones are named `.pending`, not `.erasing`.
 - The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
 - `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
   there. It gains `entries`, `sessions` and `detail`.
@@ -111,6 +112,20 @@ Docs only; no library code changed. Every statement re-read against the released
   normally and nothing was logged. The built-in in-process session store is unaffected.
 
 ### Fixed
+
+- **`FAISSBackend`: a write stopped part way never leaves the files unreadable or out of step.** `store()` wrote
+  `index.faiss` and then `meta.pkl` in place. Measured on main before this fix: a `store()` stopped while writing
+  either file left it empty or short, and the directory would not open again (`EOFError: Ran out of input`, `read
+  error in index.faiss`); one stopped between the two files left the index one vector longer than the entries, and 4
+  of 10 later lookups answered with another entry's response; a `clear()` stopped between its two files broke every
+  later lookup. An independent review killed a process storing, erasing and clearing at random moments 90 times on
+  main (28 directories would not open, 2 lookups answered wrongly) and 180 times with the fix (none). `store()` now
+  writes both files the way `delete_user` does: in full to `.pending` files, then replacing the old ones, the index
+  first, and whatever a stop leaves is settled before the files are next read or written. It costs the same as before
+  (measured at 100 and 1,000 entries) because it does not flush to disk: a power cut may lose the latest stores or, on
+  a file system that does not flush a file replaced by rename (ext4 does), leave a file empty — as before.
+  `delete_user` and repairs flush. A directory whose files disagree in length is repaired when it is opened: the first
+  entries and vectors, which still belong together, are kept, the rest dropped, with a WARNING.
 
 - **`FAISSBackend`: calls from several threads run one at a time.** `AsyncCache` runs each backend call on a thread of
   its own, and FAISS's index and the backend's entry list were changed by several threads at once. Measured on main

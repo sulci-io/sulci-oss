@@ -420,6 +420,137 @@ class TestFAISSThreads:
         assert b2._index.ntotal == len(b2._meta) == 160
 
 
+class TestFAISSFiles:
+    """0.10.0 (oss-0025): store() writes its two files the way delete_user does (.pending files, then os.replace, the
+    index first), and a directory whose files disagree in length is repaired on load. Measured on main before it: a
+    store() stopped while pickling left meta.pkl empty and the directory would not open (EOFError); one stopped between
+    its two files made 4 of 10 later lookups answer with another entry's response."""
+
+    @staticmethod
+    def _vec(i):
+        import random
+        r = random.Random(i)
+        v = [r.gauss(0, 1) for _ in range(64)]
+        n = sum(x * x for x in v) ** 0.5
+        return [x / n for x in v]
+
+    def _filled(self, path, n):
+        from sulci.backends.faiss import FAISSBackend
+        b = FAISSBackend(db_path=path)
+        for i in range(n):
+            b.store(f"k{i}", f"q{i}", f"r{i}", self._vec(i), user_id="u")
+        return b
+
+    def _all_answer_their_own(self, b, n):
+        assert b._index.ntotal == len(b._meta)
+        assert [b.search(self._vec(i), 0.99, user_id="u")[0] for i in range(n)] == [f"r{i}" for i in range(n)]
+
+    @skip_faiss
+    @pytest.mark.parametrize("where", ["write_index", "pickle", "replace index", "replace entries"])
+    def test_a_store_stopped_anywhere_leaves_a_directory_that_opens_and_answers(self, tmp_path, monkeypatch, where):
+        import os as os_mod
+        from sulci.backends import faiss as fm
+        from sulci.backends.faiss import FAISSBackend
+        d = str(tmp_path / "f")
+        b = self._filled(d, 5)
+
+        def stop(*a, **kw):
+            raise KeyboardInterrupt("stopped")
+        if where == "write_index":
+            import types
+            monkeypatch.setattr(b, "_faiss", types.SimpleNamespace(write_index=stop))
+        elif where == "pickle":
+            monkeypatch.setattr(fm.pickle, "dump", stop)
+        else:
+            real, calls = os_mod.replace, []
+
+            def replace(src, dst):
+                calls.append(dst)
+                if len(calls) == (1 if where == "replace index" else 2):
+                    raise KeyboardInterrupt("stopped")
+                return real(src, dst)
+            monkeypatch.setattr(fm.os, "replace", replace)
+        with pytest.raises(KeyboardInterrupt):
+            b.store("k5", "q5", "r5", self._vec(5), user_id="u")
+        monkeypatch.undo()
+        again = FAISSBackend(db_path=d)
+        n = len(again._meta)
+        assert n == (6 if where == "replace entries" else 5)       # the store happened once its index was in place
+        self._all_answer_their_own(again, n)
+        for i in range(n, 10):
+            again.store(f"k{i}", f"q{i}", f"r{i}", self._vec(i), user_id="u")
+        self._all_answer_their_own(FAISSBackend(db_path=d), 10)
+
+    @skip_faiss
+    def test_a_store_does_not_flush_to_disk_and_an_erasure_does(self, tmp_path, monkeypatch):
+        from sulci.backends import faiss as fm
+        b = self._filled(str(tmp_path / "f"), 3)
+        flushed, real = [], fm.os.fsync
+
+        def fsync(fd):
+            flushed.append(fd)
+            return real(fd)
+        monkeypatch.setattr(fm.os, "fsync", fsync)
+        b.store("k3", "q3", "r3", self._vec(3), user_id="u")
+        assert flushed == []
+        b.delete_user("u")
+        # both .pending files, and the directory three times (before the index replace, after it, after the entries')
+        assert len(flushed) == 2 + (0 if os.name == "nt" else 3)
+
+    @skip_faiss
+    @pytest.mark.parametrize("damage, kept", [("index one longer", 5), ("entries without an index", 0),
+                                               ("an index without entries", 0), ("index shorter", 3)])
+    def test_files_that_disagree_are_repaired_on_load(self, tmp_path, caplog, damage, kept):
+        import os, pickle
+        import faiss
+        from sulci.backends.faiss import FAISSBackend
+        d = str(tmp_path / "f")
+        b = self._filled(d, 5)
+        idx, meta = os.path.join(d, "index.faiss"), os.path.join(d, "meta.pkl")
+        if damage == "index one longer":                            # a store stopped between its files, before 0.10.0
+            b._index.add(__import__("numpy").array([self._vec(99)], dtype="float32"))
+            faiss.write_index(b._index, idx)
+        elif damage == "entries without an index":                  # a clear stopped between its files
+            os.remove(idx)
+        elif damage == "an index without entries":
+            os.remove(meta)
+        else:
+            short = faiss.IndexHNSWFlat(64, 32)
+            short.add(b._index.reconstruct_batch(__import__("numpy").arange(3, dtype="int64")))
+            faiss.write_index(short, idx)
+        from sulci.backends import faiss as fm
+        flushed, real_fsync = [], fm.os.fsync
+
+        def fsync(fd):
+            flushed.append(fd)
+            return real_fsync(fd)
+        with caplog.at_level("WARNING", logger="sulci"):
+            fm.os.fsync = fsync
+            try:
+                again = FAISSBackend(db_path=d)
+            finally:
+                fm.os.fsync = real_fsync
+        assert "keeping the first %d of each" % kept in caplog.text
+        assert len(again._meta) == kept and (again._index.ntotal if again._index is not None else 0) == kept
+        # the repair is on disk, and flushed: a second open finds nothing to repair
+        on_posix = 0 if os.name == "nt" else 1
+        assert len(flushed) == (on_posix if kept == 0 else 2 + 3 * on_posix)
+        if kept:
+            assert faiss.read_index(idx).ntotal == kept and len(pickle.load(open(meta, "rb"))) == kept
+        else:
+            assert not os.path.exists(idx) and not os.path.exists(meta)
+        caplog.clear()
+        with caplog.at_level("WARNING", logger="sulci"):
+            FAISSBackend(db_path=d)
+        assert "keeping the first" not in caplog.text
+        if kept:
+            self._all_answer_their_own(again, kept)
+        for i in range(kept, 8):
+            again.store(f"k{i}", f"q{i}", f"r{i}", self._vec(i), user_id="u")
+        self._all_answer_their_own(FAISSBackend(db_path=d), 8)
+        assert not [f for f in os.listdir(d) if f.endswith(".pending")]
+
+
 # ── Qdrant ────────────────────────────────────────────────────
 
 class TestQdrantBackend:

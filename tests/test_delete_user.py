@@ -1035,18 +1035,18 @@ class TestFAISSBackend:
         b = _faiss(faiss_dir)
         assert b.delete_user("nobody") == 0                    # no index yet
         b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-7")
-        monkeypatch.setattr(b, "_replace_erased", lambda *a: pytest.fail("rewrote the files"))
+        monkeypatch.setattr(b, "_write_files", lambda *a: pytest.fail("rewrote the files"))
         assert b.delete_user("u-42", tenant_id="t1") == 0
 
     def test_it_holds_the_lock(self, faiss_dir, monkeypatch):
         b = _faiss(faiss_dir)
         b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
-        held, real = [], b._replace_erased
+        held, real = [], b._write_files
 
         def write(*a):
             held.append(b._lock._is_owned())
             return real(*a)
-        monkeypatch.setattr(b, "_replace_erased", write)
+        monkeypatch.setattr(b, "_write_files", write)
         assert b.delete_user("u-42", tenant_id="t1") == 1
         assert held == [True]
 
@@ -1071,7 +1071,7 @@ class TestFAISSBackend:
             b.delete_user("u-42", tenant_id="t1")
         monkeypatch.setattr(faiss_mod.os, "replace", real)
         again = _faiss(faiss_dir)                              # the next process on the directory
-        assert not [f for f in os_mod.listdir(faiss_dir) if f.endswith(".erasing")]
+        assert not [f for f in os_mod.listdir(faiss_dir) if f.endswith(".pending")]
         users = {m["user_id"] for m in again._meta}
         assert ("u-42" not in users) == erased and len(again._meta) == (6 if erased else 12)
         _faiss_agrees(again)
@@ -1108,7 +1108,7 @@ class TestFAISSBackend:
             _faiss(faiss_dir)
         monkeypatch.setattr(faiss_mod.os, "remove", real_remove)
         again = _faiss(faiss_dir)
-        assert len(again._meta) == 12 and not [f for f in os_mod.listdir(faiss_dir) if f.endswith(".erasing")]
+        assert len(again._meta) == 12 and not [f for f in os_mod.listdir(faiss_dir) if f.endswith(".pending")]
         _faiss_agrees(again)
 
     def test_an_error_after_the_index_was_replaced_then_a_store(self, faiss_dir, monkeypatch):
@@ -1161,7 +1161,7 @@ class TestFAISSBackend:
         real_dump = faiss_mod.pickle.dump
 
         def dump(obj, f):
-            if f.name.endswith(".erasing"):
+            if f.name.endswith(".pending"):
                 raise KeyboardInterrupt("stopped while writing the entries")
             return real_dump(obj, f)
         monkeypatch.setattr(faiss_mod.pickle, "dump", dump)
@@ -1222,7 +1222,7 @@ class TestFAISSBackend:
 
         def broken(*a):
             raise OSError("disk full")
-        monkeypatch.setattr(b, "_replace_erased", broken)
+        monkeypatch.setattr(b, "_write_files", broken)
         with pytest.raises(SulciErasureError) as e:
             c.delete_user("u-42", tenant_id="t1")
         assert (e.value.error, e.value.entries, e.value.sessions) == ("OSError", None, None)
