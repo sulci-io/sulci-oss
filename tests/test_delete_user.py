@@ -690,3 +690,129 @@ class TestChromaBackend:
             c.delete_user("u-42", tenant_id="t1")
         assert (e.value.error, e.value.entries, e.value.sessions) == ("ValueError", None, None)
         assert len(c._sessions._windows) == 1                                      # sessions not attempted
+
+
+# ── QdrantBackend.delete_user (oss-0020) ──────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def qdrant_backend(tmp_path):
+    pytest.importorskip("qdrant_client")
+    from sulci.backends.qdrant import QdrantBackend
+    return QdrantBackend(db_path=str(tmp_path / "qdrant"), dimension=FakeEmbedder().dimension)
+
+
+def _qdrant_scopes(b):
+    points, _ = b._client.scroll(collection_name=b.COLLECTION, limit=1000, with_payload=True)
+    return sorted((p.payload["tenant_id"], p.payload["user_id"]) for p in points)
+
+
+class TestQdrantBackend:
+    """An exact count with the scope store() files under, then one delete by that filter, waited for. Measured
+    before oss-0020: Cache.delete_user raised NotImplementedError on Qdrant; qdrant-client's delete answers
+    UpdateResult(status=completed) with no count, whether or not anything matched (1.10.0 and 1.19.1, local mode)."""
+
+    def test_through_cache(self, qdrant_backend):
+        c = Cache(backend=qdrant_backend, embedding_model=FakeEmbedder(), personalized=True, context_window=4,
+                  telemetry=False)
+        _seed(c)
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 2, "sessions": 1}
+        assert c.get("question alpha", tenant_id="t1", user_id="u-42")[0] is None
+        assert c.get("question alpha", tenant_id="t2", user_id="u-42")[0] == "alpha for t2/u-42"
+        assert c.get("question alpha", tenant_id="t1", user_id="u-7")[0] == "alpha for t1/u-7"
+        assert c.get("question alpha", tenant_id="t1")[0] == "alpha for t1/None"
+        assert _qdrant_scopes(qdrant_backend) == [("t1", "global"), ("t1", "u-7"), ("t2", "u-42")]
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 0, "sessions": 0}
+
+    def test_an_expired_entry_is_erased_and_counted(self, qdrant_backend):
+        b = qdrant_backend
+        b.store("k", "q", "old", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42", expires=1.0)
+        b.store("k", "q", "kept", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-7", expires=1.0)
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert _qdrant_scopes(b) == [("t1", "u-7")]
+
+    def test_the_same_key_stored_twice_is_two_entries_and_both_go(self, qdrant_backend):
+        # store() files each call under a new point id, so a repeated set of one question holds two points.
+        b = qdrant_backend
+        for _ in range(2):
+            b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        assert b.delete_user("u-42", tenant_id="t1") == 2
+        assert _qdrant_scopes(b) == []
+
+    def test_an_empty_tenant_or_user_is_the_global_one(self, qdrant_backend):
+        b = qdrant_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), user_id="u-42")
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1")
+        assert b.delete_user("u-42", tenant_id="") == 1
+        assert b.delete_user("", tenant_id="t1") == 1
+        assert _qdrant_scopes(b) == []
+
+    def test_an_exact_count_then_one_delete_by_filter_waited_for(self, qdrant_backend, monkeypatch):
+        # Local mode counts exactly whatever `exact` says, so the arguments are what is checked.
+        b = qdrant_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        calls = []
+
+        def spy(name):
+            real = getattr(b._client, name)
+
+            def call(**kw):
+                calls.append((name, kw))
+                return real(**kw)
+            return call
+        monkeypatch.setattr(b._client, "count", spy("count"))
+        monkeypatch.setattr(b._client, "delete", spy("delete"))
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert [(n, kw.get("exact"), kw.get("wait")) for n, kw in calls] == [("count", True, None),
+                                                                              ("delete", None, True)]
+        for flt in (calls[0][1]["count_filter"], calls[1][1]["points_selector"].filter):
+            assert [(m.key, m.match.value) for m in flt.must] == [("tenant_id", "t1"), ("user_id", "u-42")]
+
+    def test_an_entry_stored_after_the_count_is_erased_uncounted(self, qdrant_backend, monkeypatch):
+        b = qdrant_backend
+        real = b._client.count
+
+        def count_then_store(**kw):
+            held = real(**kw)
+            b.store("late", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+            return held
+        monkeypatch.setattr(b._client, "count", count_then_store)
+        assert b.delete_user("u-42", tenant_id="t1") == 0
+        assert _qdrant_scopes(b) == []
+
+    @pytest.mark.parametrize("status", ["acknowledged", "wait_timeout"])
+    def test_an_unconfirmed_delete_raises(self, qdrant_backend, monkeypatch, status):
+        # "wait_timeout" is an UpdateStatus in newer qdrant-clients only (1.19.1 has it, 1.10.0 not), so the answer
+        # is a stand-in carrying the status's string: UpdateStatus is a str enum, compared by value.
+        from types import SimpleNamespace
+        b = qdrant_backend
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        monkeypatch.setattr(b._client, "delete", lambda **kw: SimpleNamespace(operation_id=1, status=status))
+        with pytest.raises(RuntimeError, match="not confirmed"):
+            b.delete_user("u-42", tenant_id="t1")
+
+    def test_a_delete_that_fails_after_the_count_is_an_erasure_error(self, qdrant_backend, monkeypatch):
+        b = qdrant_backend
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        c.set("q", "a", tenant_id="t1", user_id="u-42", session_id="s1")
+
+        def broken(**kw):
+            raise ConnectionError("qdrant went away")
+        monkeypatch.setattr(b._client, "delete", broken)
+        with pytest.raises(SulciErasureError) as e:
+            c.delete_user("u-42", tenant_id="t1")
+        assert (e.value.error, e.value.entries, e.value.sessions) == ("ConnectionError", None, None)
+        assert len(c._sessions._windows) == 1                                      # sessions not attempted
+
+    def test_a_failure_is_an_erasure_error_through_cache(self, qdrant_backend, monkeypatch):
+        b = qdrant_backend
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        c.set("q", "a", tenant_id="t1", user_id="u-42", session_id="s1")
+
+        def broken(**kw):
+            raise ValueError("qdrant is down")
+        monkeypatch.setattr(b._client, "count", broken)
+        with pytest.raises(SulciErasureError) as e:
+            c.delete_user("u-42", tenant_id="t1")
+        assert (e.value.error, e.value.entries, e.value.sessions) == ("ValueError", None, None)
+        assert len(c._sessions._windows) == 1                                      # sessions not attempted
+        assert _qdrant_scopes(b) == [("t1", "u-42")]                                # nothing deleted

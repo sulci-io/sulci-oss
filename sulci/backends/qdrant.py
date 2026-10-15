@@ -279,6 +279,33 @@ class QdrantBackend:
                 return p.get("response"), r.score, p.get("query")
         return None, 0.0, None
 
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
+        """0.10.0: remove every entry filed under (``tenant_id or "global"``, ``user_id or "global"``) — expired ones
+        too: Qdrant keeps them until deleted — and return how many (the ``Backend`` protocol's contract).
+
+        Two calls: an exact ``count`` with the scope's filter (the scope ``store`` files under), then one ``delete``
+        by that filter with ``wait=True``, which returns once the deletion is applied. Qdrant's answer to a delete
+        carries no count (measured on qdrant-client 1.10.0 and 1.19.1, local mode: ``UpdateResult(status=completed)``
+        whether or not anything matched), so the count is the one taken first. An entry stored for the user between
+        the two calls is erased without being counted, and two erasures of the same user at once may both count the
+        same entries. An answer other than ``completed`` raises: the deletion was not confirmed; repeat the call.
+        Against a server, a client timeout while a large deletion runs raises too, and the server may finish it; a
+        repeated call then counts what is left. Entries written before sulci 0.4.0 have no ``tenant_id`` and are
+        neither found by ``search`` nor erased here; ``clear()`` removes them."""
+        from qdrant_client.models import (FieldCondition, Filter, FilterSelector, MatchValue,
+                                          UpdateStatus)
+        scope = Filter(must=[
+            FieldCondition(key="tenant_id", match=MatchValue(value=tenant_id or "global")),
+            FieldCondition(key="user_id", match=MatchValue(value=user_id or "global")),
+        ])
+        held = self._client.count(collection_name=self.COLLECTION, count_filter=scope, exact=True).count
+        result = self._client.delete(collection_name=self.COLLECTION,
+                                     points_selector=FilterSelector(filter=scope), wait=True)
+        if getattr(result, "status", None) != UpdateStatus.COMPLETED:
+            raise RuntimeError(f"QdrantBackend.delete_user: Qdrant answered {result!r} rather than a completed "
+                               f"deletion; the erasure is not confirmed — repeat the call")
+        return held
+
     def clear(self) -> None:
         # Delete all points but keep the collection (and its HNSW index)
         # intact. qdrant-client 1.x raises ValueError on subsequent

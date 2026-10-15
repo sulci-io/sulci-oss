@@ -729,6 +729,7 @@ percent-encoded into one path segment, so any id is addressed exactly.
 > 📌 oss-0017: Redis implements it as well. It scans every entry key under the backend's prefix, so its cost
 > grows with the number of keys there.
 > 📌 oss-0018: Chroma implements it as well.
+> 📌 oss-0020: Qdrant implements it as well.
 
 ### Advanced constructor options
 

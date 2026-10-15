@@ -51,6 +51,12 @@ Docs only; no library code changed. Every statement re-read against the released
   nothing), so two erasures of one user at once may both count the same entries. Expired entries are held until
   deleted, so they are erased and counted. Entries written before sulci 0.4.0 carry no `tenant_id`: neither `search`
   nor `delete_user` reaches them, and `clear()` removes them.
+  📌 oss-0020: `QdrantBackend` implements it: an exact `count` with the scope `store` files under, then one `delete`
+  by that filter with `wait=True`. Qdrant's answer to a delete carries no count (measured on qdrant-client 1.10.0 and
+  1.19.1, local mode), so the count is the one taken first: an entry stored for the user between the two calls is
+  erased without being counted, and two erasures of one user at once may both count the same entries. A delete
+  Qdrant does not answer `completed` raises. Expired entries are held until deleted, so they are erased and counted;
+  entries written before sulci 0.4.0 carry no `tenant_id` and are not reached (`clear()` removes them).
 - The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
 - `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
   there. It gains `entries`, `sessions` and `detail`.
