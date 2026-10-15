@@ -252,6 +252,8 @@ method.** The section above describes 0.9.3 and is kept as the record.
   📌 oss-0018: Chroma has it too (the user's ids, read a page at a time, deleted by id).
   📌 oss-0020: Qdrant has it too (an exact count with the scope's filter, then one delete by it, waited for).
   📌 oss-0021: Milvus has it too (one delete by the scope key; the count is Milvus's answer).
+  📌 oss-0024: FAISS has it too (the index rebuilt without the user's entries; a stop part way is settled before the
+  files are next used) — every self-hosted backend now has it.
 - `cache._backend.delete_user(...)` remains the managed backend's own method; call `Cache.delete_user` instead.
   The specification is `docs/architecture/specs/delete-user-erasure.md` in sulci-platform.
 

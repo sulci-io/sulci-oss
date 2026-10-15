@@ -948,3 +948,284 @@ class TestMilvusBackend:
             c.delete_user("u-42", tenant_id="t1")
         assert (e.value.error, e.value.entries, e.value.sessions) == ("ConnectionError", None, None)
         assert len(c._sessions._windows) == 1                                      # sessions not attempted
+
+
+# ── FAISSBackend.delete_user (oss-0024) ───────────────────────────────────────────────────────────────────────
+
+@pytest.fixture
+def faiss_dir(tmp_path):
+    pytest.importorskip("faiss")
+    return str(tmp_path / "faiss")
+
+
+def _faiss(path):
+    from sulci.backends.faiss import FAISSBackend
+    return FAISSBackend(db_path=path)
+
+
+def _faiss_agrees(b):
+    """Every position's vector is its own entry's, and the files say what memory says."""
+    assert b._index.ntotal == len(b._meta)
+    for pos, m in enumerate(b._meta):
+        want = FakeEmbedder().embed(m["query"])
+        assert max(abs(x - y) for x, y in zip(b._index.reconstruct(pos), want)) < 1e-6, (pos, m["query"])
+    again = _faiss(b._path)
+    assert [m["response"] for m in again._meta] == [m["response"] for m in b._meta]
+    assert again._index.ntotal == len(again._meta)
+
+
+class TestFAISSBackend:
+    """The HNSW index cannot remove a vector: it is rebuilt from the other entries and written with them, so that a
+    process stopped part way never leaves the two files out of step. Measured before oss-0024: Cache.delete_user raised
+    NotImplementedError on FAISS."""
+
+    def test_through_cache(self, faiss_dir):
+        b = _faiss(faiss_dir)
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        _seed(c)
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 2, "sessions": 1}
+        assert c.get("question alpha", tenant_id="t1", user_id="u-42")[0] is None
+        assert c.get("question alpha", tenant_id="t2", user_id="u-42")[0] == "alpha for t2/u-42"
+        assert c.get("question alpha", tenant_id="t1", user_id="u-7")[0] == "alpha for t1/u-7"
+        assert c.get("question alpha", tenant_id="t1")[0] == "alpha for t1/None"
+        assert sorted((m["tenant_id"], m["user_id"]) for m in b._meta) == [("t1", "global"), ("t1", "u-7"),
+                                                                           ("t2", "u-42")]
+        _faiss_agrees(b)
+        assert c.delete_user("u-42", tenant_id="t1") == {"entries": 0, "sessions": 0}
+
+    def test_the_entries_left_keep_their_own_vectors(self, faiss_dir):
+        b = _faiss(faiss_dir)
+        for i in range(30):                                   # the user's entries spread among everyone else's
+            b.store(f"k{i}", f"q{i} w{i}", f"r{i}", FakeEmbedder().embed(f"q{i} w{i}"), tenant_id="t1",
+                    user_id="u-42" if i % 3 == 0 else f"u{i}")
+        assert b.delete_user("u-42", tenant_id="t1") == 10
+        _faiss_agrees(b)
+        for i in range(30):
+            got = b.search(FakeEmbedder().embed(f"q{i} w{i}"), 0.99, tenant_id="t1",
+                           user_id="u-42" if i % 3 == 0 else f"u{i}")[0]
+            assert got == (None if i % 3 == 0 else f"r{i}")
+
+    def test_an_expired_entry_is_erased_and_counted(self, faiss_dir):
+        b = _faiss(faiss_dir)
+        b.store("k", "q", "old", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42", expires=1.0)
+        b.store("k", "q", "kept", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-7", expires=1.0)
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert [m["response"] for m in b._meta] == ["kept"]
+        _faiss_agrees(b)
+
+    def test_the_last_entry_leaves_an_empty_index(self, faiss_dir):
+        b = _faiss(faiss_dir)
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert b._index.ntotal == 0 and b._meta == []
+        assert b.search(FakeEmbedder().embed("q"), 0.5, tenant_id="t1", user_id="u-42")[0] is None
+        b.store("k", "q", "b", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")     # still usable
+        assert b.search(FakeEmbedder().embed("q"), 0.99, tenant_id="t1", user_id="u-42")[0] == "b"
+        _faiss_agrees(b)
+
+    def test_an_empty_tenant_or_user_is_the_global_one(self, faiss_dir):
+        b = _faiss(faiss_dir)
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), user_id="u-42")
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1")
+        assert b.delete_user("u-42", tenant_id="") == 1
+        assert b.delete_user("", tenant_id="t1") == 1
+        assert b._meta == []
+
+    def test_a_user_with_nothing_stored_rewrites_nothing(self, faiss_dir, monkeypatch):
+        b = _faiss(faiss_dir)
+        assert b.delete_user("nobody") == 0                    # no index yet
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-7")
+        monkeypatch.setattr(b, "_replace_erased", lambda *a: pytest.fail("rewrote the files"))
+        assert b.delete_user("u-42", tenant_id="t1") == 0
+
+    def test_it_holds_the_lock(self, faiss_dir, monkeypatch):
+        b = _faiss(faiss_dir)
+        b.store("k", "q", "a", FakeEmbedder().embed("q"), tenant_id="t1", user_id="u-42")
+        held, real = [], b._replace_erased
+
+        def write(*a):
+            held.append(b._lock._is_owned())
+            return real(*a)
+        monkeypatch.setattr(b, "_replace_erased", write)
+        assert b.delete_user("u-42", tenant_id="t1") == 1
+        assert held == [True]
+
+    @pytest.mark.parametrize("stop_at, erased", [(0, False), (1, True)])
+    def test_a_process_stopped_part_way_leaves_the_files_in_step(self, faiss_dir, monkeypatch, stop_at, erased):
+        # os.replace number stop_at fails: 0 = before the index was replaced, 1 = after it, before the entries were.
+        import os as os_mod
+        from sulci.backends import faiss as faiss_mod
+        b = _faiss(faiss_dir)
+        for i in range(12):
+            b.store(f"k{i}", f"q{i} w{i}", f"r{i}", FakeEmbedder().embed(f"q{i} w{i}"), tenant_id="t1",
+                    user_id="u-42" if i % 2 else f"u{i}")
+        calls, real = [], os_mod.replace
+
+        def replace(src, dst):
+            if len(calls) == stop_at:
+                raise KeyboardInterrupt("stopped")             # as a process killed here would leave the files
+            calls.append(dst)
+            return real(src, dst)
+        monkeypatch.setattr(faiss_mod.os, "replace", replace)
+        with pytest.raises(KeyboardInterrupt):
+            b.delete_user("u-42", tenant_id="t1")
+        monkeypatch.setattr(faiss_mod.os, "replace", real)
+        again = _faiss(faiss_dir)                              # the next process on the directory
+        assert not [f for f in os_mod.listdir(faiss_dir) if f.endswith(".erasing")]
+        users = {m["user_id"] for m in again._meta}
+        assert ("u-42" not in users) == erased and len(again._meta) == (6 if erased else 12)
+        _faiss_agrees(again)
+        for i in range(12):
+            got = again.search(FakeEmbedder().embed(f"q{i} w{i}"), 0.99, tenant_id="t1",
+                               user_id="u-42" if i % 2 else f"u{i}")[0]
+            assert got == (None if (i % 2 and erased) else f"r{i}")
+
+    def test_a_stop_inside_the_cleanup_of_a_stopped_erasure(self, faiss_dir, monkeypatch):
+        # Stopped before the index was replaced, then stopped again while the next backend removed the leftovers.
+        import os as os_mod
+        from sulci.backends import faiss as faiss_mod
+        b = _faiss(faiss_dir)
+        for i in range(12):
+            b.store(f"k{i}", f"q{i} w{i}", f"r{i}", FakeEmbedder().embed(f"q{i} w{i}"), tenant_id="t1",
+                    user_id="u-42" if i % 2 else f"u{i}")
+        real_replace, real_remove = os_mod.replace, os_mod.remove
+
+        def stop(*a):
+            raise KeyboardInterrupt("stopped")
+        monkeypatch.setattr(faiss_mod.os, "replace", stop)
+        with pytest.raises(KeyboardInterrupt):
+            b.delete_user("u-42", tenant_id="t1")
+        monkeypatch.setattr(faiss_mod.os, "replace", real_replace)
+        removed = []
+
+        def remove_once(path):
+            if removed:
+                raise KeyboardInterrupt("stopped again")
+            removed.append(path)
+            return real_remove(path)
+        monkeypatch.setattr(faiss_mod.os, "remove", remove_once)
+        with pytest.raises(KeyboardInterrupt):
+            _faiss(faiss_dir)
+        monkeypatch.setattr(faiss_mod.os, "remove", real_remove)
+        again = _faiss(faiss_dir)
+        assert len(again._meta) == 12 and not [f for f in os_mod.listdir(faiss_dir) if f.endswith(".erasing")]
+        _faiss_agrees(again)
+
+    def test_an_error_after_the_index_was_replaced_then_a_store(self, faiss_dir, monkeypatch):
+        # The entries' replace fails (a Windows sharing violation, say); the process goes on and stores.
+        import os as os_mod
+        from sulci.backends import faiss as faiss_mod
+        b = _faiss(faiss_dir)
+        for i in range(12):
+            b.store(f"k{i}", f"q{i} w{i}", f"r{i}", FakeEmbedder().embed(f"q{i} w{i}"), tenant_id="t1",
+                    user_id="u-42" if i % 2 else f"u{i}")
+        real, calls = os_mod.replace, []
+
+        def replace(src, dst):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise PermissionError(13, "sharing violation")
+            return real(src, dst)
+        monkeypatch.setattr(faiss_mod.os, "replace", replace)
+        with pytest.raises(PermissionError):
+            b.delete_user("u-42", tenant_id="t1")
+        monkeypatch.setattr(faiss_mod.os, "replace", real)
+        assert len(b._meta) == 6                              # erased in this object
+        b.store("k99", "q99 w99", "r99", FakeEmbedder().embed("q99 w99"), tenant_id="t1", user_id="u-7")
+        for cur in (b, _faiss(faiss_dir)):
+            assert len(cur._meta) == 7 and "u-42" not in {m["user_id"] for m in cur._meta}
+            assert cur.search(FakeEmbedder().embed("q99 w99"), 0.99, tenant_id="t1", user_id="u-7")[0] == "r99"
+            _faiss_agrees(cur)
+        assert b.delete_user("u-42", tenant_id="t1") == 0
+
+    def test_a_second_erasure_after_an_error_then_a_stop(self, faiss_dir, monkeypatch):
+        # The first erasure's entries fail to replace; a second erasure, of another user, is stopped part way.
+        import os as os_mod
+        from sulci.backends import faiss as faiss_mod
+        b = _faiss(faiss_dir)
+        users = ["u-42", "u-9", "u0", "u1"]
+        for i in range(12):
+            b.store(f"k{i}", f"q{i} w{i}", f"r{i}", FakeEmbedder().embed(f"q{i} w{i}"), tenant_id="t1",
+                    user_id=users[i % 4])
+        real_replace, calls = os_mod.replace, []
+
+        def replace(src, dst):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise PermissionError(13, "sharing violation")
+            return real_replace(src, dst)
+        monkeypatch.setattr(faiss_mod.os, "replace", replace)
+        with pytest.raises(PermissionError):
+            b.delete_user("u-42", tenant_id="t1")
+        monkeypatch.setattr(faiss_mod.os, "replace", real_replace)
+        real_dump = faiss_mod.pickle.dump
+
+        def dump(obj, f):
+            if f.name.endswith(".erasing"):
+                raise KeyboardInterrupt("stopped while writing the entries")
+            return real_dump(obj, f)
+        monkeypatch.setattr(faiss_mod.pickle, "dump", dump)
+        with pytest.raises(KeyboardInterrupt):
+            b.delete_user("u-9", tenant_id="t1")
+        monkeypatch.setattr(faiss_mod.pickle, "dump", real_dump)
+        again = _faiss(faiss_dir)
+        assert sorted({m["user_id"] for m in again._meta}) == ["u-9", "u0", "u1"]      # the first erasure stands
+        _faiss_agrees(again)
+        for i in range(12):
+            got = again.search(FakeEmbedder().embed(f"q{i} w{i}"), 0.99, tenant_id="t1", user_id=users[i % 4])[0]
+            assert got == (None if i % 4 == 0 else f"r{i}")
+
+    def test_a_clear_after_a_stopped_erasure_leaves_nothing_to_finish(self, faiss_dir, monkeypatch):
+        import os as os_mod
+        from sulci.backends import faiss as faiss_mod
+        b = _faiss(faiss_dir)
+        for i in range(4):
+            b.store(f"k{i}", f"q{i}", f"r{i}", FakeEmbedder().embed(f"q{i}"), tenant_id="t1",
+                    user_id="u-42" if i % 2 else "u-7")
+        real, calls = os_mod.replace, []
+
+        def replace(src, dst):
+            calls.append(dst)
+            if len(calls) == 2:
+                raise PermissionError(13, "sharing violation")
+            return real(src, dst)
+        monkeypatch.setattr(faiss_mod.os, "replace", replace)
+        with pytest.raises(PermissionError):
+            b.delete_user("u-42", tenant_id="t1")
+        monkeypatch.setattr(faiss_mod.os, "replace", real)
+        b.clear()
+        reopened = _faiss(faiss_dir)                           # the next process, before anything is stored
+        assert reopened._meta == [] and reopened._index is None
+        reopened.store("k", "q new", "fresh", FakeEmbedder().embed("q new"), tenant_id="t1", user_id="u-7")
+        again = _faiss(faiss_dir)
+        assert [m["response"] for m in again._meta] == ["fresh"]
+        _faiss_agrees(again)
+
+    def test_the_rebuilt_index_is_the_kind_store_creates(self, faiss_dir):
+        import faiss
+        b = _faiss(faiss_dir)
+        for i in range(4):
+            b.store(f"k{i}", f"q{i}", f"r{i}", FakeEmbedder().embed(f"q{i}"), tenant_id="t1",
+                    user_id="u-42" if i % 2 else "u-7")
+        made = b._index
+        b.delete_user("u-42", tenant_id="t1")
+        for idx in (b._index, _faiss(faiss_dir)._index):
+            assert type(idx) is type(made) is faiss.IndexHNSWFlat
+            assert (idx.d, idx.metric_type, idx.hnsw.nb_neighbors(1), idx.hnsw.efConstruction) == \
+                (made.d, made.metric_type, made.hnsw.nb_neighbors(1), made.hnsw.efConstruction)
+        assert b._index.hnsw.efSearch == made.hnsw.efSearch == 64
+
+    def test_a_failure_is_an_erasure_error_through_cache(self, faiss_dir, monkeypatch):
+        b = _faiss(faiss_dir)
+        c = Cache(backend=b, embedding_model=FakeEmbedder(), personalized=True, context_window=4, telemetry=False)
+        c.set("q", "a", tenant_id="t1", user_id="u-42", session_id="s1")
+
+        def broken(*a):
+            raise OSError("disk full")
+        monkeypatch.setattr(b, "_replace_erased", broken)
+        with pytest.raises(SulciErasureError) as e:
+            c.delete_user("u-42", tenant_id="t1")
+        assert (e.value.error, e.value.entries, e.value.sessions) == ("OSError", None, None)
+        assert len(c._sessions._windows) == 1                                      # sessions not attempted
+        assert [m["user_id"] for m in b._meta] == ["u-42"]                          # memory unchanged
+        assert c.get("q", tenant_id="t1", user_id="u-42")[0] == "a"

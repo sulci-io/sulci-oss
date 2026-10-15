@@ -65,6 +65,17 @@ Docs only; no library code changed. Every statement re-read against the released
   with no count raises. As in `store`, `None` and `""` mean the shared scope and `"global"` is an id like any other.
   Expired entries are held until deleted, so they are erased and counted; entries written before 0.10.0 have no
   scope field and are not reached (`clear()` removes them).
+  📌 oss-0024: `FAISSBackend` implements it, and with it every self-hosted backend has `delete_user`. An HNSW index
+  cannot remove a vector, so the index is rebuilt from every other entry's vector and written with the entries, under
+  the backend's lock: stores and lookups wait for it. Measured on faiss-cpu 1.15.1 (Linux, 384 dimensions, one
+  machine): about 0.06 s at 1,000 entries, 1 s at 10,000, 6.4 s at 50,000. Both files are written in full to
+  `.erasing` files, then replace the old ones, the index first. Whatever stops an erasure part way — the process
+  killed, or an error — is settled before the files are next read or written (by this backend, or the next one on the
+  directory): undone if the index was not yet replaced, completed if it was. So an index is never used with entries of
+  another generation, whose positions would not match. On Windows the replaces are whole or not at all, but a power
+  cut may lose the last of them. A user with nothing stored rewrites nothing. Expired entries are held until deleted,
+  so they are erased and counted; entries written before 0.9.3 carry no scope and are not reached (`clear()` removes
+  them). The old files' bytes may stay on disk until the file system reuses them.
 - The built-in in-process session store gains `clear_scope(scope) -> int`, as the protocol stores have.
 - `SulciErasureError` lives in `sulci.errors`, shared by both erasure paths; `sulci.backends.cloud` imports it from
   there. It gains `entries`, `sessions` and `detail`.

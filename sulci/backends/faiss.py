@@ -22,15 +22,15 @@ class FAISSBackend:
     #: When True, search() must not return entries with mismatched tenant_id.
     ENFORCES_TENANT_ISOLATION: bool = True     # 0.9.3: search() filters on tenant AND user
 
-    # 0.10.0 (oss-0022): store, search and clear — every call that reads or changes the index, the entries or the files
-    # once the object exists — hold self._lock, so calls from several threads run one at a time (delete_user, when FAISS
-    # gains it, holds it too). An RLock, so a test can ask whether the calling thread holds it. AsyncCache runs each
-    # backend call on a thread of its own, and neither a faiss index nor this class's lists may be changed by two
-    # threads at once. Measured on main (oss-0021, faiss-cpu 1.15.1, Linux): 400 concurrent AsyncCache.aset calls
-    # aborted the Python process ("corrupted size vs. prev_size", "double free or corruption") or raised in 4 of 5 runs,
-    # and the one that finished answered 4 of 20 lookups with another entry's response; 8 threads calling store()
-    # directly aborted it in 5 of 5. One process per db_path still: two processes, or two FAISSBackend objects on one
-    # directory, each write the files over the other.
+    # 0.10.0 (oss-0022): store, search and clear — and delete_user (oss-0024) — every call that reads or changes the
+    # index, the entries or the files once the object exists — hold self._lock, so calls from several threads run one at
+    # a time. An RLock, so a test can ask whether the calling thread holds it. AsyncCache runs each backend call on a
+    # thread of its own, and neither a faiss index nor this class's lists may be changed by two threads at once.
+    # Measured on main (oss-0021, faiss-cpu 1.15.1, Linux): 400 concurrent AsyncCache.aset calls aborted the Python
+    # process ("corrupted size vs. prev_size", "double free or corruption") or raised in 4 of 5 runs, and the one that
+    # finished answered 4 of 20 lookups with another entry's response; 8 threads calling store() directly aborted it in
+    # 5 of 5. One process per db_path still: two processes, or two FAISSBackend objects on one directory, each write the
+    # files over the other.
 
     def __init__(self, db_path: str = "./sulci_faiss"):
         try:
@@ -55,6 +55,7 @@ class FAISSBackend:
     def _meta_path(self): return os.path.join(self._path, "meta.pkl")
 
     def _load(self):
+        self._finish_interrupted_erasure()
         if os.path.exists(self._meta_path()):
             with open(self._meta_path(), "rb") as f:
                 self._meta = pickle.load(f)
@@ -70,9 +71,61 @@ class FAISSBackend:
                 self._scopes.setdefault((m["tenant_id"], m["user_id"]), []).append(i)
 
     def _save(self):
+        self._finish_interrupted_erasure()           # 0.10.0 (oss-0024): never write beside a half-done erasure
         self._faiss.write_index(self._index, self._idx_path())
         with open(self._meta_path(), "wb") as f:
             pickle.dump(self._meta, f)
+
+    # 0.10.0 (oss-0024): delete_user replaces both files. The new index and entries are each written in full to a
+    # ".erasing" file beside the old one and flushed to disk; then the index replaces index.faiss (os.replace: whole or
+    # not at all), and from that moment this object holds the new index and entries; then the entries replace meta.pkl.
+    # Whatever stops it part way — the process killed, or an error — leaves one of two states on disk:
+    #   both ".erasing" files, or only index.faiss.erasing: neither old file was replaced and nothing was erased; the
+    #   ".erasing" files are removed, meta.pkl.erasing first;
+    #   only meta.pkl.erasing: the index was replaced; the entries are put in place.
+    # _finish_interrupted_erasure settles it before anything reads (_load) or writes (_save, clear, delete_user) the
+    # files, so an index of one generation is never used with the entries of another — whose positions would not match,
+    # and a lookup would answer with another entry's response. On Windows a directory cannot be flushed: the replaces
+    # are still whole or not at all, but a power cut may lose the last of them.
+    _ERASING = ".erasing"
+
+    def _finish_interrupted_erasure(self):
+        idx_new, meta_new = self._idx_path() + self._ERASING, self._meta_path() + self._ERASING
+        if os.path.exists(idx_new):                  # the index was not replaced: nothing was erased
+            if os.path.exists(meta_new):
+                os.remove(meta_new)                  # first: index.faiss.erasing alone still means "not replaced"
+                self._sync_dir()
+            os.remove(idx_new)
+            self._sync_dir()
+        elif os.path.exists(meta_new):               # the index was replaced: put its entries in place
+            os.replace(meta_new, self._meta_path())
+            self._sync_dir()
+
+    def _sync_dir(self):
+        if os.name == "nt":                          # a directory cannot be opened to flush it on Windows
+            return
+        fd = os.open(self._path, os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    def _replace_erased(self, index, meta):
+        """Write the erased index and entries (see ``_ERASING``) and hold them from the moment the index is replaced."""
+        idx_new, meta_new = self._idx_path() + self._ERASING, self._meta_path() + self._ERASING
+        self._faiss.write_index(index, idx_new)
+        with open(idx_new, "rb") as f:
+            os.fsync(f.fileno())
+        with open(meta_new, "wb") as f:
+            pickle.dump(meta, f)
+            f.flush()
+            os.fsync(f.fileno())
+        self._sync_dir()
+        os.replace(idx_new, self._idx_path())
+        self._index, self._meta = index, meta        # the index on disk is the new one: so is this object's
+        self._index_scopes()
+        self._sync_dir()
+        self._finish_interrupted_erasure()           # puts meta.pkl.erasing in place
 
     def _ensure(self, dim: int):
         if self._index is None:
@@ -138,11 +191,40 @@ class FAISSBackend:
                     return meta["response"], sim
             return None, 0.0
 
+    def delete_user(self, user_id: str, *, tenant_id: Optional[str] = None) -> int:
+        """0.10.0: remove every entry filed under (``tenant_id or "global"``, ``user_id or "global"``) — expired ones
+        too: they are kept until deleted — and return how many (the ``Backend`` protocol's contract).
+
+        A FAISS HNSW index cannot remove a vector, so the index is rebuilt from every other entry's vector, in order,
+        and written with the entries as ``_ERASING`` describes. It holds the backend's lock throughout, so stores and
+        lookups wait for it. Measured on faiss-cpu 1.15.1 (Linux, 384 dimensions, one machine): about 0.06 s at 1,000
+        entries, 1 s at 10,000 and 6.4 s at 50,000; building the HNSW graph grows a little faster than the number of
+        entries. A user with nothing stored returns 0 without rewriting anything. If it raises after the new index was
+        put in place, the erasure has happened in this object and is completed on disk by the next write or the next
+        FAISSBackend on the directory; a repeated call returns 0. Entries written before sulci 0.9.3 carry no scope and
+        are not reached; ``clear()`` removes them. The bytes of the old files may stay on disk until the file system
+        reuses them."""
+        with self._lock:
+            self._finish_interrupted_erasure()       # an earlier erasure's entries, if their replace failed
+            doomed = set(self._scopes.get((tenant_id or "global", user_id or "global"), ()))
+            if not doomed:
+                return 0
+            keep  = [i for i in range(len(self._meta)) if i not in doomed]
+            index = self._faiss.IndexHNSWFlat(self._index.d, 32)
+            index.hnsw.efSearch = 64
+            if keep:
+                index.add(self._index.reconstruct_batch(self._np.array(keep, dtype="int64")))
+            meta = [self._meta[i] for i in keep]
+            self._replace_erased(index, meta)
+            return len(doomed)
+
     def clear(self) -> None:
         with self._lock:
             self._index = None
             self._meta  = []
             self._scopes = {}
-            for p in [self._idx_path(), self._meta_path()]:
+            # 0.10.0 (oss-0024): an erasure's leftovers go first, meta.pkl.erasing first (see _ERASING)
+            for p in [self._meta_path() + self._ERASING, self._idx_path() + self._ERASING,
+                      self._idx_path(), self._meta_path()]:
                 if os.path.exists(p):
                     os.remove(p)

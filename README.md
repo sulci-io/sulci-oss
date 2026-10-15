@@ -731,6 +731,8 @@ percent-encoded into one path segment, so any id is addressed exactly.
 > 📌 oss-0018: Chroma implements it as well.
 > 📌 oss-0020: Qdrant implements it as well.
 > 📌 oss-0021: Milvus implements it as well.
+> 📌 oss-0024: FAISS implements it as well; every self-hosted backend now has it. FAISS rebuilds its index to erase,
+> so the cost grows with the number of entries (about 1 s at 10,000).
 
 ### Advanced constructor options
 
