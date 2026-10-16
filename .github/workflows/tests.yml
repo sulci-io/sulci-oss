@@ -346,6 +346,15 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_tag_version.py -v --tb=short
 
+      # 0.10.0 (oss-0027): covers how `make release-check` reads the version
+      # docs/API-SURFACE.md was measured against -- the newest measurement
+      # only, a pre-release read whole. Runs both scripts on COPIES of the tree;
+      # CI still does not run check_release_ready.py on the tree itself (a
+      # release is not a check-in).
+      - name: Release check (API-SURFACE version vs pyproject)
+        if: needs.changes.outputs.code == 'true'
+        run: pytest tests/test_release_check.py -v --tb=short
+
       # ── suites that CI never ran until 2026-08-11 ────────────────────────
       # These eleven were run by `make checkin` and by NO CI job, some for
       # months -- including all four telemetry suites, which guard the wire

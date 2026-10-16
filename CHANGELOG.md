@@ -121,6 +121,17 @@ Docs only; no library code changed. Every statement re-read against the released
 
 ### Fixed
 
+- **`make release-check` reads only the newest measurement in `docs/API-SURFACE.md`, and reads a pre-release
+  version whole.** It was red on a tree ready to release, at v0.9.3 and on main since: `check_release_ready.py`
+  compared every `sulci` + version in the file, so the 0.9.2 measurement kept disagreeing with `pyproject.toml`. Both
+  of its checkers read `x.y.z` only. Measured on main with a new top line and `pyproject.toml` at `0.10.0rc1`:
+  `check_release_ready.py` read 0.10.0, 0.9.3 and 0.9.2, and `check_api_surface.py` — which CI runs on every pull
+  request — skipped the new line and compared the next one down (0.9.3), so preparing a release candidate would have
+  turned CI red. Both now read the version the same way, through one function: the first `**Measured:**` in the file
+  that a reader sees (wherever it stands on its line; not in an HTML comment, a fenced block or a code span), and
+  the version bolded after `` `sulci` `` on that line,
+  `X.Y.Z` or a pre-release (`X.Y.ZaN`, `bN`, `rcN`). A newest measurement neither can read fails both, and so does one
+  that text no reader sees contradicts; `check_api_surface.py` used to skip its version check and pass. New suite: `tests/test_release_check.py`.
 - **`FAISSBackend`: a write stopped part way never leaves the files unreadable or out of step.** `store()` wrote
   `index.faiss` and then `meta.pkl` in place. Measured on main before this fix: a `store()` stopped while writing
   either file left it empty or short, and the directory would not open again (`EOFError: Ran out of input`, `read

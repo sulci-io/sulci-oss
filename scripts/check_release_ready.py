@@ -19,9 +19,14 @@ The retired figures were already documented as outstanding, in this repo's own
 CHANGELOG, under a heading that begins "Outstanding". Reading it was not the
 missing step. **Nothing failed when it was ignored** — that was.
 
-Two checks, both cheap:
+Three checks, all cheap:
 
-  1. Every place that restates the version agrees with pyproject.toml.
+  1. The newest measurement in docs/API-SURFACE.md (its first
+     `**Measured:**`) is against the version pyproject.toml declares, a
+     pre-release suffix included (`0.10.0rc1`). Older measurement lines are
+     history and keep their own version. The line is read by
+     check_api_surface.py's `measured_version`, the same reader that script
+     uses (0.10.0, oss-0027).
   2. No retired figure appears outside a retraction note.
   3. Every dependency in the `all` extra can install on the Python floor
      this package declares.
@@ -38,6 +43,11 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# The one reader of API-SURFACE.md's version (oss-0027). Imported by path, so
+# `python3 -I scripts/check_release_ready.py` finds it too.
+sys.path.insert(0, str(ROOT / "scripts"))
+from check_api_surface import measured_version  # noqa: E402
 
 #: Figures the register retired. A hit OUTSIDE a retraction note is a failure.
 #: Add here when a figure is retired; never remove without a register entry.
@@ -74,10 +84,9 @@ PUBLISHED = [
     "sulci/integrations/llamaindex.py",
 ]
 
-#: Files that restate the version and must agree with pyproject.toml.
-VERSION_SITES = [
-    ("docs/API-SURFACE.md", r"`sulci`\s+\**([0-9]+\.[0-9]+\.[0-9]+)\**"),
-]
+#: The file that restates the version and must agree with pyproject.toml: its
+#: newest measurement only (see check_api_surface.measured_version).
+API_SURFACE = "docs/API-SURFACE.md"
 
 
 #: Dependencies whose own requires-python floor exceeds nothing we support,
@@ -147,15 +156,19 @@ def pyproject_version() -> str:
 
 
 def check_versions(ver: str) -> list:
-    bad = []
-    for rel, pattern in VERSION_SITES:
-        p = ROOT / rel
-        if not p.exists():
-            continue
-        for found in set(re.findall(pattern, p.read_text(encoding="utf-8"))):
-            if found != ver:
-                bad.append(f"{rel}: says {found}, pyproject.toml says {ver}")
-    return bad
+    p = ROOT / API_SURFACE
+    if not p.exists():
+        return [f"{API_SURFACE}: missing -- the newest measurement cannot be read"]
+    found = measured_version(p.read_text(encoding="utf-8"))
+    if found is None:
+        return [f"{API_SURFACE}: its newest measurement (the first "
+                f"**Measured:**) names no version this can read, or text no "
+                f"reader sees names another; write it as `sulci` **X.Y.Z**, or "
+                f"**X.Y.ZrcN** for a pre-release"]
+    if found != ver:
+        return [f"{API_SURFACE}: newest measurement is against {found}, "
+                f"pyproject.toml says {ver}"]
+    return []
 
 
 def check_retired() -> list:

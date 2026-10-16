@@ -135,6 +135,73 @@ def version() -> str:
 
 
 # --------------------------------------------------------------------------
+# the version of the doc's newest measurement
+# --------------------------------------------------------------------------
+#: The doc dates itself on `**Measured:**` lines, newest first; the version is
+#: the one bolded after `sulci` on that line. The older lines are history and
+#: keep the version they were measured against. The newest is the FIRST
+#: `**Measured:**` a reader of the rendered doc sees, wherever it stands on its
+#: line (a quote, a list item, a heading). Not one in an HTML comment, a fenced
+#: block or a code span (where the doc names the marker): a reader that skipped
+#: a newest line it did not expect, or read one nobody sees, would compare the
+#: wrong line and could report green (both found by oss-0027's review).
+#:
+#: 0.10.0 (oss-0027): this is the ONE reader. `check_release_ready.py` imports
+#: it, so the two checkers `make release-check` runs read the same thing. Until
+#: then they did not: this file took the first `**Measured:**` match anywhere
+#: and skipped its version check when none matched; check_release_ready.py
+#: compared every `sulci` + version in the file, so the 0.9.2 line kept
+#: `make release-check` red from 0.9.3 on. Both patterns read `x.y.z` only:
+#: given a new top line at `**0.10.0rc1**` and that version in pyproject.toml,
+#: this file skipped the new line and compared the next one down (0.9.3), and
+#: check_release_ready.py read 0.10.0, 0.9.3 and 0.9.2 (measured on main,
+#: cb67e19, with the rc1 line and version written in).
+MEASURED_LINE = re.compile(r"\*\*Measured:\*\*(.*)$", re.M)
+#: What a reader does not see: HTML comments, fenced blocks (closed by a fence
+#: as long, with no info string) and lines indented four spaces or a tab (an
+#: indented code block) are removed whole; a code span, which may wrap but not
+#: cross a blank line, is removed when it holds the marker (`sulci` itself is a
+#: span). A fence left over afterwards was never closed: refused.
+_UNSEEN = (re.compile(r"<!--.*?-->", re.S),
+           re.compile(r"^[ ]{0,3}(`{3,}|~{3,})[^\n]*\n.*?^[ ]{0,3}\1[`~]*[ \t]*$", re.S | re.M),
+           re.compile(r"^(?: {4}|\t)[^\n]*$", re.M))
+_CODE_SPAN = re.compile(r"(`+)((?:(?!\n[ \t]*\n).)+?)\1", re.S)
+_FENCE = re.compile(r"^[ ]{0,3}(?:`{3,}|~{3,})", re.M)
+#: A release (`0.9.3`) or a pre-release (`0.10.0a1`, `0.10.0b2`, `0.10.0rc1`),
+#: spelled as pyproject.toml spells it. Anything else is unreadable, and an
+#: unreadable newest measurement FAILS: it is not a pass.
+MEASURED_VERSION = re.compile(r"`sulci`\s+\*\*([0-9]+\.[0-9]+\.[0-9]+(?:(?:a|b|rc)[0-9]+)?)\*\*")
+
+
+def measured_version(text: str) -> str | None:
+    """The version of the newest measurement in TEXT (API-SURFACE.md's body).
+
+    None when the first `**Measured:**` a reader sees names no version this
+    can read after `sulci` on its line, when there is none, or when text no
+    reader sees names a different newest version. Callers fail on None."""
+    shown = text
+    for unseen in _UNSEEN:
+        shown = unseen.sub("", shown)
+    if _FENCE.search(shown):
+        return None
+    shown = _CODE_SPAN.sub(lambda m: "" if "**Measured:**" in m.group(2) else m.group(0), shown)
+    line = MEASURED_LINE.search(shown)
+    if not line:
+        return None
+    m = MEASURED_VERSION.search(line.group(1))
+    if not m:
+        return None
+    # Backstop, failing closed: the removal above is not a Markdown parser. If
+    # the plain text's first readable measurement names another version,
+    # refuse to read rather than choose.
+    for raw in MEASURED_LINE.finditer(text):
+        r = MEASURED_VERSION.search(raw.group(1))
+        if r:
+            return m.group(1) if r.group(1) == m.group(1) else None
+    return m.group(1)
+
+
+# --------------------------------------------------------------------------
 # read the doc's claims
 # --------------------------------------------------------------------------
 def claimed() -> dict:
@@ -148,9 +215,7 @@ def claimed() -> dict:
     text = DOC.read_text()
     out: dict = {"defaults": {}, "kwonly": {}, "methods": {}, "version": None}
 
-    m = re.search(r'\*\*Measured:\*\*[^\n]*?\*\*([0-9]+\.[0-9]+\.[0-9]+)\*\*', text)
-    if m:
-        out["version"] = m.group(1)
+    out["version"] = measured_version(text)
 
     # constructor: the ```python block containing `Cache(`
     for block in re.findall(r'```python\n(.*?)```', text, re.S):
@@ -239,7 +304,13 @@ def main() -> int:
     doc = claimed()
     fails: list[str] = []
 
-    if doc["version"] and doc["version"] != ver:
+    if doc["version"] is None:
+        fails.append(
+            "version: the doc's newest measurement (its first "
+            "**Measured:**) names no version this can read, or text no reader "
+            "sees names another -- write it as `sulci` **X.Y.Z**, or "
+            "**X.Y.ZrcN** for a pre-release")
+    elif doc["version"] != ver:
         fails.append(
             f"version: doc says it was measured against {doc['version']}, "
             f"pyproject.toml reads {ver}")

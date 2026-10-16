@@ -553,3 +553,14 @@ nothing**, so that invisibility reads as a pass. Measured on 2026-08-30: a
 re-worded header made it report green while the doc still said 0.9.0. **If you
 edit the header, run both, and confirm the first still reports a version rather
 than `None`.**
+
+📌 **0.10.0 (oss-0027): the two checkers now read the version the same way**, through
+`check_api_surface.measured_version`, so the ⚠️ note above describes the scripts
+before 0.10.0. The newest measurement is the first `**Measured:**` in this file
+that a reader sees, wherever it stands on its line (not in an HTML comment, a fenced
+block or a code span); its version is the one bolded
+after `` `sulci` ``, `X.Y.Z` or a pre-release (`0.10.0rc1`). Older measurement lines
+are history and are not compared. A newest measurement with no version they can read,
+or one that text no reader sees contradicts, fails both — `check_api_surface.py` no longer skips its version check. Before this,
+`check_release_ready.py` compared every line, so the 0.9.2 measurement kept
+`make release-check` red. `tests/test_release_check.py` covers both scripts.
