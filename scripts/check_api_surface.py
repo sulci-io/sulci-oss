@@ -99,7 +99,7 @@ def measure() -> dict:
         path = ROOT / rel
         if not path.exists():
             sys.exit(f"check_api_surface: no {rel} under {ROOT}")
-        tree = ast.parse(path.read_text())
+        tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef) or node.name not in CLASSES:
                 continue
@@ -130,7 +130,7 @@ def measure() -> dict:
 
 def version() -> str:
     m = re.search(r'^version\s*=\s*"([^"]+)"',
-                  (ROOT / "pyproject.toml").read_text(), re.M)
+                  (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M)
     return m.group(1) if m else "?"
 
 
@@ -179,6 +179,7 @@ def measured_version(text: str) -> str | None:
     None when the first `**Measured:**` a reader sees names no version this
     can read after `sulci` on its line, when there is none, or when text no
     reader sees names a different newest version. Callers fail on None."""
+    text = text.replace("\r\n", "\n")         # a caller's raw CRLF text reads as the file does
     shown = text
     for unseen in _UNSEEN:
         shown = unseen.sub("", shown)
@@ -212,7 +213,9 @@ def claimed() -> dict:
     reworded this still works; if a default changes, it does not."""
     if not DOC.exists():
         sys.exit(f"check_api_surface: {DOC} is missing")
-    text = DOC.read_text()
+    # UTF-8, not the platform's encoding: on Windows that is cp1252, which cannot
+    # decode this doc (its ⚠️ holds byte 0x8F) -- 0.10.0 (oss-0029).
+    text = DOC.read_text(encoding="utf-8")
     out: dict = {"defaults": {}, "kwonly": {}, "methods": {}, "version": None}
 
     out["version"] = measured_version(text)

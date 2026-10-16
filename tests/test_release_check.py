@@ -31,6 +31,7 @@ alone; the retired-figure check is not under test here.
 """
 from __future__ import annotations
 
+import ast
 import re
 import shutil
 import subprocess
@@ -143,6 +144,30 @@ def test_the_real_doc_s_newest_measurement_is_readable():
     assert measured_version(text) is not None
 
 
+def test_crlf_text_reads_as_lf():
+    text = (ROOT / "docs" / "API-SURFACE.md").read_text(encoding="utf-8")
+    assert measured_version(text.replace("\n", "\r\n")) == measured_version(text) is not None
+
+
+@pytest.mark.parametrize("script", SCRIPTS + ("check_tag_version.py",))
+def test_every_file_read_names_its_encoding(script):
+    """oss-0029: check_api_surface.py read with the platform's encoding, so on Windows
+    (cp1252) it could not decode API-SURFACE.md and the four Windows CI legs went red
+    once this suite ran it there. Checked here so a Linux run catches it too."""
+    tree = ast.parse((ROOT / "scripts" / script).read_text(encoding="utf-8"))
+    bad = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr in ("read_text", "write_text")
+                and not any(k.arg == "encoding" for k in node.keywords)):
+            bad.append(f"line {node.lineno}: .{node.func.attr}() without encoding=")
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "open"
+                and not any(k.arg == "encoding" for k in node.keywords)
+                and not (len(node.args) > 1 and isinstance(node.args[1], ast.Constant) and "b" in str(node.args[1].value))):
+            bad.append(f"line {node.lineno}: open() without encoding=")
+    assert not bad, bad
+
+
 # ── both scripts, end to end, on a copy of the tree ──────────────────────────
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
@@ -161,8 +186,10 @@ def tree(tmp_path: Path) -> Path:
 
 
 def run(tree: Path, script: str) -> subprocess.CompletedProcess:
+    # errors="replace": the child prints in its platform's encoding (cp1252 on
+    # Windows); these tests read only ASCII out of it.
     return subprocess.run([sys.executable, "-I", str(tree / "scripts" / script)],
-                          capture_output=True, text=True, cwd=tree)
+                          capture_output=True, text=True, errors="replace", cwd=tree)
 
 
 def set_version(tree: Path, v: str) -> None:

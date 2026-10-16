@@ -121,6 +121,11 @@ Docs only; no library code changed. Every statement re-read against the released
 
 ### Fixed
 
+- **`scripts/check_api_surface.py` reads its files as UTF-8.** It read `docs/API-SURFACE.md`, `pyproject.toml` and
+  the sources it measures in the platform's encoding; on Windows that is cp1252, which cannot decode the doc (its `⚠️`
+  holds byte 0x8F). CI ran the script on Linux only until `tests/test_release_check.py` (oss-0027) ran it on every
+  leg, and the four Windows legs went red. The suite now also fails if any file read in the release scripts names no
+  encoding, so a Linux run catches it.
 - **`make release-check` reads only the newest measurement in `docs/API-SURFACE.md`, and reads a pre-release
   version whole.** It was red on a tree ready to release, at v0.9.3 and on main since: `check_release_ready.py`
   compared every `sulci` + version in the file, so the 0.9.2 measurement kept disagreeing with `pyproject.toml`. Both
