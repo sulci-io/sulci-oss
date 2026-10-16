@@ -8,6 +8,8 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0rc1] — 2026-10-16 — Release candidate: erase one user on every backend; local backends safe across threads
+
 ### Documentation — GA refresh, 2026-10-14
 
 Docs only; no library code changed. Every statement re-read against the released 0.9.3 (tag `v0.9.3`).
