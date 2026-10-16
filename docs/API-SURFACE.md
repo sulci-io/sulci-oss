@@ -1,5 +1,8 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-16 against `sulci` **0.10.0** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v0.10.0rc1`: only the version banner differs. The 0.10.0rc1 measurement follows.
+
 **Measured:** 2026-10-16 against `sulci` **0.10.0rc1** — `check_api_surface.py --show`, its output diffed against
 the same command at the tag `v0.9.3`: besides the version banner, the only differing lines are `Cache.delete_user`,
 `AsyncCache.adelete_user` and `AsyncCache.delete_user` (each `*, tenant_id`), the 📌 0.10.0 rows below that oss-0016

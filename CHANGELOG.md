@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-10-16 — Erase one user on every backend; local backends safe across threads
+
+0.10.0rc1, released: no library code changed after the release candidate, so its entries below are this release's.
+The managed platform ran 0.10.0rc1 on staging (sulci-platform #747) before this release.
+
 ## [0.10.0rc1] — 2026-10-16 — Release candidate: erase one user on every backend; local backends safe across threads
 
 ### Documentation — GA refresh, 2026-10-14
