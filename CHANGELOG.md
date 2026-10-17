@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-10-17 — The managed backend honours the dashboard threshold; FAISS scores cosine
+
+0.10.1rc1, released: no library code changed after the release candidate, so its entries below are this release's.
+The managed platform ran 0.10.1rc1 on staging (sulci-platform `97b3291`) before this release.
+
 ## [0.10.1rc1] — 2026-10-17 — Release candidate: the managed backend honours the dashboard threshold; FAISS scores cosine
 
 The managed platform runs this release candidate on staging before 0.10.1. 📌 The commit that carries these changes

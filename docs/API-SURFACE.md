@@ -1,5 +1,8 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-17 against `sulci` **0.10.1** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v0.10.1rc1`: only the version banner differs. The 0.10.1rc1 measurement follows.
+
 **Measured:** 2026-10-17 against `sulci` **0.10.1rc1** — `check_api_surface.py --show`, its output diffed against
 the same command at the tag `v0.10.0`: besides the version banner, the only differing line is `Cache.__init__`'s
 `threshold` default, `0.85` → `None` (oss-0032, the 📌 above the constructor block). The 0.10.0 measurement follows.
