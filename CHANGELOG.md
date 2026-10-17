@@ -8,6 +8,12 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.1rc1] — 2026-10-17 — Release candidate: the managed backend honours the dashboard threshold; FAISS scores cosine
+
+The managed platform runs this release candidate on staging before 0.10.1. 📌 The commit that carries these changes
+(oss-0032, `18553bd`) is titled "the LangChain adapter ignores context_window"; the entry below is what it does: it
+warns, and still forwards the window.
+
 ### Changed — what a managed lookup compares against (can change hit rates on `backend="sulci"`)
 
 - **The managed backend sends a threshold only when you set one** (oss-0032). `Cache(threshold=...)` now defaults
