@@ -212,17 +212,37 @@ class FAISSBackend:
                 return None, 0.0
             now = now or time.time()
             # 0.9.3: a lookup reads its own scope only — tenant AND user, None meaning the shared scope "global" —
-            # and searches that scope's vectors EXACTLY (the index's squared-L2 metric), so no number of entries in
-            # other scopes can crowd this one out. An entry without a stored scope matches no scope.
+            # and searches that scope's vectors EXACTLY, so no number of entries in other scopes can crowd this one
+            # out. An entry without a stored scope matches no scope.
+            # 0.10.1 (#172): the score is the COSINE similarity, computed as SQLiteBackend computes it (float64, a
+            # zero vector scoring 0). It was `1 - d`, d the squared L2 distance: 2·cos − 1 for unit vectors (cos
+            # 0.895 reported as 0.79, a miss at 0.85 that SQLite serves), and a vector not of unit length was scored
+            # by its length.
             scope = (tenant_id or "global", user_id or "global")
             ids   = self._scopes.get(scope)
             if not ids:
                 return None, 0.0
-            vecs  = self._index.reconstruct_batch(self._np.array(ids, dtype="int64"))
-            dists = ((vecs - self._np.array(embedding, dtype="float32")) ** 2).sum(axis=1)
-            order = self._np.argsort(dists)[:5]
-            D, I  = [dists[order]], [[ids[j] for j in order]]
-            for dist, idx in zip(D[0], I[0]):
+            # Scored in float32 over the scope, the best five rescored in float64 (0.10.1's review: float64 over a
+            # 50,000-entry scope doubled the time and memory of a lookup). Ties keep insertion order.
+            np    = self._np
+            vecs  = self._index.reconstruct_batch(np.array(ids, dtype="int64"))
+            q32   = np.asarray(embedding, dtype="float32")
+            with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+                n32    = np.linalg.norm(vecs, axis=1)
+                n32[n32 == 0.0] = 1.0
+                rough  = (vecs @ q32) / (n32 * (float(np.linalg.norm(q32)) or 1.0))
+                rough  = np.nan_to_num(rough, nan=-np.inf)
+                k      = min(5, len(ids))
+                cand   = np.sort(np.argpartition(-rough, k - 1)[:k]) if len(ids) > k else np.arange(len(ids))
+                v64    = vecs[cand].astype("float64")
+                q64    = q32.astype("float64")
+                n64    = np.linalg.norm(v64, axis=1)
+                n64[n64 == 0.0] = 1.0
+                exact  = (v64 @ q64) / (n64 * (float(np.linalg.norm(q64)) or 1.0))
+            order = cand[np.argsort(-exact, kind="stable")]
+            score = dict(zip(cand.tolist(), exact.tolist()))
+            for j in order:
+                idx = ids[j]
                 if idx < 0 or idx >= len(self._meta):
                     continue
                 meta = self._meta[idx]
@@ -230,7 +250,9 @@ class FAISSBackend:
                     continue
                 if (meta.get("tenant_id"), meta.get("user_id")) != scope:
                     continue
-                sim = float(1.0 - dist)
+                sim = float(score[int(j)])
+                if sim != sim:                               # NaN (an inf or NaN query): never a hit
+                    continue
                 if sim >= threshold:
                     return meta["response"], sim
             return None, 0.0

@@ -185,6 +185,33 @@ def _is_count(value) -> bool:
 _PKG_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+#: 0.10.1: the threshold a LOCAL backend applies when the caller set none. The managed backend (backend="sulci")
+#: sends none instead, so the gateway applies the tenant's dashboard setting.
+DEFAULT_THRESHOLD = 0.85
+
+
+class _InstanceThreshold:
+    """``Cache.threshold`` (0.10.1). Before 0.10.1 the constructor defaulted it to 0.85 and the managed backend sent
+    that on every lookup; the gateway prefers a per-request threshold over the tenant's setting, so a threshold saved
+    in the dashboard never reached a Python SDK user. Now ``None`` means "not set": a backend reads
+    ``DEFAULT_THRESHOLD``, except a transport that declares ``ACCEPTS_UNSET_THRESHOLD = True`` (``SulciCloudBackend``),
+    which reads ``None`` and sends nothing. A custom transport without the flag still receives a number (0.10.1's
+    review). A value set at construction or by assignment (``cache.threshold = 0.9``) is the caller's and is used
+    everywhere. A descriptor rather than a ``property``, so the public method set (docs/API-SURFACE.md) is
+    unchanged."""
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        value = obj.__dict__.get("_threshold")
+        if value is None and not obj.__dict__.get("_unset_threshold_ok", False):
+            return DEFAULT_THRESHOLD
+        return value
+
+    def __set__(self, obj, value) -> None:
+        obj.__dict__["_threshold"] = value
+
+
 def _caller_stacklevel() -> int:
     """
     Frames to skip so a warning points at the CALLER's code, not at sulci's.
@@ -262,8 +289,9 @@ class Cache:
     Args:
         backend:         Vector store backend. One of:
                          "chroma" | "qdrant" | "faiss" | "redis" | "sqlite" | "milvus"
-        threshold:       Cosine similarity threshold (0.0–1.0).
-                         0.85 is a good starting point.
+        threshold:       Cosine similarity threshold (0.0–1.0). ``None`` (default, 0.10.1): 0.85
+                         (``DEFAULT_THRESHOLD``) on a local backend; on the managed backend
+                         nothing is sent and the tenant's dashboard setting applies.
         context_threshold:
                          Cosine similarity threshold applied ONLY to lookups
                          that actually blended prior turns (context_depth > 0).
@@ -295,10 +323,12 @@ class Cache:
                          None = sessions live forever (not recommended).
     """
 
+    threshold = _InstanceThreshold()   # 0.10.1: None = not set by the caller (see _InstanceThreshold)
+
     def __init__(
         self,
         backend:         Union[str, Backend]  = "chroma",
-        threshold:       float                = 0.85,
+        threshold:       Optional[float]      = None,
         embedding_model: Union[str, Embedder] = "minilm",
         ttl_seconds:     Optional[int]        = 86400,
         personalized:    bool                 = False,
@@ -447,6 +477,10 @@ class Cache:
         self._is_remote_transport = (
             hasattr(self._backend, "remote_get") and
             hasattr(self._backend, "remote_set")
+        )
+        # 0.10.1: only a transport that says it accepts "no threshold" is handed None (see _InstanceThreshold).
+        self._unset_threshold_ok = (
+            self._is_remote_transport and getattr(self._backend, "ACCEPTS_UNSET_THRESHOLD", False) is True
         )
 
         # v0.6.1 (sulci-oss #60) — defer the local Embedder load when the
@@ -711,8 +745,13 @@ class Cache:
         #
         # `is None`, never `or`: 0.0 is a legitimate threshold (match anything)
         # and must not be silently replaced by the instance default.
+        # 0.10.1: None only on a transport that accepts an unset threshold (the managed backend), when none was
+        # set; the gateway then applies the tenant's. Anything else that reads None (a subclass's class attribute
+        # shadowing the descriptor, say) gets the default, so the comparison below never meets None.
         eff_threshold = self.threshold if threshold is None else float(threshold)
-        if not 0.0 <= eff_threshold <= 1.0:
+        if eff_threshold is None and not getattr(self, "_unset_threshold_ok", False):
+            eff_threshold = DEFAULT_THRESHOLD
+        if eff_threshold is not None and not 0.0 <= eff_threshold <= 1.0:
             # A cosine similarity threshold outside [0, 1] is a programming
             # error, not a runtime condition — it can never be satisfied (>1) or
             # can never be missed (<0), and silently clamping would hide the bug

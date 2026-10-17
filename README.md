@@ -142,7 +142,7 @@ pip install openai              # for OpenAI
 The LangChain adapter is a stateless semantic cache. LangChain's cache interface
 carries no conversation id, so `SulciCache` calls `get(prompt)` / `set(prompt, …)`
 without a `session_id` (`sulci/integrations/langchain.py`) and `context_window`
-has no effect there. For context-aware lookup, use the LlamaIndex adapter with a
+has no effect there. 📌 Since 0.10.1, passing a non-zero `context_window` to the stock adapter logs a warning (a subclass that passes its own `session_id` still uses it). For context-aware lookup, use the LlamaIndex adapter with a
 per-call `session_id=`, or call `Cache.cached_call(..., session_id=...)` directly
 (see *Context-Aware Blending* below for what blending does and does not do).
 
@@ -420,6 +420,9 @@ cache = Cache(backend="sulci", api_key="sk-sulci-...", threshold=0.85)
 cache = Cache(backend="sulci", threshold=0.85)
 ```
 
+📌 **0.10.1:** on `backend="sulci"`, leave `threshold` out to use the threshold saved in your dashboard. A value
+passed here, 0.85 included, is sent with every lookup and overrides it.
+
 See [sulci.io](https://sulci.io) for current plans. The free OSS-Connect key is
 open now; paid plans (Pro, Business) open for self-serve signup at general
 availability — until then, request access from the pricing page.
@@ -649,7 +652,7 @@ Run it a second time with the same (or similar) question — `source` switches t
 ```python
 cache = Cache(
     backend         = "chroma",     # chroma | sqlite | faiss | qdrant | redis | milvus | sulci
-    threshold       = 0.85,         # cosine similarity cutoff (0–1)
+    threshold       = 0.85,         # cosine similarity cutoff (0–1); 0.10.1: default None = 0.85 locally, your dashboard's on "sulci"
     embedding_model = "minilm",     # minilm | mpnet | bge | openai
     ttl_seconds     = 86400,        # 24h. None = no expiry
     personalized    = False,        # scope lookups to the user_id passed on get/set

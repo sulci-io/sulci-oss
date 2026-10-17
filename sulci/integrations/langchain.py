@@ -53,12 +53,14 @@ class SulciCache(BaseCache):
 
     Unlike exact-match caches (``InMemoryCache``, ``SQLiteCache``) and
     stateless semantic caches (``GPTCache``, ``RedisSemanticCache``),
-    SulciCache blends prior conversation turns into the similarity lookup
-    vector, which raises hit rates on multi-turn workloads where a follow-up
-    only makes sense given what came before.
-
-    ``context_window=0`` (default) is fully stateless and backward-
-    compatible.  Raise it to 4 to unlock context-aware mode.
+    **This adapter is stateless.** LangChain's cache interface hands the cache
+    a prompt and an LLM string, never a conversation, so no ``session_id``
+    reaches sulci and no prior turn is blended. ``context_window`` is
+    therefore has no effect with the stock ``lookup``/``update``, and a
+    non-zero one logs a warning (0.10.1). It is still forwarded, for a
+    subclass that passes its own ``session_id``
+    (``examples/langchain_example.py``). Otherwise use
+    ``sulci.integrations.llamaindex`` or ``Cache.cached_call(..., session_id=...)``.
 
     **How much it helps depends on your query mix, and we are not going to
     put a number here.** Run
@@ -101,12 +103,12 @@ class SulciCache(BaseCache):
 
                 backend         "sqlite"|"chroma"|"qdrant"|"faiss"|
                                 "redis"|"milvus"|"sulci"  (default "sqlite")
-                threshold       Cosine similarity cutoff 0–1  (default 0.85)
+                threshold       Cosine similarity cutoff 0–1  (default: 0.85
+                                locally; the tenant's setting on "sulci")
                 embedding_model "minilm"|"mpnet"|"bge"|"openai"
                 ttl_seconds     Entry lifetime in seconds (None = no expiry)
-                context_window  Turns to remember; 0 = stateless (default)
-                query_weight    α in blending formula  (default 0.70)
-                context_decay   Per-turn decay         (default 0.50)
+                context_window  No effect with the stock lookup (warns);
+                                used by a subclass that passes session_id
                 api_key         Sulci Cloud key (backend="sulci")
                 gateway_url     Custom gateway for Enterprise VPC deployments
                                 (default: https://api.sulci.io)
@@ -118,12 +120,8 @@ class SulciCache(BaseCache):
         # Self-hosted SQLite — zero infrastructure
         set_llm_cache(SulciCache(backend="sqlite"))
 
-        # Context-aware — chatbot / agent
-        set_llm_cache(SulciCache(
-            backend="sqlite",
-            context_window=4,
-            threshold=0.75,
-        ))
+        # A looser threshold
+        set_llm_cache(SulciCache(backend="sqlite", threshold=0.75))
 
         # Qdrant — production deployment
         set_llm_cache(SulciCache(backend="qdrant", ttl_seconds=86400))
@@ -161,6 +159,19 @@ class SulciCache(BaseCache):
                 "Set namespace_by_llm=False to suppress this warning."
             )
             namespace_by_llm = False
+
+        # 0.10.1: the stock lookup()/update() pass no session_id (LangChain's cache interface carries no
+        # conversation), so with them a context_window does nothing — say so. It is still forwarded: a subclass
+        # that passes its own session_id (examples/langchain_example.py, ContextAwareSulciCache) uses it.
+        if (kwargs.get("context_window") and type(self).lookup is SulciCache.lookup
+                and type(self).update is SulciCache.update):
+            logger.warning(
+                "SulciCache: context_window has no effect with the stock lookup(): "
+                "LangChain's cache interface passes no conversation, so every lookup "
+                "is stateless. Use sulci.integrations.llamaindex, "
+                "Cache.cached_call(..., session_id=...), or a subclass that passes "
+                "session_id (examples/langchain_example.py)."
+            )
 
         self._namespace_by_llm = namespace_by_llm
         self._kwargs            = kwargs

@@ -142,7 +142,8 @@ class SulciCacheLLM(LLM):
             ``"faiss"`` | ``"redis"`` | ``"milvus"`` | ``"sulci"``
             (default ``"sqlite"``).
         threshold (float):
-            Cosine similarity cutoff 0–1 (default ``0.85``).
+            Cosine similarity cutoff 0–1 (default: ``0.85`` locally; the
+            tenant's setting on ``backend="sulci"``, 0.10.1).
         context_window (int):
             Turns to remember per session; 0 = stateless (default).
             Set to 4 for context-aware multi-turn caching.

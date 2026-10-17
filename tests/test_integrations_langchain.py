@@ -316,3 +316,55 @@ class TestNamespaceByLLMCloudWarning:
             cache = SulciCache(backend="sqlite")
         assert "namespace_by_llm" not in caplog.text
         assert cache._namespace_by_llm is True
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0.10.1: context_window with the stock lookup warns (no conversation reaches it); a subclass keeps it
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestContextWindowWithTheStockLookup:
+    """Before 0.10.1 ``SulciCache(context_window=4)`` was accepted silently, and with the stock ``lookup``/``update``
+    (no ``session_id``) it did nothing. It now warns there, and is still forwarded, because a subclass that passes
+    its own ``session_id`` (``examples/langchain_example.py``'s ``ContextAwareSulciCache``) does blend with it."""
+
+    def test_a_non_zero_window_with_the_stock_lookup_warns_and_is_still_forwarded(self, tmp_path, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="sulci.integrations.langchain"):
+            cache = SulciCache(backend="sqlite", db_path=str(tmp_path / "w"), context_window=4,
+                               namespace_by_llm=False)
+        assert "context_window has no effect with the stock lookup()" in caplog.text
+        assert cache._default_cache.context_window == 4
+
+    def test_zero_or_absent_is_silent(self, tmp_path, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING, logger="sulci.integrations.langchain"):
+            SulciCache(backend="sqlite", db_path=str(tmp_path / "z"), context_window=0, namespace_by_llm=False)
+            SulciCache(backend="sqlite", db_path=str(tmp_path / "a"), namespace_by_llm=False)
+        assert "context_window" not in caplog.text
+
+    def test_a_subclass_that_passes_session_id_keeps_its_window_and_no_warning(self, tmp_path, caplog):
+        """The repo's own example pattern (0.10.1's review): dropping the window would have switched it off."""
+        import logging
+
+        class WithSession(SulciCache):
+            def lookup(self, prompt, llm_string):
+                resp, _, depth = self._default_cache.get(prompt, session_id=llm_string)
+                self.last_depth = depth
+                return [Generation(text=resp)] if resp is not None else None
+
+            def update(self, prompt, llm_string, return_val):
+                self._default_cache.set(prompt, return_val[0].text, session_id=llm_string)
+
+        with caplog.at_level(logging.WARNING, logger="sulci.integrations.langchain"):
+            cache = WithSession(backend="sqlite", db_path=str(tmp_path / "s"), context_window=4,
+                                namespace_by_llm=False)
+        assert "context_window" not in caplog.text
+        assert cache._default_cache.context_window == 4
+        cache.update("How do I install Docker?", "conv-1", [Generation(text="apt install docker")])
+        cache.lookup("And how do I start it?", "conv-1")
+        assert cache.last_depth >= 1, "the subclass's session blended no prior turn"
+
+    def test_lookups_still_work(self, tmp_path):
+        cache = SulciCache(backend="sqlite", db_path=str(tmp_path / "l"), context_window=4, namespace_by_llm=False)
+        cache.update(QUERY, LLM, [Generation(text=RESP)])
+        assert cache.lookup(QUERY, LLM)[0].text == RESP

@@ -20,7 +20,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--port", type=int, default=int(os.environ.get("SULCI_PROXY_PORT", "8787")))
     p.add_argument("--backend", default=os.environ.get("SULCI_BACKEND", "sqlite"))
     p.add_argument("--db-path", default=os.environ.get("SULCI_DB_PATH", "./sulci_db"))
-    p.add_argument("--threshold", type=float, default=0.85)
+    # 0.10.1: no default here — unset is 0.85 on a local backend and the tenant's setting on backend="sulci".
+    p.add_argument("--threshold", type=float, default=None)
     p.add_argument("--context-window", type=int, default=4)
     p.add_argument("--ttl-seconds", type=int, default=None)
     p.add_argument("--openai-upstream", default=None)

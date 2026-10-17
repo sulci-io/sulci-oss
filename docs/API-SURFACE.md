@@ -76,6 +76,36 @@ file and date it, then grep the estate for whatever else restated the old value.
 
 Parameter order below is the real declaration order.
 
+📌 **0.10.1 (oss-0032): `threshold` defaults to `None`.** A local backend then applies `DEFAULT_THRESHOLD` (0.85);
+the managed backend sends no threshold, so the tenant's dashboard setting applies. The first block below is the
+current declaration; the second is 0.10.0's, kept as it was written.
+
+```python
+from sulci import Cache
+
+cache = Cache(
+    backend         = "chroma",    # chroma|sqlite|faiss|qdrant|redis|milvus|sulci
+    threshold       = None,        # 0.10.1: 0.85 locally; on "sulci", the tenant's setting
+    embedding_model = "minilm",    # minilm|mpnet|bge|openai
+    ttl_seconds     = 86400,       # 24h — entries DO expire by default
+    personalized    = False,
+    db_path         = "./sulci_db",
+    context_window  = 0,           # 0 = stateless
+    query_weight    = 0.7,
+    context_decay   = 0.5,
+    session_ttl     = 3600,
+    telemetry       = True,
+    api_key         = None,        # also SULCI_API_KEY
+    gateway_url     = "",          # empty; resolved downstream, not defaulted here
+    session_store   = None,
+    event_sink      = None,
+    cost_per_call   = 0.005,
+    context_threshold = None,   # blended lookups only; None = use `threshold`
+)
+```
+
+0.10.0's declaration:
+
 ```python
 from sulci import Cache
 

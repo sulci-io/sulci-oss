@@ -11,7 +11,7 @@ Zero infrastructure for the user. One parameter change from self-hosted:
     cache = Cache(backend="sqlite", threshold=0.85)
 
     # After
-    cache = Cache(backend="sulci", api_key="sk-sulci-...", threshold=0.85)
+    cache = Cache(backend="sulci", api_key="sk-sulci-...")   # 0.10.1: no threshold = the dashboard's
 
 v0.6.0 transport contract (sulci-oss #62, umbrella #63)
 -------------------------------------------------------
@@ -108,6 +108,8 @@ class SulciCloudBackend:
 
     CLOUD_URL    = "https://api.sulci.io"
     USER_AGENT   = f"sulci/{__version__}"
+    #: 0.10.1: remote_get(threshold=None) sends no threshold, so Cache hands None through when the caller set none.
+    ACCEPTS_UNSET_THRESHOLD = True
 
     def __init__(
         self,
@@ -161,7 +163,7 @@ class SulciCloudBackend:
     def remote_get(
         self,
         query:      str,
-        threshold:  float,
+        threshold:  Optional[float],
         *,
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
@@ -179,21 +181,19 @@ class SulciCloudBackend:
         Tenant isolation is enforced server-side from the api_key auth
         context; tenant_id is no longer sent on the wire.
 
+        0.10.1: ``threshold=None`` sends no ``threshold`` at all, so the gateway applies the tenant's dashboard
+        setting; ``Cache`` passes ``None`` when the caller set no threshold anywhere. A number is sent as given.
+
         Returns:
             (response, similarity, context_depth)
             response is None on miss.
             Falls back to (None, 0.0, 0) on any network error — never raises.
         """
+        body = {"query": query, "user_id": user_id, "session_id": session_id}
+        if threshold is not None:
+            body["threshold"] = threshold
         try:
-            resp = self._client.post(
-                "/v1/cache/get",
-                json={
-                    "query":      query,
-                    "threshold":  threshold,
-                    "user_id":    user_id,
-                    "session_id": session_id,
-                },
-            )
+            resp = self._client.post("/v1/cache/get", json=body)
             resp.raise_for_status()
             data = resp.json()
             return (

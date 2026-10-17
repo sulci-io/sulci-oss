@@ -8,6 +8,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — what a managed lookup compares against (can change hit rates on `backend="sulci"`)
+
+- **The managed backend sends a threshold only when you set one** (oss-0032). `Cache(threshold=...)` now defaults
+  to `None`. On a local backend that means 0.85 (`sulci.core.DEFAULT_THRESHOLD`), exactly as before. On
+  `backend="sulci"` no threshold is sent, and the gateway applies the threshold saved in your dashboard (0.65 unless
+  you changed it). Before, every managed lookup sent 0.85, and the gateway prefers a per-request threshold, so the
+  dashboard setting never applied from Python (measured on 0.10.0: `Cache(backend="sulci", api_key=...)` sent
+  `"threshold": 0.85`). A threshold you set is sent as before, 0.85 included: `Cache(threshold=0.9)`,
+  `cache.threshold = 0.9`, or `get(..., threshold=0.9)`. `cache.threshold` reads `None` on the managed backend
+  until one is set. `sulci-proxy` and `sulci-mcp` no longer default `--threshold` to 0.85.
+  ⚠️ A managed user who relied on the implicit 0.85 now gets the tenant setting (by default 0.65: more hits, some
+  of them looser). Pass `threshold=0.85` to keep the old comparison.
+  ⚠️ **Code that reads `cache.threshold` on the managed backend can break:** it is `Optional[float]` now and reads
+  `None` until set, so `f"{cache.threshold:.2f}"` or arithmetic on it raises `TypeError`; `repr` shows
+  `threshold=None`. Local backends still read `0.85`. A custom transport (any backend with `remote_get` and
+  `remote_set`) is still handed a number unless it declares `ACCEPTS_UNSET_THRESHOLD = True`, as
+  `SulciCloudBackend` does. The anonymous telemetry fingerprint includes the threshold, so a managed deployment
+  that set none is counted as a new deployment once after upgrading.
+
+### Fixed
+
+- **`FAISSBackend` reports cosine similarity** (#172, oss-0032), as `SQLiteBackend` computes it (the scope scored in
+  float32, the best five rescored in float64). It
+  reported `1 - d`, d the squared L2 distance: `2·cos − 1` for unit vectors, so FAISS ran stricter than the
+  threshold every other backend applies (measured on 0.10.0: cos 0.895 reported as 0.79, a miss at 0.85 that SQLite
+  serves), and a vector not of unit length was scored by its length (`a` against `3a`, cos 1, never a hit). Stored
+  entries are unaffected; only the score of a lookup changes. If you tuned a FAISS threshold down to compensate,
+  raise it back.
+- **The LangChain adapter says when `context_window` does nothing** (oss-0032). Its stock `lookup`/`update` pass no
+  `session_id` (LangChain's cache interface carries no conversation), so there a window has no effect (documented
+  2026-10-14); `SulciCache(context_window=4)` was accepted silently and now logs a warning. The value is still
+  forwarded: a subclass that passes its own `session_id`, as `examples/langchain_example.py` does, blends with it
+  unchanged. The docstrings no longer offer it as a way to make the stock adapter context-aware.
+
 ## [0.10.0] — 2026-10-16 — Erase one user on every backend; local backends safe across threads
 
 0.10.0rc1, released: no library code changed after the release candidate, so its entries below are this release's.
