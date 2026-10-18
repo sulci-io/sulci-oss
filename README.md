@@ -117,7 +117,7 @@ pip install "sulci[sqlite]"
 pip install "sulci[sqlite,langchain]"
 ```
 
-**LlamaIndex integration:**
+**LlamaIndex integration** (Python 3.10+):
 
 ```bash
 pip install "sulci[sqlite,llamaindex]"
@@ -213,7 +213,7 @@ Settings.llm.complete("How do I fix it?", session_id="conv-42")
 # Settings.llm = SulciCacheLLM(llm=OpenAI(model="gpt-4o"), backend="sulci")
 ```
 
-Install, and set your OpenAI key (the example's `OpenAI` LLM class is a separate LlamaIndex package):
+Install (Python 3.10+), and set your OpenAI key (the example's `OpenAI` LLM class is a separate LlamaIndex package):
 
 ```bash
 pip install "sulci[sqlite,llamaindex]" llama-index-llms-openai
@@ -330,12 +330,14 @@ caches are wired. Pass the conversation id as
 `metadata={"sulci_session_id": ...}` to get context blending.
 
 
-## ⚠️ The MCP, proxy and LiteLLM extras need Python 3.10+
+## ⚠️ The MCP, proxy, LiteLLM and LlamaIndex extras need Python 3.10+
 
 Sulci itself supports Python 3.9. `mcp`, `litellm` and `fastapi` all declare
 `requires-python >=3.10`, so `pip install "sulci[mcp]"` (or `[proxy]`,
 `[litellm]`) will not resolve on 3.9. The core library, the backends and the
-LangChain adapter are unaffected. Same constraint as `sulci[llamaindex]`.
+LangChain adapter are unaffected. `sulci[llamaindex]` installs on 3.9 but its
+adapter raises `ImportError` there: the `llama-index-core` pip picks on 3.9
+cannot import.
 
 
 ## Tenant and user isolation
