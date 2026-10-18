@@ -222,15 +222,24 @@ with one WARNING naming them, and the entry keeps its own values; every other ke
 📌 Superseded before release: such a `metadata` raises `ValueError` naming the keys (the gateway answers
 `422`), and one that is not a mapping raises `TypeError` — on every backend, before anything is stored.
 
-### `delete_user` is not a `Cache` method
-
-This one has caused real damage, so it gets its own section.
+### `delete_user` — a `Cache` method since 0.10.0
 
 ```python
-cache.delete_user(user_id)           # AttributeError
-cache.backend.delete_user(user_id)   # AttributeError — `.backend` is the *string*
-cache._backend.delete_user(user_id)  # works — cloud backend only, private attribute
+from sulci import Cache
+
+cache = Cache(backend="sqlite", db_path="./sulci_erasure_demo", personalized=True)
+cache.set("What is my plan?", "You are on Pro.", tenant_id="t1", user_id="u-42")
+print(cache.delete_user("u-42", tenant_id="t1"))   # {'entries': 1, 'sessions': 0}
 ```
+
+What it does, and what it refuses, is listed under *Decided 2026-10-14* at the end of this section. Through 0.9.3
+it was not a `Cache` method; the record of that, kept because it caused real damage, follows.
+
+#### The record: before 0.10.0 `delete_user` was not a `Cache` method
+
+At 0.9.3, `cache.delete_user(user_id)` raised `AttributeError`; so did `cache.backend.delete_user(user_id)`
+(`.backend` is the *string*); only `cache._backend.delete_user(user_id)` worked, on the cloud backend alone, through
+a private attribute.
 
 - `delete_user` is defined in exactly one place: `sulci/backends/cloud.py:233`.
   📌 0.9.3: `delete_user(user_id, *, raise_on_error=False)` and `clear(*, raise_on_error=False)` (the line
@@ -263,9 +272,10 @@ behaviour *"a success-shaped no-op for a GDPR-relevant operation."* That fix mad
 the backend method really delete. Nobody noticed the documented call site was
 never reachable. The no-op became an exception.
 
-**Correct as written, leave alone:** `README.md:648` and `:955` attribute the
-method to `SulciCloudBackend`; both CHANGELOGs describe it as a backend method in
-past-tense release notes. Those are right.
+**Correct as written at 0.9.3:** the README then attributed the method to
+`SulciCloudBackend`; both CHANGELOGs describe it as a backend method in
+past-tense release notes, and those stay as written. The README describes
+`Cache.delete_user` since oss-0035.
 
 **Open decision.** Whether to add a guarded `Cache.delete_user()` proxy, add
 `delete_user` to the `Backend` protocol, or keep per-user deletion an
@@ -279,7 +289,8 @@ method.** The section above describes 0.9.3 and is kept as the record.
 - `Cache.delete_user(user_id, *, tenant_id=None) -> {"entries": N, "sessions": M}` erases one end user of one
   tenant: the backend's entries filed under (tenant, user), expired ones included, through `Backend.delete_user`,
   then the user's conversation sessions through the session store's `clear_scope(user_scope(tenant, user))` — the
-  built-in store or an injected one. `AsyncCache.adelete_user` and the sync passthrough `delete_user` mirror it.
+  built-in store or an injected one. Every shipped backend implements `Backend.delete_user` (SQLite, Redis, Chroma,
+  Qdrant, Milvus and FAISS, all in 0.10.0). `AsyncCache.adelete_user` and the sync passthrough `delete_user` mirror it.
 - It refuses before touching anything: `ValueError` for a `user_id` that is `None`, `""`, `"global"`, falsy or not
   valid Unicode text, or a reserved `tenant_id`; `ValueError` when the cache is not `personalized=True` (nothing is
   filed per user there; `clear()` is the route); `TypeError` for `tenant_id` on the managed backend (the API key

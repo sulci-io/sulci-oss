@@ -19,18 +19,23 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 > re-checked against the tree (`make -n`, `check_api_surface.py --show`,
 > `pytest --collect-only`). The full suite was **not** re-run — the pass/skip
 > counts in Step 5 and *What a Clean Run Looks Like* are still the 0.9.2 run.
+>
+> **0.10.1 refresh (2026-10-18, Linux, Python 3.12):** the *Current state* table, the collected-test count (1,319),
+> the API surface and the project structure were re-checked against `v0.10.1` (`check_api_surface.py --show`,
+> `pytest --collect-only` with the Step 3 install). The full suite was again **not** re-run here; the pass/skip
+> counts are still the 0.9.2 run.
 
-## Current state — re-measured 2026-10-14
+## Current state — re-measured 2026-10-18
 
 | Fact | Value | Re-measure |
 |---|---|---|
-| Version | **0.9.3** (tag `v0.9.3`, on PyPI). `main` carries three unreleased commits beyond it — see CHANGELOG `[Unreleased]` | `grep '^version' pyproject.toml` |
-| Public methods on `Cache` | **8** | `python3 scripts/check_api_surface.py --show` |
+| Version | **0.10.1** (tag `v0.10.1`, on PyPI). `main` has no unreleased changes (CHANGELOG `[Unreleased]` is empty) | `grep '^version' pyproject.toml` |
+| Public methods on `Cache` | **9** (`delete_user` added in 0.10.0) | `python3 scripts/check_api_surface.py --show` |
 | Default backend | `"chroma"` | ditto — **not** sqlite |
 | Default `ttl_seconds` | `86400` — entries **do** expire after 24h | ditto |
 | Default `db_path` | `"./sulci_db"` | ditto |
 | Backends | 6 free + 1 managed; every one enforces `tenant_id` and `user_id` since 0.9.3 | `grep -rn ENFORCES_TENANT_ISOLATION sulci/backends` |
-| Tests collected | **1,006** at `v0.9.3`; 1,033 on `main` (2026-10-14) | `python -m pytest tests/ --collect-only -q \| tail -1` |
+| Tests collected | **1,319** at `v0.10.1` (2026-10-18) | `python -m pytest tests/ --collect-only -q \| tail -1` |
 
 `python3 scripts/check_api_surface.py --show` measures the whole surface by AST
 (no install needed); without `--show` it exits 1 if
@@ -242,8 +247,8 @@ exactly like a hang. To keep a log and still watch progress, use
 
 ### Expected result
 
-> ⚠️ **0.9.3 (2026-10-14):** the suite now collects **1,006** tests at `v0.9.3`
-> (1,033 on `main`). The pass/skip split below is the 0.9.2 run and has not been
+> ⚠️ **0.10.1 (2026-10-18):** the suite now collects **1,319** tests at `v0.10.1`
+> (1,006 at `v0.9.3`). The pass/skip split below is the 0.9.2 run and has not been
 > re-measured; and the last row of the skip table no longer applies — since 0.9.3
 > every local backend declares `ENFORCES_TENANT_ISOLATION = True`, so the
 > conformance suite's isolation tests run instead of skipping (`tests/compat`
@@ -1300,9 +1305,10 @@ without `chromadb`.)
 
 Generated from the repo on 2026-09-30 (v0.9.1); re-checked against `v0.9.3` on
 2026-10-14 — 0.9.3 added `sulci/_metadata.py`, `sulci/_scope_ids.py`,
-`sulci/backends/_scope.py` and `sulci/sessions/scope.py`. Per-file test counts are
+`sulci/backends/_scope.py` and `sulci/sessions/scope.py` — and against `v0.10.1` on 2026-10-18 — 0.10.0 added
+`sulci/errors.py` (`SulciErasureError`) and `sulci/sessions/errors.py` (`SulciSessionError`). Per-file test counts are
 deliberately left out — they go stale with every release. For the current total,
-run `python -m pytest tests/ --collect-only -q | tail -1` (1,006 at v0.9.3).
+run `python -m pytest tests/ --collect-only -q | tail -1` (1,319 at v0.10.1).
 
 ```
 .
@@ -1342,13 +1348,15 @@ run `python -m pytest tests/ --collect-only -q | tail -1` (1,006 at v0.9.3).
 │   ├── async_cache.py          ← AsyncCache wrapper
 │   ├── context.py              ← ContextWindow + in-process session handling
 │   ├── config.py               ← ~/.sulci/config persistence
+│   ├── errors.py               ← SulciErasureError (0.10.0)
 │   ├── telemetry.py  oss_connect.py   ← opt-in telemetry, device-code flow (Step 9)
 │   ├── backends/               ← chroma, faiss, milvus, qdrant, redis, sqlite (free)
 │   │                             + cloud (backend="sulci", managed); protocol.py
 │   ├── embeddings/             ← minilm (default, local), openai; protocol.py
 │   ├── integrations/           ← langchain, llamaindex, litellm, mcp_server
 │   ├── proxy/                  ← sulci-proxy (OpenAI-compatible caching proxy)
-│   ├── sessions/               ← SessionStore: memory, redis; protocol.py; scope.py (0.9.3 scoped ids)
+│   ├── sessions/               ← SessionStore: memory, redis; protocol.py; scope.py (0.9.3 scoped ids);
+│   │                             errors.py (SulciSessionError, 0.10.0)
 │   ├── sinks/                  ← EventSink: null, telemetry, redis_stream; protocol.py
 │   └── tests/compat/           ← SessionStore + EventSink conformance suites
 └── tests/                      ← test_*.py per feature, plus compat/ (backend + embedder
@@ -1390,8 +1398,8 @@ Console scripts installed by the package: `sulci-mcp` (MCP server) and
 
 ## Branch Reference
 
-- **`main`** is the current release line (v0.9.3, tagged 2026-10-10, plus three
-  unreleased commits as of 2026-10-14 — check `pyproject.toml` and CHANGELOG
+- **`main`** is the current release line (v0.10.1, tagged 2026-10-17, with no
+  unreleased changes as of 2026-10-18 — check `pyproject.toml` and CHANGELOG
   `[Unreleased]`). All work merges here via PR.
 - Work happens on short-lived branches. Prefixes in use: `feat/` or `feature/`,
   `fix/`, `docs/`, `chore/`, `test/`, and `release/vX.Y.Z` for releases.

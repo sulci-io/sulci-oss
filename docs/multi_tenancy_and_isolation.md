@@ -188,6 +188,8 @@ fails, the failure tells you which user-impacting scenario is broken.
 The cache misses, the LLM is called, the response gets stored:
 
 ```python
+from sulci import Cache
+
 cache = Cache(backend="qdrant")          # personalized=False (the default): user_id is ignored
 
 cache.set(
@@ -273,7 +275,10 @@ Same company, two agents with different access permissions.
 > does Northrop Industries get?"
 
 ```python
-cache = Cache(backend="qdrant", personalized=True)   # user_id now scopes lookups
+from sulci import Cache
+
+# Its own db_path: a local Qdrant store can be open in only one client per process.
+cache = Cache(backend="qdrant", personalized=True, db_path="./sulci_db_agents")   # user_id now scopes lookups
 
 cache.set(
     query     = "What pricing tier does Northrop Industries get?",
@@ -466,16 +471,19 @@ identifier. (A backend called directly, without `Cache`, is pinned by
 
 ### What about deletion? GDPR / CCPA right-to-erasure?
 
-The `Backend` protocol's `clear()` removes everything, and
-`Cache.clear()` also removes every conversation session. Per-user or
-per-tenant deletion of cache entries is not in the OSS `Backend`
-protocol (0.9.3). The session store has `clear_scope(scope)`, so a
-tenant's or user's conversation history can be removed on its own.
-The managed backend offers per-user erasure:
-`SulciCloudBackend.delete_user(user_id)` (`DELETE
-/v1/cache/user/{user_id}`), which raises `SulciErasureError` unless the
-gateway confirms it. See [sulci.io/enterprise](https://sulci.io/enterprise)
-for the managed product.
+Since 0.10.0, `Cache.delete_user(user_id, tenant_id=...)` erases one
+user's entries and conversation history on every shipped backend
+(`Backend.delete_user` is part of the protocol) and returns
+`{"entries": N, "sessions": M}`. It needs `personalized=True`; a failure
+raises `sulci.errors.SulciErasureError`, and repeating the call completes
+it. On the managed backend it calls `DELETE /v1/cache/user/{user_id}`
+(the API key decides the tenant). `Cache.clear()` removes everything,
+every conversation session included. Per-tenant deletion of entries is
+not a `Cache` method: give each tenant its own store, or `clear()` it.
+The session store's `clear_scope(scope)` removes a tenant's or user's
+conversation history on its own. See
+[sulci.io/enterprise](https://sulci.io/enterprise) for the managed
+product.
 
 ### Is tenant_id encrypted at rest?
 

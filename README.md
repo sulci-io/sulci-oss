@@ -36,10 +36,19 @@ corpus, `threshold=0.85`. Ranges are across four seeded draws
 
 Reproduce:
 
+From a clone of this repository (the benchmark is not in the PyPI package):
+
 ```bash
+git clone https://github.com/sulci-io/sulci-oss.git
+cd sulci-oss
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[sqlite]"
-python3 benchmark/run.py --use-sulci --fresh --no-sweep --seed 1
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --seed 1 --out /tmp/sulci-bench-minilm
 ```
+
+Give every `--use-sulci` run its own `--out`: the default, `benchmark/results/minilm/`, holds the four published
+draws, and `run.py` refuses to write loose output beside them.
 
 ⚠️ **87.19ms is environment-dependent** — it is a MiniLM forward pass on the
 benchmark machine, not a property of the cache. Measure it on your own hardware
@@ -54,7 +63,7 @@ an answer stored as *"how do I fix it?"* is a candidate for every conversation
 that asks it. Store answers under a self-contained version of the question. How
 much blending helps depends entirely on your query mix, and **this README does not carry
 a number for it.** Run `python3 benchmark/run.py --use-sulci --fresh --no-sweep
---context` and read the harness's own note: the context corpus is 125 follow-ups
+--context --out /tmp/sulci-bench-context` and read the harness's own note: the context corpus is 125 follow-ups
 across 25 sessions, which is small.
 
 > Figures previously in this block — `85.9%`, `0.74ms`, `$21.47`, and a
@@ -74,7 +83,8 @@ four corpus draws (`--seed 1 2 3 42`, n=10,000):
 | cold session | **33.4%** `[30.0–35.0]`, n=200 |
 | warm session | **99.74%** `[99.69–99.81]`, n=200 |
 
-Reproduce with `benchmark/run.py --agent --use-sulci --fresh --seed 1`.
+Reproduce, from a clone set up as above, with
+`python3 benchmark/run.py --agent --use-sulci --fresh --seed 1 --out /tmp/sulci-bench-agent`.
 
 > The **~60–75%** figure this paragraph used to carry was never measured. It
 > came from one line in `benchmark/README.md` that asserted it and called it
@@ -85,50 +95,62 @@ Reproduce with `benchmark/run.py --agent --use-sulci --fresh --seed 1`.
 
 ## Install
 
-**Step 1 — Install Sulci Cache with a backend:**
+**Step 1 — Install Sulci Cache with a backend.** Start with SQLite (zero infrastructure):
 
 ```bash
-pip install "sulci[sqlite]"    # SQLite — zero infra, local dev (start here)
-pip install "sulci[chroma]"    # ChromaDB
-pip install "sulci[faiss]"     # FAISS
-pip install "sulci[qdrant]"    # Qdrant
-pip install "sulci[redis]"     # Redis + RedisVL
-pip install "sulci[milvus]"    # Milvus Lite
-# ↑ 0.10.0: Milvus Lite on Linux and macOS. On Windows the extra installs pymilvus only: use MilvusBackend(uri=...).
-pip install sulci              # Sulci Cloud managed backend — no extra needed (httpx is included)
+pip install "sulci[sqlite]"
 ```
+
+| Backend | Install |
+|---|---|
+| SQLite — zero infra, local dev | `pip install "sulci[sqlite]"` |
+| ChromaDB | `pip install "sulci[chroma]"` |
+| FAISS | `pip install "sulci[faiss]"` |
+| Qdrant | `pip install "sulci[qdrant]"` |
+| Redis + RedisVL | `pip install "sulci[redis]"` |
+| Milvus Lite (Linux and macOS; on Windows the extra installs pymilvus only — use `MilvusBackend(uri=...)`) | `pip install "sulci[milvus]"` |
+| Sulci Cloud managed backend — no extra needed (httpx is included) | `pip install sulci` |
 
 **LangChain integration:**
 
 ```bash
-pip install "sulci[sqlite,langchain]"   # + LangChain integration
+pip install "sulci[sqlite,langchain]"
 ```
 
 **LlamaIndex integration:**
 
 ```bash
-pip install "sulci[sqlite,llamaindex]"  # + LlamaIndex native integration
+pip install "sulci[sqlite,llamaindex]"
 ```
 
 **MCP server, caching proxy, LiteLLM** (Python 3.10+):
 
-```bash
-pip install "sulci[sqlite,mcp]"          # + MCP server (sulci-mcp)
-pip install "sulci[sqlite,proxy]"        # + OpenAI/Anthropic caching proxy (sulci-proxy)
-pip install "sulci[sqlite,litellm]"      # + LiteLLM cache layer
-```
+| Surface | Install |
+|---|---|
+| MCP server (`sulci-mcp`) | `pip install "sulci[sqlite,mcp]"` |
+| OpenAI/Anthropic caching proxy (`sulci-proxy`) | `pip install "sulci[sqlite,proxy]"` |
+| LiteLLM cache layer | `pip install "sulci[sqlite,litellm]"` |
 
 **AsyncCache (non-blocking async wrapper):**
 
+AsyncCache is included — no extra install needed:
+
 ```bash
-pip install "sulci[sqlite]"   # AsyncCache is included — no extra install needed
+pip install "sulci[sqlite]"
 ```
 
 **Step 2 — Install your LLM SDK** (required for `cached_call` with a live model):
 
+For Anthropic / Claude:
+
 ```bash
-pip install anthropic           # for Anthropic / Claude
-pip install openai              # for OpenAI
+pip install anthropic
+```
+
+For OpenAI:
+
+```bash
+pip install openai
 ```
 
 > **zsh users:** always wrap extras in quotes — `"sulci[sqlite]"` not `sulci[sqlite]`.
@@ -153,8 +175,8 @@ from sulci.integrations.langchain import SulciCache
 # Stateless semantic — drop-in for GPTCache
 set_llm_cache(SulciCache(backend="sqlite"))
 
-# Managed Sulci Cloud
-set_llm_cache(SulciCache(backend="sulci", api_key="sk-sulci-..."))
+# Managed Sulci Cloud — reads your key from the SULCI_API_KEY environment variable
+# set_llm_cache(SulciCache(backend="sulci"))
 ```
 
 Install: `pip install "sulci[sqlite,langchain]"`
@@ -187,15 +209,16 @@ Settings.llm = SulciCacheLLM(
 )
 Settings.llm.complete("How do I fix it?", session_id="conv-42")
 
-# Managed Sulci Cloud
-Settings.llm = SulciCacheLLM(
-    llm     = OpenAI(model="gpt-4o"),
-    backend = "sulci",
-    api_key = "sk-sulci-...",
-)
+# Managed Sulci Cloud — reads your key from the SULCI_API_KEY environment variable
+# Settings.llm = SulciCacheLLM(llm=OpenAI(model="gpt-4o"), backend="sulci")
 ```
 
-Install: `pip install "sulci[sqlite,llamaindex]"`
+Install, and set your OpenAI key (the example's `OpenAI` LLM class is a separate LlamaIndex package):
+
+```bash
+pip install "sulci[sqlite,llamaindex]" llama-index-llms-openai
+export OPENAI_API_KEY=sk-your-openai-key
+```
 
 **Alternative — route LlamaIndex through the LangChain adapter:**
 
@@ -241,10 +264,16 @@ the store on gh-aw's `cache-memory` so it survives between runs.
 The zero-code-change door. Point any SDK or CLI at it and every call is
 cached — no import, no adapter, no cooperation from the caller.
 
+In one terminal (the proxy stays in the foreground):
+
 ```bash
 pip install "sulci[sqlite,proxy]"
-sulci-proxy --backend sqlite --db-path ./sulci_db --port 8787
+sulci-proxy --backend sqlite --db-path ./sulci_proxy_db --port 8787
+```
 
+In the terminal where your app or CLI runs:
+
+```bash
 export OPENAI_BASE_URL=http://localhost:8787/v1
 export ANTHROPIC_BASE_URL=http://localhost:8787
 ```
@@ -280,6 +309,7 @@ Sulci as the cache layer inside a LiteLLM deployment.
 
 ```bash
 pip install "sulci[sqlite,litellm]"
+export OPENAI_API_KEY=sk-your-openai-key
 ```
 
 ```python
@@ -287,7 +317,11 @@ from sulci.integrations.litellm import install
 install(backend="sqlite", context_window=4)
 
 import litellm
-litellm.completion(model="gpt-4o", messages=[...])   # now cached
+reply = litellm.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "How do I reset my password?"}],
+)   # now cached: the same question again is served from Sulci
+print(reply.choices[0].message.content)
 ```
 
 LiteLLM has no `custom` cache type — `install()` replaces the inner
@@ -341,6 +375,11 @@ before 0.9.3 did not isolate tenants on any backend but Qdrant, and before 0.9.2
 SQLite and Milvus did not reliably keep users apart; see the
 [CHANGELOG](CHANGELOG.md) *Security* entries for 0.9.2 and 0.9.3.
 
+**Upgrading from 0.9.3 or earlier:** on Milvus, an entry stored before 0.10.0 is never returned (lookups filter on
+a scope key older entries lack); `clear()` a Milvus store once after upgrading. On FAISS, similarity is cosine
+since 0.10.1, as on every other backend; if you lowered a FAISS threshold to compensate on 0.10.0 or earlier,
+raise it back. See the [CHANGELOG](CHANGELOG.md) entries for 0.10.0 and 0.10.1.
+
 ---
 
 ## AsyncCache — non-blocking async wrapper
@@ -349,10 +388,18 @@ SQLite and Milvus did not reliably keep users apart; see the
 operation yields the event loop. The correct pattern for FastAPI, LangChain
 async chains, LlamaIndex async agents, and any asyncio-based application.
 
+Save as `app.py`:
+
 ```python
+from fastapi import FastAPI
 from sulci import AsyncCache
 
+app = FastAPI()
 cache = AsyncCache(backend="sqlite", context_window=4)
+
+async def call_llm(query: str) -> str:
+    # Replace with your async LLM client call.
+    return f"(LLM answer to: {query})"
 
 # FastAPI endpoint — event loop never blocked
 @app.post("/chat")
@@ -363,21 +410,38 @@ async def chat(query: str, session_id: str):
     response = await call_llm(query)
     await cache.aset(query, response, session_id=session_id)
     return {"response": response, "source": "llm"}
+```
 
-# All Cache parameters work identically
+Run it, then ask the same question twice — the second answer comes from the cache:
+
+```bash
+pip install "sulci[sqlite]" fastapi uvicorn
+uvicorn app:app --port 8000
+```
+
+```bash
+curl -s -X POST "http://localhost:8000/chat?query=How+do+I+reset+my+password&session_id=s1"
+curl -s -X POST "http://localhost:8000/chat?query=How+do+I+reset+my+password&session_id=s1"
+```
+
+All `Cache` parameters work identically:
+
+```python
+from sulci import AsyncCache
+
 cache = AsyncCache(
     backend        = "sqlite",
     threshold      = 0.85,
     context_window = 4,
     query_weight   = 0.70,
-    api_key        = "sk-sulci-...",   # for Sulci Cloud
 )
 ```
 
 **Async methods:** `aget()`, `aset()`, `acached_call()`, `aget_context()`,
-`aclear_context()`, `acontext_summary()`, `astats()`, `aclear()`
+`aclear_context()`, `acontext_summary()`, `astats()`, `aclear()`, `adelete_user()` (0.10.0)
 
-**Sync passthrough:** All sync methods (`get`, `set`, `cached_call`, `stats`, `clear`) also
+**Sync passthrough:** All sync methods (`get`, `set`, `cached_call`, `stats`, `clear`, `delete_user`,
+`get_context`, `clear_context`, `context_summary`) also
 available — `AsyncCache` works in mixed sync/async codebases without switching types.
 
 **Partition & per-call kwargs:** every method — async **and** sync passthrough —
@@ -388,8 +452,17 @@ every method, `metadata` on `aset`/`set`, and the per-call `threshold` on
 parity v0.8.1; passthrough `threshold` parity v0.8.2):
 
 ```python
-resp, sim, depth = await cache.aget("...", tenant_id="acme", plan="pro", threshold=0.9)
-await cache.aset("...", "...", tenant_id="acme", plan="pro", metadata={"src": "kb"})
+import asyncio
+from sulci import AsyncCache
+
+cache = AsyncCache(backend="sqlite")
+
+async def main():
+    await cache.aset("What is the refund window?", "30 days.", tenant_id="acme", plan="pro", metadata={"src": "kb"})
+    resp, sim, depth = await cache.aget("What is the refund window?", tenant_id="acme", plan="pro", threshold=0.9)
+    print(resp, round(sim, 2), depth)
+
+asyncio.run(main())
 ```
 
 > **The mirror is of *which* kwargs are forwarded, not of *how* they are passed.**
@@ -409,19 +482,20 @@ Get a free API key at **[sulci.io/signup](https://sulci.io/signup)** and switch
 to the managed backend with a single parameter change. Everything else stays identical.
 
 ```python
-# Before — self-hosted (works today)
+from sulci import Cache
+
+# Before — self-hosted
 cache = Cache(backend="sqlite", threshold=0.85)
 
 # After — managed cloud (zero other code changes)
-cache = Cache(backend="sulci", api_key="sk-sulci-...", threshold=0.85)
+cache = Cache(backend="sulci", api_key="sk-sulci-your-key")
 
-# Or via environment variable — zero code changes at all
-# export SULCI_API_KEY=sk-sulci-...
-cache = Cache(backend="sulci", threshold=0.85)
+# Or with the key in the SULCI_API_KEY environment variable
+cache = Cache(backend="sulci")
 ```
 
-📌 **0.10.1:** on `backend="sulci"`, leave `threshold` out to use the threshold saved in your dashboard. A value
-passed here, 0.85 included, is sent with every lookup and overrides it.
+On `backend="sulci"`, leave `threshold` out to use the threshold saved in your dashboard (0.10.1). A value
+passed to the constructor or per call, 0.85 included, is sent with every lookup and overrides it.
 
 See [sulci.io](https://sulci.io) for current plans. The free OSS-Connect key is
 open now; paid plans (Pro, Business) open for self-serve signup at general
@@ -475,6 +549,7 @@ benefit from explicit ordering:
 
 ```python
 import sulci
+from sulci import Cache
 
 sulci.connect(prompt=True)            # opens browser, registers key in ~/.sulci/config
 cache = Cache(backend="sqlite")       # cache lives locally; telemetry already wired
@@ -527,6 +602,8 @@ a sustained decision rather than a stale promise — see
 Step 4 is opt-in per call:
 
 ```python
+import sulci
+
 # v0.5.3+ default — safe everywhere:
 sulci.connect()
 # - Steps 1-3 work normally
@@ -649,10 +726,14 @@ Run it a second time with the same (or similar) question — `source` switches t
 
 ### Constructor
 
+Every parameter, at its default (the default backend, `"chroma"`, needs `pip install "sulci[chroma]"`):
+
 ```python
+from sulci import Cache
+
 cache = Cache(
     backend         = "chroma",     # chroma | sqlite | faiss | qdrant | redis | milvus | sulci
-    threshold       = 0.85,         # cosine similarity cutoff (0–1); 0.10.1: default None = 0.85 locally, your dashboard's on "sulci"
+    threshold       = None,         # cosine similarity cutoff (0–1); None = 0.85 on a local backend, your dashboard's setting on "sulci" (0.10.1)
     embedding_model = "minilm",     # minilm | mpnet | bge | openai
     ttl_seconds     = 86400,        # 24h. None = no expiry
     personalized    = False,        # scope lookups to the user_id passed on get/set
@@ -692,50 +773,37 @@ cache = Cache(
 > `context_summary` the same `tenant_id=` / `user_id=` you pass to `get` / `set`. `context_summary()` with a
 > `tenant_id` or `user_id` but no `session_id` raises `TypeError`.
 
-**That is the whole public surface — eight methods, not nine.** The constructor
-defaults and method signatures above match an AST measurement of `sulci/core.py`
-at 0.9.3 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
-before trusting any restatement of this table found elsewhere; the full measured
-surface is in [`docs/API-SURFACE.md`](docs/API-SURFACE.md).
+**That is the whole public surface — nine methods.** The constructor defaults and method signatures above match an
+AST measurement of `sulci/core.py` at 0.10.1 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
+before trusting any restatement of this table found elsewhere; the full measured surface is in
+[`docs/API-SURFACE.md`](docs/API-SURFACE.md).
 
-**`delete_user` is not on `Cache`.** It is a method on `SulciCloudBackend`
-(`sulci/backends/cloud.py:280` at 0.9.3), reached through the backend or by calling
-`DELETE /v1/cache/user/{id}` directly. `Cache` does not proxy it — `cache.delete_user(...)`
-raises `AttributeError` — and the six self-hosted backends do not implement it,
-because it is not in the `Backend` protocol. Whole-cache erasure via
-`cache.clear()` works on every backend and is the portable path.
+**Erasing one user — `cache.delete_user` (0.10.0).** `cache.delete_user("u-42", tenant_id="t1")` erases that
+user's cache entries and conversation history in that tenant and returns `{"entries": N, "sessions": M}`. Every
+shipped backend implements it (`Backend.delete_user` is part of the protocol); a third-party backend without it
+raises `NotImplementedError`. It needs `personalized=True` — without it `user_id` is ignored and nothing is filed
+per user, so it raises `ValueError` and `clear()` is the erasure route. On the managed backend it calls
+`DELETE /v1/cache/user/{id}`, and `tenant_id` is refused (the API key decides the tenant). When it returns, no
+lookup through Sulci can reach that user's data; the bytes may remain on disk until the store vacuums or compacts,
+and copies outside Sulci (event sinks, logs, backups) are yours to erase. Use a stable, system-assigned user id:
+Sulci cannot tell that an email address and an internal id are one person. Redis scans every entry key under its
+prefix and FAISS rebuilds its index to erase, so on those two the cost grows with the size of the store (FAISS:
+about 1 s at 10,000 entries).
 
-**Managed-backend erasure raises when it is not confirmed (0.9.3).**
-`SulciCloudBackend.delete_user` and `clear` return the gateway's answer
-(`{"status": "ok", "deleted": N, ...}`) only when the gateway confirms the
-erasure; otherwise — a transport error, any non-2xx answer such as `503
-erasure_incomplete`, a 2xx answer that is not that JSON, or an id that cannot be
-encoded — they raise `sulci.backends.cloud.SulciErasureError`, and so does
-`cache.clear()` on the managed backend, before resetting stats or sessions.
-Catch it where a failed erasure must not stop the caller. The user id is
-percent-encoded into one path segment, so any id is addressed exactly.
+```python
+from sulci import Cache
 
-> **📌 0.10.0: `delete_user` is on `Cache`** — the table's last row. The "eight methods, not nine" and
-> "`delete_user` is not on `Cache`" paragraphs above describe 0.9.3; the surface is nine methods.
-> `cache.delete_user("u-42", tenant_id="t1")` erases that user's cache entries and conversation history in that
-> tenant, on a backend that implements `Backend.delete_user`, and returns `{"entries": N, "sessions": M}`. It needs
-> `personalized=True` — without it `user_id` is ignored and nothing is filed per user, so it raises `ValueError`
-> and `clear()` is the erasure route. On the managed backend it calls the gateway route above, and `tenant_id` is
-> refused (the API key decides the tenant). A failure raises `sulci.errors.SulciErasureError` (moved from
-> `sulci.backends.cloud`, which still raises it) saying what was erased; repeat the call to complete it. When it
-> returns, no lookup through Sulci can reach that user's data; the bytes may remain on disk until the store vacuums
-> or compacts, and copies outside Sulci (event sinks, logs, backups) are yours to erase. Use a stable,
-> system-assigned user id: Sulci cannot tell that an email address and an internal id are one person. During 0.10.0
-> development SQLite implements it first and the other self-hosted backends follow before the release; on a
-> backend without it the call raises `NotImplementedError`.
->
-> 📌 oss-0017: Redis implements it as well. It scans every entry key under the backend's prefix, so its cost
-> grows with the number of keys there.
-> 📌 oss-0018: Chroma implements it as well.
-> 📌 oss-0020: Qdrant implements it as well.
-> 📌 oss-0021: Milvus implements it as well.
-> 📌 oss-0024: FAISS implements it as well; every self-hosted backend now has it. FAISS rebuilds its index to erase,
-> so the cost grows with the number of entries (about 1 s at 10,000).
+cache = Cache(backend="sqlite", db_path="./sulci_erasure_demo", personalized=True)
+cache.set("What is my plan?", "You are on Pro.", tenant_id="t1", user_id="u-42")
+print(cache.delete_user("u-42", tenant_id="t1"))   # {'entries': 1, 'sessions': 0}
+```
+
+**Erasure raises when it is not complete.** A failed `delete_user` raises `sulci.errors.SulciErasureError`
+(also importable from `sulci.backends.cloud`) saying what was erased; repeat the call to complete it. On the managed
+backend `cache.clear()` likewise raises it unless the gateway confirms the erasure — a transport error, any non-2xx
+answer such as `503 erasure_incomplete`, or an answer that is not the expected JSON — before resetting stats or
+sessions. Catch it where a failed erasure must not stop the caller. The user id is percent-encoded into one path
+segment, so any id is addressed exactly.
 
 ### Advanced constructor options
 
@@ -749,14 +817,20 @@ text, response text and embeddings never leave the process.
 does not, since `clear()` could not reach its history), and is handed tenant- and user-scoped session ids
 (`sulci.sessions.scoped_session_id`); the shipped stores no longer take a `tenant_id`.
 
+Needs `pip install "sulci[sqlite,redis]"`, a Redis server on `localhost:6379`, and an HTTPS endpoint of your own
+that accepts the events (`TelemetrySink` refuses a plain `http://` URL):
+
 ```python
+import redis
 from sulci import Cache, RedisSessionStore, TelemetrySink
+
+redis_client = redis.Redis.from_url("redis://localhost:6379/0")
 
 cache = Cache(
     backend        = "sqlite",
     context_window = 4,
-    session_store  = RedisSessionStore(redis_client),         # horizontal-scale sessions
-    event_sink     = TelemetrySink("https://your.endpoint"),  # privacy-firewalled events
+    session_store  = RedisSessionStore(redis_client),                        # horizontal-scale sessions
+    event_sink     = TelemetrySink("https://telemetry.example.com/events"),  # privacy-firewalled events
 )
 ```
 
@@ -767,15 +841,22 @@ When the caller knows a tenant's plan tier, pass `plan=` to `get` / `set` /
 pre-constructed instance as well as a string — useful for connection pooling or
 custom client configuration:
 
+Needs `pip install "sulci[qdrant,openai]"` and `OPENAI_API_KEY`. A backend you construct yourself is created at
+the dimension you give it (`QdrantBackend` defaults to 384, MiniLM's), so pass the embedder's —
+`text-embedding-3-small` produces 1536:
+
 ```python
+from sulci import Cache
 from sulci.embeddings.openai import OpenAIEmbedder
 from sulci.backends.qdrant import QdrantBackend
 
 cache = Cache(
     embedding_model = OpenAIEmbedder(model="text-embedding-3-small"),
-    backend         = QdrantBackend(url="https://my-cluster.qdrant.io"),
+    backend         = QdrantBackend(db_path="./sulci_qdrant_openai", dimension=1536),
 )
 ```
+
+For a Qdrant server, pass `url=` (and `api_key=`) instead of `db_path=`.
 
 **Managed cloud backend.** With `backend="sulci"` the query text is sent to the
 gateway, which embeds and searches server-side, so no local embedding model is
@@ -836,9 +917,10 @@ lookup_vec = α · embed(query) + (1−α) · Σ(decay^i · turn_i)
 run it on the shipped engine — `--use-sulci` is opt-in, and without it this
 measures a built-in TF-IDF engine that is in no product.
 
+From a clone set up as in the benchmark block at the top of this page:
+
 ```bash
-pip install -e ".[sqlite]"
-python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context --out /tmp/sulci-bench-context
 ```
 
 The corpus is **125 follow-ups across 25 sessions**, which is small — the
@@ -891,7 +973,7 @@ configure `embedding_model="openai"` or use the cloud backend.
 ├── .envrc                      ← direnv: activates .venv (tracked in git)
 ├── .github/workflows/          ← CI: tests.yml (3 OS × Python 3.9–3.12), publish.yml, benchmark.yml
 ├── CHANGELOG.md  CONTRIBUTING.md  LICENSE  NOTICE  README.md  SECURITY.md
-├── LOCAL_SETUP.md              ← this guide
+├── LOCAL_SETUP.md              ← contributor setup
 ├── Makefile                    ← smoke, test-*, checkin / checkin-fast, benchmark-verify, …
 ├── pyproject.toml              ← name="sulci", version, extras, console scripts
 ├── setup.py
@@ -924,13 +1006,14 @@ configure `embedding_model="openai"` or use the cloud backend.
 │   ├── async_cache.py          ← AsyncCache wrapper
 │   ├── context.py              ← ContextWindow + in-process session handling
 │   ├── config.py               ← ~/.sulci/config persistence
+│   ├── errors.py               ← SulciErasureError (0.10.0)
 │   ├── telemetry.py  oss_connect.py   ← opt-in telemetry, device-code flow (Step 9)
 │   ├── backends/               ← chroma, faiss, milvus, qdrant, redis, sqlite (free)
 │   │                             + cloud (backend="sulci", managed); protocol.py
 │   ├── embeddings/             ← minilm (default, local), openai; protocol.py
 │   ├── integrations/           ← langchain, llamaindex, litellm, mcp_server
 │   ├── proxy/                  ← sulci-proxy (OpenAI-compatible caching proxy)
-│   ├── sessions/               ← SessionStore: memory, redis; protocol.py
+│   ├── sessions/               ← SessionStore: memory, redis; protocol.py; errors.py (SulciSessionError, 0.10.0)
 │   ├── sinks/                  ← EventSink: null, telemetry, redis_stream; protocol.py
 │   └── tests/compat/           ← SessionStore + EventSink conformance suites
 └── tests/                      ← test_*.py per feature, plus compat/ (backend + embedder
@@ -948,48 +1031,55 @@ switches that make the suite run in about a minute — is in
 ```bash
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[sqlite,redis,qdrant,langchain,llamaindex,mcp,litellm,proxy,dev]" pytest-timeout
-export HF_HUB_OFFLINE=1 LITELLM_LOCAL_MODEL_COST_MAP=True   # after the first, online run
 python -m pytest tests/ -q -rs
 ```
 
-At v0.9.3 the suite collects 1,006 tests (`python -m pytest tests/ --collect-only -q`,
-measured 2026-10-14; the pass/skip split was last measured at 0.9.2 — see
-`LOCAL_SETUP.md` Step 5). Skips are backends or servers you
+After the first, online run (which downloads the embedding model), run offline:
+
+```bash
+export HF_HUB_OFFLINE=1 LITELLM_LOCAL_MODEL_COST_MAP=True
+python -m pytest tests/ -q -rs
+```
+
+At v0.10.1 the suite collects 1,319 tests (`python -m pytest tests/ --collect-only -q`,
+measured 2026-10-18 on Python 3.12, Linux; the pass/skip split is in `LOCAL_SETUP.md` Step 5). Skips are backends or servers you
 don't have; failures or collection errors are not expected. Some missing extras
 cause failures rather than skips, which is why the install line is long.
 
 ### Make targets
 
-```bash
-make smoke              # all four smoke tests (core, LangChain, LlamaIndex, AsyncCache)
-make smoke-fast         # same, forcing CPU inference (recommended on Apple Silicon)
-make test               # core pytest suite
-make test-integrations  # LangChain + LlamaIndex integration tests
-make test-async         # AsyncCache tests only
-make test-all           # full suite
-make test-cov           # full suite with coverage
-make checkin            # pre-PR check: smoke + per-file tests + examples + benchmark verify
-make checkin-fast       # same with CPU smoke mode — use this on macOS
-```
+| Target | What it runs |
+|---|---|
+| `make smoke` | all four smoke tests (core, LangChain, LlamaIndex, AsyncCache) |
+| `make smoke-fast` | same, forcing CPU inference (recommended on Apple Silicon) |
+| `make test` | core pytest suite |
+| `make test-integrations` | LangChain + LlamaIndex integration tests |
+| `make test-async` | AsyncCache tests only |
+| `make test-all` | full suite |
+| `make test-cov` | full suite with coverage |
+| `make checkin` | pre-PR check: smoke + per-file tests + examples + benchmark verify |
+| `make checkin-fast` | same with CPU smoke mode — use this on macOS |
 
 ---
 
 ## Examples
 
-```bash
-python examples/basic_usage.py              # stateless cache — no API key needed
-python examples/context_aware.py            # context-aware — no API key needed
-python examples/context_aware_example.py    # more context-aware patterns — no API key needed
-python examples/anthropic_example.py        # requires ANTHROPIC_API_KEY
-python examples/langchain_example.py        # OpenAI or Anthropic or mock fallback
-python examples/llamaindex_example.py       # OpenAI or Anthropic or mock fallback
-python examples/async_example.py            # AsyncCache demo, OpenAI/Anthropic/mock
-python examples/mcp_example.py              # MCP server — no API key needed
-python examples/litellm_example.py          # LiteLLM cache layer — OpenAI or mock fallback
-python examples/agent_example_langgraph.py  # LangGraph agent demo — needs langgraph, langchain-anthropic
-python examples/agent_example_crewai.py     # CrewAI agent demo — needs crewai
-python examples/proxy_example.py            # needs a running sulci-proxy and OPENAI_API_KEY
-```
+From a clone of this repository, with the Step 3 install from [`LOCAL_SETUP.md`](./LOCAL_SETUP.md):
+
+| Command | Needs |
+|---|---|
+| `python examples/basic_usage.py` | stateless cache — no API key |
+| `python examples/context_aware.py` | context-aware — no API key |
+| `python examples/context_aware_example.py` | more context-aware patterns — no API key |
+| `python examples/anthropic_example.py` | `ANTHROPIC_API_KEY` |
+| `python examples/langchain_example.py` | OpenAI or Anthropic key, or a mock fallback |
+| `python examples/llamaindex_example.py` | OpenAI or Anthropic key, or a mock fallback |
+| `python examples/async_example.py` | AsyncCache demo — OpenAI/Anthropic key, or a mock |
+| `python examples/mcp_example.py` | MCP server — no API key |
+| `python examples/litellm_example.py` | LiteLLM cache layer — OpenAI key, or a mock fallback |
+| `python examples/agent_example_langgraph.py` | LangGraph agent demo — `langgraph`, `langchain-anthropic` |
+| `python examples/agent_example_crewai.py` | CrewAI agent demo — `crewai` |
+| `python examples/proxy_example.py` | a running `sulci-proxy` and `OPENAI_API_KEY` |
 
 The agent examples need frameworks that aren't sulci extras; installing `crewai`
 downgrades `mcp` below the 2.x the `mcp` extra needs, so re-run
@@ -999,16 +1089,32 @@ downgrades `mcp` below the 2.x the `mcp` extra needs, so re-run
 
 ## Benchmark
 
+From a clone of this repository (the benchmark is not in the PyPI package):
+
 ```bash
-# fast run (~10 seconds)   # TF-IDF, fast; not the shipped engine, do not cite
-python3 benchmark/run.py --no-sweep --queries 1000 --out /tmp/sulci-bench-q1000
-
-# with context-aware pass  # TF-IDF, fast; not the shipped engine, do not cite
-python3 benchmark/run.py --no-sweep --queries 1000 --context --out /tmp/sulci-bench-q1000
-
-# full benchmark on the SHIPPED engine — the only form worth citing (~10 min)
+git clone https://github.com/sulci-io/sulci-oss.git
+cd sulci-oss
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[sqlite]"
-python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
+```
+
+Fast run (~10 seconds) on the built-in TF-IDF engine — not the shipped engine, do not cite:
+
+```bash
+python3 benchmark/run.py --no-sweep --queries 1000 --out /tmp/sulci-bench-q1000
+```
+
+The same with the context-aware pass (TF-IDF, do not cite):
+
+```bash
+python3 benchmark/run.py --no-sweep --queries 1000 --context --out /tmp/sulci-bench-q1000-context
+```
+
+Full benchmark on the SHIPPED engine — the only form worth citing (~10 min):
+
+```bash
+python3 benchmark/run.py --use-sulci --fresh --no-sweep --context --out /tmp/sulci-bench-minilm-context
 ```
 
 > **`--use-sulci` is opt-in.** Without it the benchmark runs a built-in TF-IDF
@@ -1017,9 +1123,10 @@ python3 benchmark/run.py --use-sulci --fresh --no-sweep --context
 > written to `benchmark/results/tfidf/` or `benchmark/results/minilm/`
 > accordingly, so the two can never be confused for each other.
 
-Give non-default runs their own `--out`: otherwise they share
+Give non-default runs their own `--out`: otherwise a TF-IDF run shares
 `benchmark/results/tfidf/` with the regression check, which then refuses to
-overwrite them.
+overwrite it, and a `--use-sulci` run refuses to start beside the published draws in
+`benchmark/results/minilm/`.
 
 See [`benchmark/README.md`](./benchmark/README.md) for full methodology and results.
 
@@ -1037,9 +1144,11 @@ pip install --upgrade huggingface_hub datasets sentence-transformers
 
 Or use a clean venv (avoids conda transitive dependency conflicts entirely):
 
+Python 3.9–3.12 (3.13+ is untested); on Windows activate with `.venv\Scripts\activate`:
+
 ```bash
-python3.12 -m venv .venv          # Python 3.9–3.12; 3.13+ is untested
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+python3.12 -m venv .venv
+source .venv/bin/activate
 pip install "sulci[sqlite]" anthropic
 python your_script.py
 ```
@@ -1058,11 +1167,10 @@ Transient API congestion — not a Sulci Cache issue. Wait a moment and retry, o
 
 ### `zsh: no matches found: sulci[chroma]`
 
-Wrap extras in quotes:
+Wrap extras in quotes — unquoted, zsh treats the brackets as a glob pattern:
 
 ```bash
-pip install "sulci[chroma]"    # ✓
-pip install sulci[chroma]      # ✗ — zsh glob expansion breaks this
+pip install "sulci[chroma]"
 ```
 
 ### `pytest: command not found`

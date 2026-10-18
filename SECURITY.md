@@ -20,13 +20,13 @@ upgrade to the latest release.
 
 | Version          | Supported                              |
 | ---------------- | -------------------------------------- |
-| Latest `0.9.x` (0.9.3 or later) | ✅ Security fixes        |
-| `< 0.9.3`        | ❌ Please upgrade to the latest release |
+| Latest `0.10.x` (0.10.1 or later) | ✅ Security fixes        |
+| `< 0.10.0`       | ❌ Please upgrade to the latest release |
 
 0.9.2 and 0.9.3 each fixed security issues in the self-hosted backends, the
 managed backend's erasure and the session stores (see their *Security* entries
-in [`CHANGELOG.md`](CHANGELOG.md)); every release before 0.9.3, `0.7.x` and
-`0.8.x` included, is unsupported.
+in [`CHANGELOG.md`](CHANGELOG.md)); 0.10.x keeps those fixes. Releases before
+0.10.0, `0.9.x` included, receive no further fixes.
 
 The library is tested and supported on **Python 3.9–3.12** across Linux,
 macOS, and Windows. Reports against unsupported Python versions may be

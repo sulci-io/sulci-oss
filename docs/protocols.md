@@ -8,7 +8,8 @@ sulci's pluggable components are shaped: the **Backend** protocol
 text-embedding models). A short section at the end covers the
 **SessionStore** protocol, which 0.9.3 changed.
 
-> Current to **sulci 0.9.3** (re-checked 2026-10-14 against `v0.9.3`).
+> Current to **sulci 0.10.1** (re-checked 2026-10-18 against `v0.10.1`; 0.10.0 added `Backend.delete_user`,
+> 0.10.1 changed no protocol).
 
 If you want to plug a new vector store, embedding model, or storage
 medium into sulci, this is the contract you implement.
@@ -154,10 +155,8 @@ def clear(self) -> None:
 Remove all entries. Destructive, idempotent.
 
 Typically used in tests; production should prefer TTL-based expiry.
-Per-user or per-tenant deletion of entries is *not* part of the
-`Backend` protocol (0.9.3). The managed backend has its own
-`delete_user()`; for a self-hosted backend it is the implementer's
-own extension.
+Per-user deletion is the separate `delete_user()` method below (0.10.0); through 0.9.3 it was not
+part of the protocol. Per-tenant deletion of entries is not part of it.
 
 For backends like Qdrant where `clear` could either delete the
 underlying schema or just the data: the protocol semantics are
@@ -370,8 +369,7 @@ modifications require a superseding ADR before merge. Its Amendment 1
 protocols without a deprecation cycle, deliberately, and that the
 deprecation rule resumes at the first official release.
 
-📌 0.10.0: the addition of `Backend.delete_user` (see `delete_user()` above) is to be recorded as Amendment 2,
-written in sulci-platform before 0.10.0 is released.
+Its Amendment 2 records the addition of `Backend.delete_user` in 0.10.0 (see `delete_user()` above).
 
 ---
 
