@@ -8,6 +8,50 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — the managed backend sends your `context_window` (can change hit rates on `backend="sulci"`)
+
+- **A `context_window` you set is sent with every managed lookup** (oss-0037). `Cache(context_window=...)` now
+  defaults to `None`, which reads as `0` exactly as before; on a local backend nothing changes. On
+  `backend="sulci"` a window you set — at construction or by assignment, `0` included — is sent, and the gateway
+  prefers it over the tenant's setting; one you did not set is not sent, so the Context window saved in your
+  dashboard applies. Before, the SDK never sent it: measured on production 2026-10-19, `Cache(backend="sulci",
+  context_window=4)` returned `context_depth` 0 on every turn while the dashboard said 0. A window above the
+  gateway's limit of 20 is sent as 20, and one that is not a whole number from 0 is not sent; each warns once and
+  neither raises.
+
+### Added — `standalone` on `set` and `cached_call` (managed backend)
+
+- **`set(..., standalone=True)` and `cached_call(..., standalone=True)`** send `"standalone": true` (oss-0037);
+  `AsyncCache.aset`, `acached_call` and the sync passthroughs mirror them. On the managed backend a set whose
+  `session_id` already holds a turn records the turn and stores no entry (`reason: "context_dependent"`) unless it
+  is standalone; before 0.10.2 the SDK could not say so, so no follow-up asked through it was ever stored — in the
+  Acme demo's agent loop only step 1 was. Local backends store every set already; there it changes nothing.
+  ⚠️ `cached_call` used to forward any `standalone=` keyword to `llm_fn`; it no longer does.
+- A custom transport is handed `context_window=` and `standalone=` only when it declares
+  `ACCEPTS_CONTEXT_WINDOW = True` / `ACCEPTS_STANDALONE = True`, as `SulciCloudBackend` does.
+- ⚠️ **If you pass `context_window=0` on `backend="sulci"`, remove it to keep your dashboard's setting.** Before
+  0.10.2 it was ignored there; now it is sent, and 0 means stateless. The same goes for any other value you pass.
+- **`sulci-proxy` and `sulci-mcp`: `--context-window` has no default any more.** Unset, they use 4 on a local
+  backend, as before, and on `--backend sulci` send no window, so your dashboard's setting applies; a default of 4
+  would otherwise have been sent with every managed lookup.
+
+### Added — a per-call `context_threshold` (blended lookups)
+
+- **`get(..., context_threshold=...)`**, and on `cached_call`, `AsyncCache.aget` / `acached_call` and the sync
+  passthroughs (oss-0037): the threshold for a lookup that blended conversation history (`context_depth` > 0). It
+  wins over `threshold` and `Cache.context_threshold` for such a lookup; a lookup that did not blend ignores it. One
+  call can so compare a question with no history at one threshold and a follow-up at a stricter one. Measured
+  2026-10-19 on all-MiniLM-L6-v2 (sulci-platform `benchmark/context_e`): at window 2, follow-ups served 9 wrong
+  answers in 96 turns at 0.70, 3 at 0.75 and none at 0.80, while single questions keep 61.6% paraphrase recall at
+  0.65 (23.8% at 0.80). The managed gateway uses this from sulci-platform 0248. Validated 0..1 (`ValueError`).
+- **On `backend="sulci"` the context threshold is now sent**: the per-call value, else `Cache(context_threshold=...)`,
+  when set. Before, the instance value warned that it had no effect on the managed backend; a transport that declares
+  `ACCEPTS_CONTEXT_THRESHOLD = True` no longer warns. A gateway older than sulci-platform 0248 ignores the field,
+  so it takes effect once the managed gateway runs 0248 (0.10.2rc1 is what 0248 is built on). Sent with the
+  local precedence: the instance value is not sent when a per-call `threshold` is given, since an explicit
+  `threshold` beats the instance `context_threshold` locally too.
+  `cached_call` no longer forwards a `context_threshold=` keyword to `llm_fn`.
+
 ## [0.10.1] — 2026-10-17 — The managed backend honours the dashboard threshold; FAISS scores cosine
 
 0.10.1rc1, released: no library code changed after the release candidate, so its entries below are this release's.

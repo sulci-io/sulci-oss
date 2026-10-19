@@ -80,3 +80,14 @@ tenant's own setting. The gateway uses that one number for every lookup, blended
 or not, so a blended lookup on the managed tier has no separate threshold. How much history the gateway blends is its
 `context_window` (the tenant setting; 0, the default, is stateless); the Python
 SDK does not send one.
+
+📌 2026-10-19 (0.10.2, oss-0037): the Python SDK now sends `context_window` when the caller set one — at
+construction or by assignment — and the gateway prefers it over the tenant's setting; left unset, none is sent and
+the tenant's setting applies. It also sends `context_threshold` — `get(..., context_threshold=)` per call, else
+`Cache(context_threshold=)` — and from sulci-platform 0248 the gateway applies a separate threshold to lookups that
+blended: the request's, else the tenant's (default 0.80, measured in sulci-platform `benchmark/context_e`). The
+library itself gained the per-call `context_threshold` the gateway uses; the instance parameter above is unchanged.
+This supersedes two statements above: the precedence list now has a per-call `context_threshold` first — for a
+lookup that blended it wins over an explicit `threshold=`, which still wins over the instance `context_threshold` — and
+on the cloud transport `context_threshold` is sent rather than ignored (no warning on a transport that declares it
+accepts it). Sent with the same precedence: the instance value is not sent when a per-call `threshold` is given.

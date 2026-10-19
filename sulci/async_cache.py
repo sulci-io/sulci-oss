@@ -124,6 +124,7 @@ class AsyncCache:
         *,
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
+        context_threshold: Optional[float] = None,
     ) -> tuple:
         """
         Async semantic cache lookup.
@@ -157,6 +158,7 @@ class AsyncCache:
             user_id    = user_id,
             session_id = session_id,
             plan       = plan,
+            context_threshold = context_threshold,
         )
 
     async def aset(
@@ -169,6 +171,7 @@ class AsyncCache:
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
         metadata:   Optional[dict] = None,
+        standalone: bool          = False,
     ) -> None:
         """
         Async cache store — saves response and advances the context window.
@@ -185,6 +188,9 @@ class AsyncCache:
             Metadata persisted alongside the entry (0.9.3: a mapping whose keys are not
             ``sulci._metadata.RESERVED_METADATA_KEYS``, else TypeError/ValueError). Mirrors
             ``Cache.set``. v0.8.1.
+        standalone : bool, optional
+            Managed backend: store the entry even when ``session_id`` already holds a turn. Mirrors
+            ``Cache.set``. 0.10.2.
         """
         return await asyncio.to_thread(
             self._cache.set, query, response,
@@ -193,6 +199,7 @@ class AsyncCache:
             session_id = session_id,
             metadata   = metadata,
             plan       = plan,
+            standalone = standalone,
         )
 
     async def acached_call(
@@ -206,6 +213,8 @@ class AsyncCache:
         *,
         tenant_id:     Optional[str]   = None,
         plan:          Optional[str]   = None,
+        standalone:    bool            = False,
+        context_threshold: Optional[float] = None,
     ) -> dict:
         """
         Async drop-in LLM wrapper — checks cache first, calls llm_fn on miss.
@@ -235,6 +244,9 @@ class AsyncCache:
             from ``.get()`` and the 'set' from ``.set()``), so miss-then-set
             paths never leak ``plan=None`` into the stream. Mirrors
             ``Cache.cached_call`` (v0.5.6). v0.8.1.
+        standalone : bool, optional
+            Managed backend: store the answer even when ``session_id`` already holds a turn. Mirrors
+            ``Cache.cached_call``. 0.10.2.
 
         Returns
         -------
@@ -254,6 +266,8 @@ class AsyncCache:
             user_id       = user_id,
             cost_per_call = cost_per_call,
             plan          = plan,
+            standalone    = standalone,
+            context_threshold = context_threshold,
         )
 
     async def aget_context(self, session_id: str, *, tenant_id: Optional[str] = None,
@@ -304,6 +318,7 @@ class AsyncCache:
         threshold:  Optional[float] = None,
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
+        context_threshold: Optional[float] = None,
     ) -> tuple:
         """Sync passthrough — cache.get(). threshold (v0.8.2) + tenant_id/plan
         (v0.8.1) mirror Cache.get."""
@@ -314,6 +329,7 @@ class AsyncCache:
             user_id    = user_id,
             session_id = session_id,
             plan       = plan,
+            context_threshold = context_threshold,
         )
 
     def set(
@@ -326,8 +342,9 @@ class AsyncCache:
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
         metadata:   Optional[dict] = None,
+        standalone: bool          = False,
     ) -> None:
-        """Sync passthrough — cache.set(). tenant_id/plan/metadata mirror Cache.set (v0.8.1)."""
+        """Sync passthrough — cache.set(). tenant_id/plan/metadata mirror Cache.set (v0.8.1); standalone (0.10.2)."""
         return self._cache.set(
             query, response,
             tenant_id  = tenant_id,
@@ -335,6 +352,7 @@ class AsyncCache:
             session_id = session_id,
             metadata   = metadata,
             plan       = plan,
+            standalone = standalone,
         )
 
     def cached_call(
@@ -348,6 +366,8 @@ class AsyncCache:
         threshold:     Optional[float] = None,
         tenant_id:     Optional[str] = None,
         plan:          Optional[str] = None,
+        standalone:    bool          = False,
+        context_threshold: Optional[float] = None,
     ) -> dict:
         """Sync passthrough — cache.cached_call(). threshold (v0.8.2) +
         tenant_id/plan (v0.8.1) mirror Cache.cached_call.
@@ -364,6 +384,8 @@ class AsyncCache:
             user_id       = user_id,
             cost_per_call = cost_per_call,
             plan          = plan,
+            standalone    = standalone,
+            context_threshold = context_threshold,
         )
 
     def stats(self) -> dict:
