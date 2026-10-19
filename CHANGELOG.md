@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.2rc1] — 2026-10-19 — Release candidate: the managed backend sends your context window and context threshold; `standalone`
+
+The managed platform runs this release candidate on staging (sulci-platform 0248, which uses the per-call
+`context_threshold` below) before 0.10.2. The entries below are oss-0037's (`fce7403`, CI `49337f1`).
+
 ### Changed — the managed backend sends your `context_window` (can change hit rates on `backend="sulci"`)
 
 - **A `context_window` you set is sent with every managed lookup** (oss-0037). `Cache(context_window=...)` now
