@@ -13,6 +13,9 @@ Context-awareness : sliding window per session, blended embedding lookup
 import os
 import time
 import hashlib
+import decimal as _decimal
+import inspect
+import numbers as _numbers
 import importlib
 import time as _time
 import warnings as _warnings
@@ -212,6 +215,30 @@ class _InstanceThreshold:
         obj.__dict__["_threshold"] = value
 
 
+#: The gateway's limit on a request's context_window (sulci-platform shared/models.py, CacheGetRequest: 0..20).
+MAX_REMOTE_CONTEXT_WINDOW = 20
+
+
+class _InstanceContextWindow:
+    """``Cache.context_window`` (0.10.2). Reads as an int, 0 when not set, exactly as before. What is new is that
+    the instance remembers whether the CALLER set it (at construction, or ``cache.context_window = 4``), because the
+    managed backend now forwards it: a window you set is sent on every managed lookup; one you did not set is not
+    sent, so the context window saved in your dashboard applies. Before 0.10.2 the managed backend never sent it,
+    and ``Cache(backend="sulci", context_window=4)`` blended nothing unless the dashboard said so too (measured on
+    production 2026-10-19: ``context_depth`` 0 on every turn with the dashboard at 0). A descriptor, as
+    ``_InstanceThreshold``, so the public method set (docs/API-SURFACE.md) is unchanged."""
+
+    def __get__(self, obj, owner=None):
+        if obj is None:
+            return self
+        return obj.__dict__.get("_context_window", 0)
+
+    def __set__(self, obj, value) -> None:
+        obj.__dict__["_context_window"] = 0 if value is None else value
+        obj.__dict__["_context_window_set"] = value is not None
+        obj.__dict__["_ctx_window_remote_warned"] = False      # a new value may deserve its own warning
+
+
 def _caller_stacklevel() -> int:
     """
     Frames to skip so a warning points at the CALLER's code, not at sulci's.
@@ -315,6 +342,10 @@ class Cache:
         context_window:  Number of recent turns to remember per session.
                          0  = stateless (default, original behaviour).
                          4–8 is recommended for conversational apps.
+                         0.10.2: on backend="sulci", a window you set is sent
+                         with every lookup (the gateway accepts 0–20); left
+                         out (None), none is sent and your dashboard's
+                         Context window setting applies.
         query_weight:    Current query's weight vs blended history (0.0–1.0).
                          0.70 = query dominates, context nudges direction.
         context_decay:   Exponential decay per turn (older → less weight).
@@ -324,6 +355,7 @@ class Cache:
     """
 
     threshold = _InstanceThreshold()   # 0.10.1: None = not set by the caller (see _InstanceThreshold)
+    context_window = _InstanceContextWindow()   # 0.10.2: remembers whether the caller set it (managed backend)
 
     def __init__(
         self,
@@ -334,7 +366,7 @@ class Cache:
         personalized:    bool                 = False,
         db_path:         str                  = "./sulci_db",
         # context-awareness
-        context_window:  int           = 0,
+        context_window:  Optional[int] = None,
         query_weight:    float         = 0.70,
         context_decay:   float         = 0.50,
         session_ttl:     Optional[int] = 3600,
@@ -382,7 +414,15 @@ class Cache:
         self._ctx_threshold_remote_warned = False
         self.ttl_seconds    = ttl_seconds
         self.personalized   = personalized
-        self.context_window  = context_window
+        # 0.10.2: None (the default) reads as 0, as the old default did; the descriptor records whether the
+        # caller set a window, which only the managed backend reads (see _remote_context_window). Recorded through
+        # Cache's own descriptor, and the local value computed here, so a subclass whose class attribute shadows
+        # the descriptor (``class Mine(Cache): context_window = 6``) behaves as before 0.10.2: the instance
+        # attribute holds the constructor's value, 0 when none was passed (0.10.2's review).
+        Cache.__dict__["context_window"].__set__(self, context_window)
+        context_window = 0 if context_window is None else context_window
+        if not isinstance(inspect.getattr_static(type(self), "context_window", None), _InstanceContextWindow):
+            self.__dict__["context_window"] = context_window
         self.embedding_model = embedding_model
         self._stats          = {"hits": 0, "misses": 0, "saved_cost": 0.0}
 
@@ -672,6 +712,51 @@ class Cache:
 
     # ── public API ────────────────────────────────────────────────
 
+    def _remote_context_window(self) -> Optional[int]:
+        """0.10.2: the window to send on a managed lookup, or None to send none (the dashboard's setting applies).
+
+        None unless the caller set ``context_window`` and the transport declares ``ACCEPTS_CONTEXT_WINDOW``. The
+        gateway refuses a window outside 0..20 with a 422, which the transport turns into a miss on every lookup —
+        silently — so a window above 20 is sent as 20 and anything that is not a whole number from 0 up is not
+        sent; each warns once. Before 0.10.2 no window was sent at all, so neither raises: a Cache that worked
+        keeps working."""
+        shadowed = "context_window" in self.__dict__     # a subclass attribute shadows the descriptor (see __init__)
+        if not (self.__dict__.get("_context_window_set", False)
+                or (shadowed and self.__dict__["context_window"] != self.__dict__.get("_context_window", 0))):
+            return None
+        if getattr(self._backend, "ACCEPTS_CONTEXT_WINDOW", False) is not True:
+            return None
+        # A subclass that shadows the descriptor keeps its value in the instance attribute (see __init__).
+        value = self.__dict__["context_window"] if "context_window" in self.__dict__ else self.__dict__["_context_window"]
+        if isinstance(value, bool):
+            whole = False
+        elif isinstance(value, _numbers.Integral):
+            whole = True                                    # any size: 10**400 is sent as 20, not refused
+        else:
+            try:
+                whole = (isinstance(value, (_numbers.Real, _decimal.Decimal))
+                         and float(value) == int(value))    # 4.0, Decimal(4)
+            except (TypeError, ValueError, OverflowError):  # nan, inf
+                whole = False
+        if not whole or int(value) < 0:
+            self._warn_ctx_window_once(
+                f"sulci.Cache: context_window={value!r} is not a whole number from 0 to "
+                f"{MAX_REMOTE_CONTEXT_WINDOW}; it is not sent, so the gateway applies your dashboard's setting.")
+            return None
+        n = int(value)
+        if n > MAX_REMOTE_CONTEXT_WINDOW:
+            self._warn_ctx_window_once(
+                f"sulci.Cache: context_window={n} is above the managed backend's limit of "
+                f"{MAX_REMOTE_CONTEXT_WINDOW}; {MAX_REMOTE_CONTEXT_WINDOW} is sent.")
+            return MAX_REMOTE_CONTEXT_WINDOW
+        return n
+
+    def _warn_ctx_window_once(self, message: str) -> None:
+        if self.__dict__.get("_ctx_window_remote_warned", False):
+            return
+        self.__dict__["_ctx_window_remote_warned"] = True
+        _warnings.warn(message, UserWarning, stacklevel=_caller_stacklevel())
+
     def get(
         self,
         query:      str,
@@ -681,6 +766,7 @@ class Cache:
         user_id:    Optional[str]   = None,
         session_id: Optional[str]   = None,
         plan:       Optional[str]   = None,
+        context_threshold: Optional[float] = None,
     ) -> tuple:
         """
         Check cache for a semantically similar query.
@@ -721,11 +807,22 @@ class Cache:
                         the instance ``threshold`` for THIS call — including in
                         telemetry and the emitted CacheEvent, so the event and
                         the answer stay decided by one number. An explicit
-                        ``threshold`` above still wins over both.
+                        ``threshold`` above still wins over the instance
+                        ``context_threshold``; a per-call ``context_threshold``
+                        (below, 0.10.2) wins over both for a lookup that blended.
             plan:       Optional customer plan tier (e.g. 'free', 'pro').
                         Forwarded onto emitted CacheEvent.plan so downstream
                         billing/analytics can route by plan without a join.
                         v0.5.6 (sulci-oss #36); see sinks/protocol.py.
+            context_threshold: 0.10.2. Optional per-call threshold for a lookup
+                        that BLENDED (context_depth > 0). When given it wins over
+                        ``threshold`` and ``Cache.context_threshold`` for such a
+                        lookup; a lookup that did not blend ignores it. This is
+                        how one call can apply a looser threshold to a question
+                        with no history and a stricter one to a follow-up — the
+                        managed gateway passes both (measured 2026-10-19: 0.65
+                        and 0.80). On the managed backend it is sent to the
+                        gateway, which applies it the same way.
 
         Returns:
             (cached_response, similarity_score, context_depth)
@@ -761,6 +858,12 @@ class Cache:
             raise ValueError(
                 f"threshold must be between 0.0 and 1.0, got {eff_threshold!r}"
             )
+        if context_threshold is not None:
+            context_threshold = float(context_threshold)
+            if not 0.0 <= context_threshold <= 1.0:
+                raise ValueError(
+                    f"context_threshold must be between 0.0 and 1.0, got {context_threshold!r}"
+                )
 
         if self._is_remote_transport:
             # unreleased (2026-08-12) — context_threshold is SELF-HOSTED only. On
@@ -769,7 +872,10 @@ class Cache:
             # rather than accepting the argument and doing nothing with it: a
             # parameter that is silently inert is worse than one that is absent,
             # because the caller believes it took effect.
-            if (self.context_threshold is not None
+            # 0.10.2: a transport that declares ACCEPTS_CONTEXT_THRESHOLD (the managed backend) is handed it and the
+            # gateway applies it, so there is nothing to warn about.
+            ctx_accepted = getattr(self._backend, "ACCEPTS_CONTEXT_THRESHOLD", False) is True
+            if ((self.context_threshold is not None or context_threshold is not None) and not ctx_accepted
                     and not self._ctx_threshold_remote_warned):
                 self._ctx_threshold_remote_warned = True
                 _warnings.warn(
@@ -785,12 +891,36 @@ class Cache:
             # billing event emit. The SDK forwards the raw query string and
             # the gateway-computed context_depth comes back in the response.
             # self._embedder is NOT called; self._context_vec is NOT called.
+            # 0.10.2: the caller's context_window, when they set one, goes with the lookup (the gateway prefers a
+            # request's window over the tenant's). Passed only to a transport that declares it takes one, so a
+            # custom transport written against 0.10.1's remote_get keeps working.
+            remote_kwargs = {}
+            cw = self._remote_context_window()
+            if cw is not None:
+                remote_kwargs["context_window"] = cw
+            # 0.10.2: the blended-lookup threshold, with the local precedence (0.10.2's review): a per-call one; else
+            # the instance's, but only when no per-call `threshold` was given — locally an explicit `threshold` beats
+            # the instance context_threshold, so it is not sent and the gateway falls back to the request's threshold.
+            if context_threshold is not None:
+                ctx_thr = context_threshold
+            elif threshold is None:
+                ctx_thr = self.context_threshold
+            else:
+                ctx_thr = None
+            if ctx_thr is not None and ctx_accepted:
+                remote_kwargs["context_threshold"] = ctx_thr
             resp, sim, depth = self._backend.remote_get(
                 query      = query,
                 threshold  = eff_threshold,
                 user_id    = user_id if self.personalized else None,
                 session_id = session_id,
+                **remote_kwargs,
             )
+            # 0.10.2 (review): telemetry reports the threshold that decided the answer. A lookup that blended was
+            # decided by the context threshold this call sent (the gateway's own default, if none was sent, is not
+            # known here).
+            if depth and "context_threshold" in remote_kwargs:
+                eff_threshold = remote_kwargs["context_threshold"]
         else:
             # Self-hosted path — library is the engine in-process.
             vec, depth = self._context_vec(query, self._session_key(session_id, tenant_id, user_id))
@@ -814,7 +944,10 @@ class Cache:
             # answer. Two names is precisely the v0.8.0 defect described in
             # get()'s docstring: the library deciding cache_hit at one threshold
             # while the answer was decided at another.
-            if (
+            if depth > 0 and context_threshold is not None:
+                # 0.10.2: a per-call blended threshold wins for a lookup that blended, explicit threshold or not.
+                eff_threshold = context_threshold
+            elif (
                 threshold is None
                 and depth > 0
                 and self.context_threshold is not None
@@ -824,6 +957,7 @@ class Cache:
                 threshold is None
                 and depth > 0
                 and self.context_threshold is None
+                and context_threshold is None
                 and not self._ctx_threshold_warned
             ):
                 # Fires on the first lookup that ACTUALLY blends, not on
@@ -951,6 +1085,7 @@ class Cache:
         session_id: Optional[str]  = None,
         metadata:   Optional[dict] = None,
         plan:       Optional[str]  = None,
+        standalone: bool           = False,
     ) -> None:
         """
         Store a query-response pair in the cache.
@@ -972,6 +1107,14 @@ class Cache:
         0.10.0: when an injected session store fails to record the turn, ``set`` raises
         ``sulci.sessions.SulciSessionError`` — AFTER the entry is stored and the ``set`` event emitted, so
         the entry is in the cache; only the conversation turn is missing.
+
+        ``standalone`` (0.10.2) is for the managed backend. There, a set whose ``session_id`` already holds a turn
+        is a follow-up, and the gateway records the turn but stores NO entry (``reason: "context_dependent"``):
+        words like "how do I fix it?" mean something only in their conversation, and an entry stored under them was
+        served to every conversation that asked them. ``standalone=True`` tells the gateway that ``query`` stands on
+        its own — a self-contained rewrite of the follow-up, or an agent prompt that carries its own state — so it is
+        stored. Before 0.10.2 the SDK could not say so, and no follow-up in a session was ever stored. Self-hosted
+        backends store every set already; there ``standalone`` changes nothing.
         """
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
@@ -986,12 +1129,17 @@ class Cache:
             # gateway-side context window updates; local self._sessions is
             # not touched (it would track stale turn state since this Cache
             # instance has no engine-state).
+            # 0.10.2: standalone is passed only when True, and only to a transport that declares it takes it.
+            set_kwargs = {}
+            if standalone and getattr(self._backend, "ACCEPTS_STANDALONE", False) is True:
+                set_kwargs["standalone"] = True
             self._backend.remote_set(
                 query       = query,
                 response    = response,
                 user_id     = user_id if self.personalized else None,
                 session_id  = session_id,
                 ttl_seconds = self.ttl_seconds,
+                **set_kwargs,
             )
             raw_vec = None   # not computed locally; session-window record skipped below
         else:
@@ -1068,6 +1216,8 @@ class Cache:
         session_id:    Optional[str]   = None,
         cost_per_call: Optional[float] = None,
         plan:          Optional[str]   = None,
+        standalone:    bool            = False,
+        context_threshold: Optional[float] = None,
         **llm_kwargs:  Any,
     ) -> dict:
         """
@@ -1095,6 +1245,12 @@ class Cache:
             plan:          Optional customer plan tier; forwarded onto
                            the underlying .get/.set calls and thence onto
                            emitted CacheEvent.plan. v0.5.6 (sulci-oss #36).
+            standalone:    0.10.2, managed backend: store this call's answer even when
+                           ``session_id`` already holds a turn (see ``set``). Since it is now a
+                           parameter of ``cached_call``, a ``standalone=`` keyword is no longer
+                           forwarded to ``llm_fn``.
+            context_threshold: 0.10.2: the blended-lookup threshold for this call (see ``get``).
+                           Like ``standalone``, no longer forwarded to ``llm_fn``.
             **llm_kwargs:  Forwarded to llm_fn on cache miss.
 
         Returns:
@@ -1118,6 +1274,7 @@ class Cache:
             user_id    = user_id,
             session_id = session_id,
             plan       = plan,
+            context_threshold = context_threshold,
         )
         ms              = (time.perf_counter() - t0) * 1000
 
@@ -1152,7 +1309,8 @@ class Cache:
 
         response = llm_fn(query, **llm_kwargs)
         try:
-            self.set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, plan=plan)
+            self.set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, plan=plan,
+                     standalone=standalone)
         except SulciSessionError as exc:
             _log.warning("sulci.Cache: cached_call returned the LLM response; %s", exc)
         ms = (time.perf_counter() - t0) * 1000

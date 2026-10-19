@@ -258,7 +258,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     # 0.10.1: no default here — unset is 0.85 on a local backend and the tenant's setting on backend="sulci".
     p.add_argument("--threshold", type=float, default=None)
-    p.add_argument("--context-window", type=int, default=4)
+    # 0.10.2: no default here either — unset is 4 on a local backend (as before) and, on backend="sulci", the
+    # tenant's Context window setting: a default of 4 would be sent with every managed lookup and override it.
+    p.add_argument("--context-window", type=int, default=None)
     p.add_argument(
         "--ttl-seconds",
         type=int,
@@ -291,7 +293,8 @@ def main(argv: Optional[list] = None) -> None:
         "backend": args.backend,
         "db_path": args.db_path,
         "threshold": args.threshold,
-        "context_window": args.context_window,
+        "context_window": (args.context_window if args.context_window is not None
+                           else (None if args.backend == "sulci" else 4)),
     }
     if args.ttl_seconds is not None:
         kwargs["ttl_seconds"] = args.ttl_seconds

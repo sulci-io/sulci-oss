@@ -110,6 +110,11 @@ class SulciCloudBackend:
     USER_AGENT   = f"sulci/{__version__}"
     #: 0.10.1: remote_get(threshold=None) sends no threshold, so Cache hands None through when the caller set none.
     ACCEPTS_UNSET_THRESHOLD = True
+    # 0.10.2: remote_get takes context_window= and remote_set takes standalone=; Cache passes them only to a
+    # transport that says so (a custom transport written against 0.10.1 is not handed keywords it lacks).
+    ACCEPTS_CONTEXT_WINDOW    = True
+    ACCEPTS_STANDALONE        = True
+    ACCEPTS_CONTEXT_THRESHOLD = True
 
     def __init__(
         self,
@@ -167,6 +172,8 @@ class SulciCloudBackend:
         *,
         user_id:    Optional[str] = None,
         session_id: Optional[str] = None,
+        context_window: Optional[int] = None,
+        context_threshold: Optional[float] = None,
     ) -> tuple:
         """
         Forward a cache lookup to the Sulci Cloud gateway as a TRANSPORT
@@ -188,10 +195,19 @@ class SulciCloudBackend:
             (response, similarity, context_depth)
             response is None on miss.
             Falls back to (None, 0.0, 0) on any network error — never raises.
+
+        0.10.2: ``context_window=None`` sends no ``context_window``, so the gateway applies the tenant's dashboard
+        setting; a number is sent as given (``Cache`` keeps it within the gateway's 0..20). ``context_threshold``
+        likewise: None sends none; a number is the threshold for a lookup that blends. A gateway older than
+        sulci-platform 0248 ignores the field.
         """
         body = {"query": query, "user_id": user_id, "session_id": session_id}
         if threshold is not None:
             body["threshold"] = threshold
+        if context_window is not None:
+            body["context_window"] = context_window
+        if context_threshold is not None:
+            body["context_threshold"] = context_threshold
         try:
             resp = self._client.post("/v1/cache/get", json=body)
             resp.raise_for_status()
@@ -216,6 +232,7 @@ class SulciCloudBackend:
         user_id:     Optional[str] = None,
         session_id:  Optional[str] = None,
         ttl_seconds: Optional[int] = None,
+        standalone:  bool          = False,
     ) -> None:
         """
         Forward a cache write to the Sulci Cloud gateway as a TRANSPORT
@@ -233,17 +250,23 @@ class SulciCloudBackend:
 
         Fire-and-forget — silently ignores all errors. The user's app must
         never crash on a failed cache write.
+
+        0.10.2: ``standalone=True`` sends ``"standalone": true`` — store the entry even when the session already
+        holds a turn (the gateway's follow-up rule; see ``Cache.set``). False sends nothing, as before.
         """
+        body = {
+            "query":       query,
+            "response":    response,
+            "user_id":     user_id,
+            "session_id":  session_id,
+            "ttl_seconds": ttl_seconds,
+        }
+        if standalone:
+            body["standalone"] = True
         try:
             self._client.post(
                 "/v1/cache/set",
-                json={
-                    "query":       query,
-                    "response":    response,
-                    "user_id":     user_id,
-                    "session_id":  session_id,
-                    "ttl_seconds": ttl_seconds,
-                },
+                json=body,
             )
         except Exception:
             pass   # Never crash the user's app on a failed write

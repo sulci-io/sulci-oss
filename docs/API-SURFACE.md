@@ -1,5 +1,13 @@
 # Sulci — the measured public API surface
 
+📌 2026-10-19 (oss-0037, unreleased 0.10.2): `Cache.__init__`'s `context_window` default, `0` → `None`;
+`standalone` on `Cache.set`, `Cache.cached_call`, `AsyncCache.aset`, `AsyncCache.acached_call` and the
+`AsyncCache.set` / `cached_call` passthroughs; and a per-call `context_threshold` on `Cache.get`, `Cache.cached_call`,
+`AsyncCache.aget`, `AsyncCache.acached_call` and the `get` / `cached_call` passthroughs — the 📌 0.10.2 block and
+rows below — measured with
+`check_api_surface.py --show` on the oss-0037 tree. `pyproject.toml` reads 0.10.1 until the 0.10.2 version bump,
+so the version above stays.
+
 **Measured:** 2026-10-17 against `sulci` **0.10.1** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v0.10.1rc1`: only the version banner differs. The 0.10.1rc1 measurement follows.
 
@@ -82,6 +90,35 @@ file and date it, then grep the estate for whatever else restated the old value.
 ## `Cache.__init__` — the real defaults
 
 Parameter order below is the real declaration order.
+
+📌 **0.10.2 (oss-0037): `context_window` defaults to `None`**, which reads as `0` — a local backend is
+unchanged. On the managed backend a window you set is sent with every lookup; `None` sends none, so the tenant's
+dashboard setting applies. The block directly below is now the current declaration; the two after it are 0.10.1's
+and 0.10.0's, kept as written.
+
+```python
+from sulci import Cache
+
+cache = Cache(
+    backend         = "chroma",    # chroma|sqlite|faiss|qdrant|redis|milvus|sulci
+    threshold       = None,        # 0.10.1: 0.85 locally; on "sulci", the tenant's setting
+    embedding_model = "minilm",    # minilm|mpnet|bge|openai
+    ttl_seconds     = 86400,       # 24h — entries DO expire by default
+    personalized    = False,
+    db_path         = "./sulci_db",
+    context_window  = None,        # 0.10.2: reads as 0; on "sulci", the tenant's setting
+    query_weight    = 0.7,
+    context_decay   = 0.5,
+    session_ttl     = 3600,
+    telemetry       = True,
+    api_key         = None,        # also SULCI_API_KEY
+    gateway_url     = "",          # empty; resolved downstream, not defaulted here
+    session_store   = None,
+    event_sink      = None,
+    cost_per_call   = 0.005,
+    context_threshold = None,   # blended lookups only; None = use `threshold`
+)
+```
 
 📌 **0.10.1 (oss-0032): `threshold` defaults to `None`.** A local backend then applies `DEFAULT_THRESHOLD` (0.85);
 the managed backend sends no threshold, so the tenant's dashboard setting applies. The first block below is the
@@ -186,6 +223,9 @@ There are eight. Not nine.
 | `stats()` | — | `dict` |
 | `clear()` | — | `None` |
 | `delete_user(user_id, *, …)` — 📌 0.10.0 | `tenant_id` | `{"entries": N, "sessions": M}` |
+| `get(query, *, …)` — 📌 0.10.2 | `threshold`, `tenant_id`, `user_id`, `session_id`, `plan`, `context_threshold` | `(response \| None, similarity, context_depth)` |
+| `set(query, response, *, …)` — 📌 0.10.2 | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone` | `None` |
+| `cached_call(query, llm_fn, *, …)` — 📌 0.10.2 | `threshold`, `tenant_id`, `user_id`, `session_id`, `cost_per_call`, `plan`, `standalone`, `context_threshold` | `{response, source, similarity, latency_ms, cache_hit, context_depth}` |
 
 Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
@@ -335,6 +375,12 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `context_summary` (sync passthrough) — 📌 0.9.3 | `tenant_id`, `user_id` |
 | `adelete_user` — 📌 0.10.0 | `tenant_id` |
 | `delete_user` (sync passthrough) — 📌 0.10.0 | `tenant_id` |
+| `aget` — 📌 0.10.2 | `tenant_id`, `plan`, `context_threshold` |
+| `aset` — 📌 0.10.2 | `tenant_id`, `plan`, `metadata`, `standalone` |
+| `acached_call` — 📌 0.10.2 | `tenant_id`, `plan`, `standalone`, `context_threshold` |
+| `get` (sync passthrough) — 📌 0.10.2 | `threshold`, `tenant_id`, `plan`, `context_threshold` |
+| `set` (sync passthrough) — 📌 0.10.2 | `tenant_id`, `plan`, `metadata`, `standalone` |
+| `cached_call` (sync passthrough) — 📌 0.10.2 | `threshold`, `tenant_id`, `plan`, `standalone`, `context_threshold` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,

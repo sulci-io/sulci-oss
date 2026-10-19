@@ -499,6 +499,27 @@ cache = Cache(backend="sulci")
 On `backend="sulci"`, leave `threshold` out to use the threshold saved in your dashboard (0.10.1). A value
 passed to the constructor or per call, 0.85 included, is sent with every lookup and overrides it.
 
+On `backend="sulci"`, `context_window` works the same way (0.10.2): a window you pass, `Cache(backend="sulci",
+context_window=2)`, is sent with every lookup; leave it out to use the Context window saved in your dashboard. The
+managed backend also treats a set in a session that already holds a turn as a follow-up: it records the turn but
+stores no entry, because words like "how do I fix it?" mean something only in their conversation. Pass
+`standalone=True` when the query stands on its own — a self-contained rewrite of the follow-up, or an agent prompt
+that carries its own state — and it is stored:
+
+```python
+cache = Cache(backend="sulci", context_window=2)
+
+# a follow-up, stored under a self-contained rewrite
+cache.set("How do I fix a Docker container that exits right after it starts?", answer,
+          session_id="s1", standalone=True)
+
+# an agent step whose prompt carries the task's state
+cache.cached_call(prompt, llm_fn, session_id="task-42", standalone=True, threshold=0.97)
+```
+
+Before 0.10.2 the SDK sent neither, so a Python app on the managed backend blended no context unless the dashboard
+was set, and never stored a follow-up.
+
 See [sulci.io](https://sulci.io) for current plans. The free OSS-Connect key is
 open now; paid plans (Pro, Business) open for self-serve signup at general
 availability — until then, request access from the pricing page.
@@ -741,6 +762,7 @@ cache = Cache(
     personalized    = False,        # scope lookups to the user_id passed on get/set
     db_path         = "./sulci_db", # on-disk path for sqlite / faiss
     context_window  = 0,            # turns to remember; 0 = stateless
+                                    # 0.10.2: the default is None (reads as 0); on "sulci", your dashboard's setting
     query_weight    = 0.70,         # α in blending formula
     context_decay   = 0.50,         # per-turn decay weight
     session_ttl     = 3600,         # session expiry in seconds
@@ -753,6 +775,9 @@ cache = Cache(
     context_threshold = None,       # threshold for context-blended lookups; None = use threshold (warns)
 )
 ```
+
+📌 0.10.2: on `backend="sulci"`, writing `context_window = 0` as above now sends 0 (stateless) and overrides your
+dashboard's Context window; leave the parameter out to use the dashboard's setting.
 
 ### Methods
 
