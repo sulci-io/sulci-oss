@@ -1,5 +1,8 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-19 against `sulci` **0.10.2** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v0.10.2rc1`: only the version banner differs. The 0.10.2rc1 measurement follows.
+
 **Measured:** 2026-10-19 against `sulci` **0.10.2rc1** — `check_api_surface.py --show`, its output diffed against
 the same command at the tag `v0.10.1`: besides the version banner, the differing lines are `Cache.__init__`'s
 `context_window` default, `0` → `None`; `standalone` on `Cache.set`, `Cache.cached_call`, `AsyncCache.aset`,
