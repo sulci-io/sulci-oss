@@ -8,6 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.10.2] — 2026-10-19 — The managed backend sends your context window and context threshold; `standalone`
+
+0.10.2rc1, released: no library code changed after the release candidate, so its entries below are this release's.
+The managed platform ran 0.10.2rc1 on staging (sulci-platform `f8facd1` and later; on 2026-10-19 its 96-turn
+context benchmark, `benchmark/context_d`, served 0 wrong answers at window 2 with a 0.80 context threshold) before
+this release.
+
 ## [0.10.2rc1] — 2026-10-19 — Release candidate: the managed backend sends your context window and context threshold; `standalone`
 
 The managed platform runs this release candidate on staging (sulci-platform 0248, which uses the per-call
