@@ -136,7 +136,8 @@ means the shared scope (stored as `"global"`) and nothing else.
 | SulciCloudBackend | `False` — enforced **gateway-side** | the managed gateway scopes by the API key's tenant and the request's `user_id`; the flag reads `False` only because the OSS conformance suite cannot reach a gateway to verify it |
 
 Before 0.9.3 only Qdrant (and the managed gateway) enforced
-`tenant_id`; the other five accepted it and ignored it, and a lookup
+`tenant_id`; ❌ (corrected in 1.0.1: the managed gateway never saw a `tenant_id` — it isolates by API key only, and the
+SDK never sent one; see the correction under *From an LLM framework integration*) the other five accepted it and ignored it, and a lookup
 without `user_id` read every user's entries. Entries written before
 0.9.3 on Redis, FAISS and Milvus carry no tenant and match no scope;
 `clear()` those stores after upgrading (see the 0.9.3 *Security*
@@ -426,6 +427,14 @@ The integrations scope by tenant in their own ways: `sulci-mcp
 `--share-across-models`), and LiteLLM's `namespace_by_model=True`. Since
 0.9.3 each of these scopes for real on every backend. Consult each
 integration's docstring for its exact form.
+
+> ❌ **Corrected in 1.0.1 (2026-10-21): not on the managed backend (`backend="sulci"`).** There the API key is the
+> only partition: the SDK never sent `tenant_id`, so before 1.0.1 these scopes were dropped without a word and one
+> cache was shared across every tenant (and model) you passed. From 1.0.1, `get`, `set` and `cached_call` raise
+> `TypeError` for a `tenant_id` on the managed backend (as `delete_user` already did); the proxy answers a request
+> carrying `x-sulci-tenant-id` with **400** and, like LiteLLM's `namespace_by_model` and LangChain's
+> `namespace_by_llm`, shares across models with a warning; `sulci-mcp --tenant-id` refuses to start. To isolate
+> tenants on the managed backend, give each tenant its own API key.
 
 ---
 

@@ -46,6 +46,8 @@ DESIGN DECISIONS, so they are not re-litigated
    contents. Do not bind it to 0.0.0.0 on a shared network without putting
    your own authentication in front of it.
 5. **The cache key includes the model** unless ``--share-across-models``.
+   1.0.1: not on the managed backend (``--backend sulci``), whose only partition is the API key — there the proxy
+   shares across models (with a warning) and answers ``x-sulci-tenant-id`` with 400.
 
 ⚠️  CORRECTNESS WARNING — the one that matters in CI.
     A cached answer is keyed on the prompt. The repository is not in the
@@ -229,6 +231,13 @@ def build_app(
             "not both."
         )
     sulci_cache = cache if cache is not None else Cache(**cache_kwargs)
+    # 1.0.1 (G33): the managed backend has one partition, the API key. Model scoping cannot exist there (it was a
+    # tenant_id, never sent): share across models and say so. A tenant header is refused per request below.
+    managed = bool(getattr(sulci_cache, "_is_remote_transport", False))
+    if managed and not share_across_models:
+        logger.warning("sulci-proxy: --backend sulci cannot scope by model (the API key is the only partition); "
+                       "responses are shared across models. Pass --share-across-models to silence this.")
+        share_across_models = True
 
     openai_upstream = (
         openai_upstream
@@ -291,6 +300,18 @@ def build_app(
             body = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             body = {}
+
+        # 1.0.1 (G33): on the managed backend a tenant header cannot be honoured — refuse it rather than share one
+        # tenant's answers with another, before anything (a streaming passthrough included) goes upstream.
+        if managed and request.headers.get("x-sulci-tenant-id"):
+            message = ("x-sulci-tenant-id is not supported with the managed backend (--backend sulci): the API key "
+                       "is the only partition. Run one proxy, with its own API key, per tenant. Nothing was sent "
+                       "upstream.")
+            payload = ({"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+                       if path.endswith("/messages") else
+                       {"error": {"message": message, "type": "invalid_request_error",
+                                  "code": "sulci_tenant_unsupported"}})
+            return JSONResponse(payload, status_code=400, headers={"x-sulci-cache": "refused"})
 
         if not isinstance(body, dict) or body.get("stream"):
             return await _passthrough(request, upstream, path, raw)

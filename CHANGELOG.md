@@ -8,6 +8,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Security — `tenant_id` on the managed backend is refused, not dropped (can break a caller)
+
+- **`Cache.get`, `Cache.set` and `cached_call` (and `AsyncCache`) raise `TypeError` for a `tenant_id` on the managed
+  backend (`backend="sulci"`).** The SDK never sent it: the API key is the managed backend's only partition. Before,
+  it was dropped without a word, so one cache was shared across every `tenant_id` passed — one of your tenants could
+  be served another's cached answer — while `docs/multi_tenancy_and_isolation.md` said the scopes held "on every
+  backend". `delete_user` has refused it since 0.10.0; `get` and `set` now agree. Nothing is read, written or sent
+  first. Isolate tenants on the managed backend with one API key each. Found by the 2026-10-21 hit-semantics sweep.
+- **The integrations follow.** `SulciLiteLLMCache(namespace_by_model=True)` on the managed backend warns once and
+  shares across models (as `SulciCache(namespace_by_llm=True)` already did) instead of failing every lookup.
+  `sulci-proxy --backend sulci` shares across models with a warning, and answers a request carrying
+  `x-sulci-tenant-id` with **400** (`sulci_tenant_unsupported`; Anthropic's error shape on `/v1/messages`;
+  streaming requests too; nothing forwarded). `sulci-mcp` on the managed backend sends instructions that no
+  longer ask the agent for a `tenant_id`. `sulci-mcp --tenant-id` (or
+  `SULCI_MCP_TENANT_ID`) with the managed backend refuses at build; a tool call's `tenant_id` returns the error.
+  Self-hosted backends are unchanged.
+
 ## [1.0.0] — 2026-10-20 — General availability: 0.10.2's library, declared stable
 
 1.0.0rc1, released: no library code changed after the release candidate (nor since 0.10.2), so the entry below is

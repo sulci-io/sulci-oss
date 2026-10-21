@@ -132,7 +132,9 @@ class SulciLiteLLMCache(BaseCache):
         namespace_by_model: When True (default), a response cached for one
             model is never served for another — the model name becomes the
             Sulci ``tenant_id``. Set False to share across models, which is
-            cheaper and occasionally wrong.
+            cheaper and occasionally wrong. 1.0.1: on the managed backend
+            (``backend="sulci"``) models cannot be kept apart — the API key is
+            the only partition — so it is turned off there with a warning.
         session_key: Which LiteLLM metadata key carries the conversation id
             used for context blending. Defaults to ``"sulci_session_id"``;
             pass it as ``metadata={"sulci_session_id": ...}`` on the call.
@@ -157,6 +159,17 @@ class SulciLiteLLMCache(BaseCache):
                 "`**cache_kwargs`, not both."
             )
         self.sulci: Cache = cache if cache is not None else Cache(**cache_kwargs)
+        # 1.0.1 (G33): the model was the tenant_id, which the managed backend never sent — answers were shared across
+        # models while namespace_by_model said otherwise. It now refuses a tenant_id (TypeError), which this adapter
+        # would turn into a miss on every call. Say so once and share, as SulciCache's namespace_by_llm does
+        # (a log warning, not warnings.warn: a caller's -W error must not turn it into an exception).
+        if namespace_by_model and getattr(self.sulci, "_is_remote_transport", False):
+            logger.warning(
+                "SulciLiteLLMCache: namespace_by_model=True cannot isolate models on the managed backend "
+                "(backend='sulci'): the API key is the only partition. Responses are shared across models. "
+                "Pass namespace_by_model=False to silence this, or use one API key per model."
+            )
+            namespace_by_model = False
         self.namespace_by_model = namespace_by_model
         self.session_key = session_key
 
