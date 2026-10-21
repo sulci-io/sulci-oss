@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name            = "sulci"
-version         = "0.10.2"
+version         = "1.0.0rc1"
 description     = "The AI native context-aware semantic cache for LLM apps — Patent Pending - stop paying for the same answer twice"
 readme          = "README.md"
 license         = { file = "LICENSE" }
@@ -18,7 +18,7 @@ keywords        = [
     "vector-search", "langchain", "cost-optimization", "cache", "rag",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",

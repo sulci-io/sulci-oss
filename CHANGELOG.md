@@ -8,6 +8,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0rc1] — 2026-10-20 — Release candidate for 1.0.0: 0.10.2, declared stable
+
+1.0.0 is 0.10.2's library, renumbered for general availability (owner decision, 2026-10-20). **No library code
+changed:** the public API is 0.10.2's, measured identical (docs/API-SURFACE.md). What 1.0 adds is a promise:
+from 1.0.0, Semantic Versioning holds for the public API in docs/API-SURFACE.md — no breaking change within 1.x;
+additions in minor releases, fixes in patch releases. The PyPI classifier moves from "3 - Alpha" to
+"5 - Production/Stable". `_SDK_VERSION`, the deprecated alias of `__version__`, stays through 1.x.
+The managed platform runs this candidate on staging before 1.0.0.
+
 ## [0.10.2] — 2026-10-19 — The managed backend sends your context window and context threshold; `standalone`
 
 0.10.2rc1, released: no library code changed after the release candidate, so its entries below are this release's.
