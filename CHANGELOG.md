@@ -8,6 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-10-20 — General availability: 0.10.2's library, declared stable
+
+1.0.0rc1, released: no library code changed after the release candidate (nor since 0.10.2), so the entry below is
+this release's. Semantic Versioning holds for the public API in docs/API-SURFACE.md from this release. The managed
+platform ran 1.0.0rc1 on staging before this release (sulci-platform `d57d984`: Tests, Performance, Staging smoke and
+Book demo smoke green; the Acme demo's real-library suite, 52 tests with MiniLM, passed against it).
+
 ## [1.0.0rc1] — 2026-10-20 — Release candidate for 1.0.0: 0.10.2, declared stable
 
 1.0.0 is 0.10.2's library, renumbered for general availability (owner decision, 2026-10-20). **No library code
