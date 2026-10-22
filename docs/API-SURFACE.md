@@ -1,5 +1,9 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-21 against `sulci` **1.0.1** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v1.0.0`: only the version banner differs (1.0.1 changes behaviour on the managed backend,
+not a signature). The 1.0.0 measurement follows.
+
 **Measured:** 2026-10-20 against `sulci` **1.0.0** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v1.0.0rc1`: only the version banner differs. This is the surface Semantic Versioning
 protects through 1.x. The 1.0.0rc1 measurement follows.
