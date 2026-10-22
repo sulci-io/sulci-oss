@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-10-21 — Security: the managed backend refuses a tenant_id instead of sharing one cache
+
+One change, below: on `backend="sulci"` a `tenant_id` was dropped without a word, so one cache was shared across your
+tenants; it is now refused (`TypeError`), and the proxy, LiteLLM and MCP integrations follow. Self-hosted backends
+are unchanged. The public API surface is unchanged (docs/API-SURFACE.md). It can break a caller that passed a
+`tenant_id` on the managed backend, which is why it is a patch release under **Security**: that caller's isolation
+never existed.
+
 ### Security — `tenant_id` on the managed backend is refused, not dropped (can break a caller)
 
 - **`Cache.get`, `Cache.set` and `cached_call` (and `AsyncCache`) raise `TypeError` for a `tenant_id` on the managed
