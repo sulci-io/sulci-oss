@@ -283,6 +283,8 @@ and `/stats`. Every response carries `x-sulci-cache: hit | miss |
 miss-uncacheable | bypass`; hits also carry `x-sulci-similarity`.
 
 Scope a lookup with the `x-sulci-tenant-id` and `x-sulci-session-id` headers.
+On `--backend sulci` (1.0.1) the tenant header is refused with 400 — the API key is the only partition there —
+and `x-sulci-cache` reads `refused`.
 
 ⚠️ **A cache hit is not authenticated.** Your `Authorization` header is
 forwarded upstream only on a **miss**; a hit is served from the store without
@@ -354,6 +356,13 @@ tenant is not visible to a lookup with one, and the reverse. The three surfaces
 above — `sulci-mcp --tenant-id`, `namespace_by_model=True`, the proxy's
 `x-sulci-tenant-id` and per-model scoping — therefore scope for real on every
 backend.
+
+> ❌ **Corrected in 1.0.1:** except the managed backend (`sulci (cloud)` above). Its gateway isolates by **API key**
+> only: the SDK never sent `tenant_id`, so before 1.0.1 these scopes were dropped there and one cache was shared
+> across the tenants (and models) you passed. Since 1.0.1 a `tenant_id` on the managed backend raises `TypeError`;
+> the proxy answers `x-sulci-tenant-id` with 400 and shares across models; LiteLLM's `namespace_by_model` and
+> LangChain's `namespace_by_llm` share across models with a warning; `sulci-mcp --tenant-id` refuses to start. One
+> API key per tenant isolates tenants on the managed backend.
 
 **`user_id` is a separate scope.** It takes effect only with `personalized=True`
 — with the default `personalized=False`, `Cache` ignores it. With

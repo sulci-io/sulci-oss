@@ -57,6 +57,13 @@ _log = _logging.getLogger("sulci")
 _NUDGE_THRESHOLD = 100
 _NUDGE_SHOWN     = False
 
+# 1.0.1 (G33): why get() and set() refuse a tenant_id on the managed backend (delete_user() has since 0.10.0).
+_MANAGED_TENANT_ID_REFUSED = (
+    "tenant_id is not accepted on the managed backend (backend='sulci'): the API key is the partition there, and "
+    "the gateway has no other. Before 1.0.1 it was dropped without a word, so entries were shared across every "
+    "tenant_id passed. Use one API key per tenant. Nothing was read, written or sent."
+)
+
 
 class _ProtocolAdaptedSessionStore:
     """
@@ -800,6 +807,7 @@ class Cache:
                         number, in one place. See ADR 0022 Open-7
                         (sulci-platform), and issues #44 / #59 there.
             tenant_id:  Optional tenant identifier for multi-tenant isolation.
+                        1.0.1: ``TypeError`` on the managed backend, whose only partition is the API key.
             user_id:    Optional user identifier for personalization.
             session_id: Optional session identifier for context-aware lookup.
                         When this resolves to a non-empty window, the lookup
@@ -831,6 +839,10 @@ class Cache:
         """
         # 0.9.3: "global" and "" address the shared scope; refused before anything is read or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
+        # 1.0.1 (G33): the managed transport sends no tenant_id — refuse it, as delete_user() does, instead of
+        # serving one tenant's entries to another.
+        if self._is_remote_transport and tenant_id is not None:
+            raise TypeError("get(): " + _MANAGED_TENANT_ID_REFUSED)
         _t0 = _time.time()
         self._query_count += 1
         matched_query: Optional[str] = None
@@ -1118,6 +1130,9 @@ class Cache:
         """
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
+        # 1.0.1 (G33): see get().
+        if self._is_remote_transport and tenant_id is not None:
+            raise TypeError("set(): " + _MANAGED_TENANT_ID_REFUSED)
         # 0.9.3: metadata may not use the entry's own field names (ValueError, as the gateway's 422) and
         # must be a mapping (TypeError) — checked here, on every backend, before anything is embedded or sent.
         metadata = checked_metadata(metadata)
