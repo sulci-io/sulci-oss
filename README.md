@@ -19,8 +19,8 @@ Sulci Cache is a drop-in Python library that caches LLM responses by **semantic 
 | Without Sulci Cache          | With Sulci Cache                                         |
 | ---------------------------- | -------------------------------------------------------- |
 | Every query hits the LLM API | Semantically similar queries return instantly from cache |
-| $0.005 per call, every time  | Cache hits need a local embedding, not an LLM call       |
-| 1–3 second response time     | Cache hits: ~87 ms p50 on the benchmark machine (below)  |
+| Every call is billed by your LLM provider | Cache hits need a local embedding, not an LLM call |
+| Every call waits on the model | Cache hits: ~87 ms p50 on the benchmark machine (below)  |
 | No memory across sessions    | Context-aware lookups: recent conversation turns are blended into the lookup |
 
 **Benchmark results — measured on the shipped MiniLM embedder**, 5,000-query

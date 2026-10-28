@@ -8,6 +8,15 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- **README: the "Why Sulci Cache" table carries no unmeasured figure (oss-0045).** The "Without" column said
+  "$0.005 per call, every time" and "1–3 second response time". Neither is a measured figure: $0.005 is the
+  benchmark's flat assumed cost per query (`cost_per_call`'s default, used only to express hits in dollars), and the
+  LLM latency was never measured here. The two cells now say what is true without a number: every call is billed by
+  your LLM provider, and every call waits on the model. The measured column (~87 ms p50, with its table below) is
+  unchanged. PyPI's copy of the README updates with the next release.
+
 ## [1.0.1] — 2026-10-21 — Security: the managed backend refuses a tenant_id instead of sharing one cache
 
 One change, below: on `backend="sulci"` a `tenant_id` was dropped without a word, so one cache was shared across your
