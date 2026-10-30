@@ -214,7 +214,7 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         # 0.10.0: milvus — so the Milvus tests in "Backend tests" and the conformance suite run (Linux and macOS;
         # the extra installs no milvus-lite on Windows, where they skip). Before, CI never ran them.
-        run: pip install ".[sqlite,redis,langchain,llamaindex,milvus]" qdrant-client pytest pytest-cov httpx pytest-asyncio==0.21.1 pytest-timeout
+        run: pip install ".[sqlite,redis,langchain,llamaindex,milvus]" qdrant-client "pytest<9.2" pytest-cov httpx pytest-asyncio==0.21.1 pytest-timeout
 
       # The v0.9.0 surfaces need Python 3.10+: mcp, litellm and fastapi all
       # declare requires-python >=3.10, while sulci itself is >=3.9. Installed
