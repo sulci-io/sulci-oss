@@ -8,6 +8,25 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — the token counts behind a cached answer (oss-0044)
+
+- **`sulci.with_usage(text, usage)`** — a `str` that carries the token counts of the LLM call that produced it. Return
+  it from a `cached_call` `llm_fn` and the counts are stored with the entry; on the managed backend
+  (`backend="sulci"`) every hit on that entry is then credited with them — sulci-platform 0325's **Tokens Saved**,
+  beside the estimated Cost Saved. The figure is what your app reports: Sulci records the counts as given and does not
+  audit them. It reads Anthropic's, OpenAI's and Gemini's usage objects or a mapping; Anthropic's prompt-cache input
+  tokens count as input. Unreadable counts warn (`UserWarning`) and are not
+  recorded — the answer, already paid for, is never lost over a statistic. An `llm_fn` that returns a plain `str` is
+  unaffected.
+- **`Cache.set(..., usage=)`** (and `AsyncCache.aset` / the `set` passthrough) — the same counts, given explicitly. A
+  value that cannot be read raises `TypeError` / `ValueError` before anything is embedded, stored or sent, as
+  `metadata` does.
+- The managed backend sends them as `"usage": {"input_tokens", "output_tokens"}` on `/v1/cache/set`, only when there
+  are counts (`SulciCloudBackend.ACCEPTS_USAGE`; a custom transport is handed `usage=` only if it declares it). A
+  gateway older than sulci-platform 0325 ignores the field and stores the entry as before. Self-hosted backends
+  accept `usage` and store nothing for it. `cached_call` returns the plain text either way.
+- `docs/API-SURFACE.md`: the 📌 oss-0044 rows and the `usage` section.
+
 ### Documentation
 
 - **README: the "Why Sulci Cache" table carries no unmeasured figure (oss-0045).** The "Without" column said
