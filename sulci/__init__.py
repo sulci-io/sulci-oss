@@ -704,6 +704,9 @@ def _flush_on_exit() -> None:
 # In test-only environments (just __init__.py present) they gracefully
 # return None and the telemetry tests still pass.
 
+# oss-0044: no dependencies, so outside the guarded block below — it always resolves.
+from sulci._usage import with_usage
+
 try:
     from sulci.core import Cache
     from sulci.context import ContextWindow, SessionStore
@@ -752,4 +755,5 @@ __all__ = [
     "TelemetrySink",           # new protocol impl
     "CacheEvent",              # event dataclass
     "connect",
+    "with_usage",              # oss-0044: an llm_fn's answer carrying its token counts
 ]

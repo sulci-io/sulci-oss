@@ -172,6 +172,7 @@ class AsyncCache:
         plan:       Optional[str] = None,
         metadata:   Optional[dict] = None,
         standalone: bool          = False,
+        usage:      Any           = None,
     ) -> None:
         """
         Async cache store — saves response and advances the context window.
@@ -191,6 +192,9 @@ class AsyncCache:
         standalone : bool, optional
             Managed backend: store the entry even when ``session_id`` already holds a turn. Mirrors
             ``Cache.set``. 0.10.2.
+        usage : mapping or usage object, optional
+            The token counts of the call that produced ``response`` (managed backend: Tokens Saved). Mirrors
+            ``Cache.set``. oss-0044.
         """
         return await asyncio.to_thread(
             self._cache.set, query, response,
@@ -200,6 +204,7 @@ class AsyncCache:
             metadata   = metadata,
             plan       = plan,
             standalone = standalone,
+            usage      = usage,
         )
 
     async def acached_call(
@@ -343,8 +348,10 @@ class AsyncCache:
         plan:       Optional[str] = None,
         metadata:   Optional[dict] = None,
         standalone: bool          = False,
+        usage:      Any           = None,
     ) -> None:
-        """Sync passthrough — cache.set(). tenant_id/plan/metadata mirror Cache.set (v0.8.1); standalone (0.10.2)."""
+        """Sync passthrough — cache.set(). tenant_id/plan/metadata mirror Cache.set (v0.8.1); standalone (0.10.2);
+        usage (oss-0044)."""
         return self._cache.set(
             query, response,
             tenant_id  = tenant_id,
@@ -353,6 +360,7 @@ class AsyncCache:
             metadata   = metadata,
             plan       = plan,
             standalone = standalone,
+            usage      = usage,
         )
 
     def cached_call(

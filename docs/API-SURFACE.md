@@ -4,6 +4,12 @@
 same command at the tag `v1.0.0`: only the version banner differs (1.0.1 changes behaviour on the managed backend,
 not a signature). The 1.0.0 measurement follows.
 
+📌 2026-10-26 (oss-0044, unreleased): `usage` on `Cache.set`, `AsyncCache.aset` and the `AsyncCache.set` passthrough
+— the token counts of the LLM call that produced the response — and `sulci.with_usage(text, usage)`, a module-level
+function (`cached_call`'s `llm_fn` may return it; this document's checker reads classes only) — the 📌 oss-0044
+rows below — measured with `check_api_surface.py --show` on the oss-0044 tree. `pyproject.toml` reads 1.0.1 until
+the release that carries it, so the version above stays.
+
 **Measured:** 2026-10-20 against `sulci` **1.0.0** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v1.0.0rc1`: only the version banner differs. This is the surface Semantic Versioning
 protects through 1.x. The 1.0.0rc1 measurement follows.
@@ -248,6 +254,7 @@ There are eight. Not nine.
 | `get(query, *, …)` — 📌 0.10.2 | `threshold`, `tenant_id`, `user_id`, `session_id`, `plan`, `context_threshold` | `(response \| None, similarity, context_depth)` |
 | `set(query, response, *, …)` — 📌 0.10.2 | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone` | `None` |
 | `cached_call(query, llm_fn, *, …)` — 📌 0.10.2 | `threshold`, `tenant_id`, `user_id`, `session_id`, `cost_per_call`, `plan`, `standalone`, `context_threshold` | `{response, source, similarity, latency_ms, cache_hit, context_depth}` |
+| `set(query, response, *, …)` — 📌 oss-0044 | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone`, `usage` | `None` |
 
 Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
@@ -288,6 +295,32 @@ has been, despite having been documented there. It is also not on `get`.
 with one WARNING naming them, and the entry keeps its own values; every other key is stored as before.
 📌 Superseded before release: such a `metadata` raises `ValueError` naming the keys (the gateway answers
 `422`), and one that is not a mapping raises `TypeError` — on every backend, before anything is stored.
+
+### `usage` — the token counts behind a cached answer (📌 oss-0044)
+
+`usage` is on `set` and `aset` (and the `set` passthrough). It is **not on `cached_call`**: the counts exist only
+after the LLM call, so `cached_call` reads them from what `llm_fn` returns — `sulci.with_usage(text, usage)`, a `str`
+that carries them. An `llm_fn` that returns a plain `str` records nothing, as before. `usage` is the provider's usage
+object or a mapping — Anthropic (`input_tokens`, plus `cache_creation_input_tokens` and `cache_read_input_tokens`,
+which Anthropic reports apart from it), OpenAI (`prompt_tokens`, `completion_tokens`) or Gemini
+(`prompt_token_count`, `candidates_token_count` plus `thoughts_token_count`); counts are non-negative ints up to 10,000,000 (`sulci._usage`).
+On `set`, one that cannot be read raises `TypeError` / `ValueError` before anything is sent; `with_usage` warns
+instead (it runs after the call has been paid for). Only the managed backend records the counts — sulci-platform
+0325's Tokens Saved; self-hosted backends accept them and store nothing for them.
+
+```python
+import anthropic, sulci
+
+client = anthropic.Anthropic()
+cache = sulci.Cache(backend="sulci", api_key="sk-sulci-...")
+
+def ask(q):
+    msg = client.messages.create(model="claude-sonnet-4-6", max_tokens=350,
+                                 messages=[{"role": "user", "content": q}])
+    return sulci.with_usage(msg.content[0].text, msg.usage)
+
+cache.cached_call("How do I reset my password?", ask)
+```
 
 ### `delete_user` — a `Cache` method since 0.10.0
 
@@ -408,6 +441,8 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `get` (sync passthrough) — 📌 0.10.2 | `threshold`, `tenant_id`, `plan`, `context_threshold` |
 | `set` (sync passthrough) — 📌 0.10.2 | `tenant_id`, `plan`, `metadata`, `standalone` |
 | `cached_call` (sync passthrough) — 📌 0.10.2 | `threshold`, `tenant_id`, `plan`, `standalone`, `context_threshold` |
+| `aset` — 📌 oss-0044 | `tenant_id`, `plan`, `metadata`, `standalone`, `usage` |
+| `set` (sync passthrough) — 📌 oss-0044 | `tenant_id`, `plan`, `metadata`, `standalone`, `usage` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,

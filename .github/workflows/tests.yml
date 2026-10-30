@@ -374,7 +374,7 @@ jobs:
 
       - name: Cloud backend
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_cloud_backend.py tests/test_cloud_erasure.py tests/test_managed_tenant_refused.py -v --tb=short
+        run: pytest tests/test_cloud_backend.py tests/test_cloud_erasure.py tests/test_managed_tenant_refused.py tests/test_usage.py -v --tb=short
 
       - name: Attribution, nudge, thresholds, session-store injection
         if: needs.changes.outputs.code == 'true'

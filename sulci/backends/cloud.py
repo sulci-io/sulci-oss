@@ -115,6 +115,8 @@ class SulciCloudBackend:
     ACCEPTS_CONTEXT_WINDOW    = True
     ACCEPTS_STANDALONE        = True
     ACCEPTS_CONTEXT_THRESHOLD = True
+    # oss-0044: remote_set takes usage= (the token counts of the call that produced the response).
+    ACCEPTS_USAGE             = True
 
     def __init__(
         self,
@@ -233,6 +235,7 @@ class SulciCloudBackend:
         session_id:  Optional[str] = None,
         ttl_seconds: Optional[int] = None,
         standalone:  bool          = False,
+        usage:       Optional[dict] = None,
     ) -> None:
         """
         Forward a cache write to the Sulci Cloud gateway as a TRANSPORT
@@ -253,6 +256,11 @@ class SulciCloudBackend:
 
         0.10.2: ``standalone=True`` sends ``"standalone": true`` — store the entry even when the session already
         holds a turn (the gateway's follow-up rule; see ``Cache.set``). False sends nothing, as before.
+
+        oss-0044: ``usage`` — ``{"input_tokens": int, "output_tokens": int}``, already checked by ``Cache.set`` —
+        is sent as ``"usage"``; the gateway keeps it with the entry and credits each hit on it to the tenant's Tokens
+        Saved. None sends nothing. A gateway older than sulci-platform 0325 ignores the field (unknown fields are
+        ignored there, not refused), so the entry is still stored.
         """
         body = {
             "query":       query,
@@ -263,6 +271,8 @@ class SulciCloudBackend:
         }
         if standalone:
             body["standalone"] = True
+        if usage is not None:
+            body["usage"] = {"input_tokens": usage["input_tokens"], "output_tokens": usage["output_tokens"]}
         try:
             self._client.post(
                 "/v1/cache/set",

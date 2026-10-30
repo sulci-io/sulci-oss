@@ -35,6 +35,7 @@ from sulci.sinks.protocol import query_hash as _query_hash
 from sulci.embeddings.protocol import Embedder
 from sulci.backends.protocol   import Backend
 from sulci._metadata import checked_metadata
+from sulci._usage import checked_usage, plain_text, usage_of
 from sulci._scope_ids import refuse_reserved_scope
 from sulci.sessions.scope import scoped_session_id as _scoped_session_id
 from sulci.sessions.scope import user_scope as _user_scope
@@ -1098,6 +1099,7 @@ class Cache:
         metadata:   Optional[dict] = None,
         plan:       Optional[str]  = None,
         standalone: bool           = False,
+        usage:      Any            = None,
     ) -> None:
         """
         Store a query-response pair in the cache.
@@ -1127,6 +1129,13 @@ class Cache:
         its own — a self-contained rewrite of the follow-up, or an agent prompt that carries its own state — so it is
         stored. Before 0.10.2 the SDK could not say so, and no follow-up in a session was ever stored. Self-hosted
         backends store every set already; there ``standalone`` changes nothing.
+
+        ``usage`` (oss-0044) is the token counts of the LLM call that produced ``response`` — the provider's usage
+        object or a mapping (``input_tokens``/``output_tokens``, ``prompt_tokens``/``completion_tokens``, or
+        Gemini's names; see ``sulci._usage``). When omitted, the counts a ``sulci.with_usage(...)`` response carries
+        are used. On the managed backend they are stored with the entry and each hit on it is credited with them
+        (the dashboard's Tokens Saved); self-hosted backends store nothing for them. A ``usage`` that cannot be read
+        raises ``TypeError`` or ``ValueError`` before anything is embedded, stored or sent.
         """
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
@@ -1136,6 +1145,10 @@ class Cache:
         # 0.9.3: metadata may not use the entry's own field names (ValueError, as the gateway's 422) and
         # must be a mapping (TypeError) — checked here, on every backend, before anything is embedded or sent.
         metadata = checked_metadata(metadata)
+        # oss-0044: the token counts — explicit, or carried by a with_usage() response — checked here too, and the
+        # response stored as plain text.
+        usage = checked_usage(usage) if usage is not None else usage_of(response)
+        response = plain_text(response)
         _t0 = _time.time()
         if self._is_remote_transport:
             # v0.6.0 (sulci-oss #62) — cloud transport short-circuit.
@@ -1148,6 +1161,9 @@ class Cache:
             set_kwargs = {}
             if standalone and getattr(self._backend, "ACCEPTS_STANDALONE", False) is True:
                 set_kwargs["standalone"] = True
+            # oss-0044: like standalone, handed only to a transport that declares it takes it.
+            if usage is not None and getattr(self._backend, "ACCEPTS_USAGE", False) is True:
+                set_kwargs["usage"] = usage
             self._backend.remote_set(
                 query       = query,
                 response    = response,
@@ -1249,7 +1265,9 @@ class Cache:
 
         Args:
             query:         User query string.
-            llm_fn:        Callable(query, **kwargs) -> str.
+            llm_fn:        Callable(query, **kwargs) -> str. oss-0044: it may return
+                           ``sulci.with_usage(text, usage)`` to record the call's token
+                           counts with the entry (managed backend: Tokens Saved).
             user_id:       For personalized per-user caching.
             session_id:    Conversation ID — enables context-aware lookup.
             cost_per_call: Estimated LLM cost per call (for savings stats).
@@ -1323,11 +1341,14 @@ class Cache:
             }
 
         response = llm_fn(query, **llm_kwargs)
+        # oss-0044: an llm_fn may return sulci.with_usage(text, usage); set() reads the counts from it (with_usage
+        # has already checked them, so set() cannot raise for them), and the caller gets the plain text back.
         try:
             self.set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, plan=plan,
                      standalone=standalone)
         except SulciSessionError as exc:
             _log.warning("sulci.Cache: cached_call returned the LLM response; %s", exc)
+        response = plain_text(response)
         ms = (time.perf_counter() - t0) * 1000
         # _stats["misses"] is incremented inside .get() above — see #42.
         return {
