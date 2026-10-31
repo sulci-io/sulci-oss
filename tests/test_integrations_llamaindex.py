@@ -368,6 +368,10 @@ def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, ca
         assert llm.complete(PROMPT, session_id="s1").text == RESPONSE
         llm.chat([ChatMessage(role=MessageRole.USER, content="another question")], session_id="s1")
     messages = [rec.getMessage() for rec in caplog.records]
-    assert any("complete() stored the response" in m for m in messages)
-    assert any("chat() stored the response" in m for m in messages)
+    # oss-0049: each warning carries the error's own words, which say whether the response was stored. The turn
+    # never records here (append always fails), so chat()'s set is still the session's first and IS stored.
+    assert any("complete(): the conversation turn was not recorded" in m and "the entry WAS stored" in m
+               for m in messages)
+    assert any("chat(): the conversation turn was not recorded" in m and "the entry WAS stored" in m
+               for m in messages)
     assert not any("store error" in m for m in messages)

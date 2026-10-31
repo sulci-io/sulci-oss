@@ -376,7 +376,7 @@ def build_app(
                             prompt, text, tenant_id=tenant, session_id=session
                         )
                     except SulciSessionError as exc:
-                        logger.warning("sulci stored the reply; the conversation turn was not recorded: %s", exc)
+                        logger.warning("sulci: the conversation turn was not recorded: %s", exc)   # the message says whether the reply was stored (oss-0049)
                     except Exception as exc:
                         logger.warning("sulci store failed: %s", exc)
             elif isinstance(payload, dict):

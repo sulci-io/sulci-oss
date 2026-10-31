@@ -527,7 +527,8 @@ cache.cached_call(prompt, llm_fn, session_id="task-42", standalone=True, thresho
 ```
 
 Before 0.10.2 the SDK sent neither, so a Python app on the managed backend blended no context unless the dashboard
-was set, and never stored a follow-up.
+was set, and never stored a follow-up. Self-hosted backends apply the same rule from oss-0049 (unreleased): a follow-up is recorded and not stored
+unless `standalone=True`.
 
 **Tokens Saved (1.1.0).** Your dashboard can show the tokens your cache hits saved, as your app reports them. Hand
 the provider's usage object back with the answer, and every later hit on that entry is credited with its counts:
@@ -974,8 +975,12 @@ lookup_vec = α · embed(query) + (1−α) · Σ(decay^i · turn_i)
 - `decay` = `context_decay` (default **0.50**) — halves weight per older turn
 - Only **user query** vectors are stored in context (not LLM responses)
 - Raw un-blended vectors stored in cache; blending happens at lookup time only —
-  so an entry stored under a vague follow-up's words matches that wording in any
-  conversation. Store answers under self-contained questions.
+  so an entry stored under a vague follow-up's words would match that wording in any
+  conversation. That is why a follow-up is **not stored** (oss-0049, every backend;
+  the managed backend since 0.10.2): a `set` whose session already holds a turn — a
+  set's, or a hit's, which `get` records — records the turn and writes no entry, and
+  a session store that cannot be read stores nothing. Pass `standalone=True` for a
+  follow-up that stands on its own (a self-contained rewrite), and it is stored.
 
 **Context-aware benchmark:** run it rather than reading a number here, and
 run it on the shipped engine — `--use-sulci` is opt-in, and without it this

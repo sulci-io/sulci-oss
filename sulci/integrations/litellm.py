@@ -245,7 +245,7 @@ class SulciLiteLLMCache(BaseCache):
                 session_id=self._session(**kwargs),
             )
         except SulciSessionError as exc:
-            logger.warning("sulci set_cache stored the value; the conversation turn was not recorded: %s", exc)
+            logger.warning("sulci set_cache: the conversation turn was not recorded: %s", exc)   # says whether stored (oss-0049)
         except Exception as exc:
             logger.warning("sulci set_cache failed: %s", exc)
 

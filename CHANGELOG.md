@@ -8,6 +8,52 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed — a follow-up is not stored on self-hosted backends (oss-0049)
+
+Self-hosted backends now apply the managed gateway's follow-up rule (0.10.2; `sulci-platform` routes/cache.py, item 158
+decision D), all three parts of it:
+
+- **A follow-up is recorded, not stored.** `Cache.set` with a `session_id` whose window already holds a turn — a set's
+  or a hit's — and `standalone` not set records the turn and writes **no entry**. `cached_call`, `AsyncCache` and the
+  integrations follow, since they store through `set`. `standalone=True` stores it, as on managed. The first question
+  of a session, a `set` without `session_id`, and a `Cache` with `context_window=0` store exactly as before.
+- **`get()` records a hit's turn** when it has a `session_id` (the gateway's `/cache/get` has since 0164). Code that
+  calls `get()` then `set()` — `sulci-proxy`, the LiteLLM, LlamaIndex and MCP integrations, the FastAPI example —
+  otherwise left a session whose first question HIT empty, and its follow-up was stored as a "first question".
+  `cached_call` no longer records the hit itself (it now goes through `get`), so it is recorded once, without a second
+  embed. A failure to record is logged and the hit stands.
+- **A session that cannot be read stores nothing** (the gateway's `session_unavailable`): an injected store whose read
+  fails can't say whether the set is a follow-up, so nothing is stored and no turn recorded, with a WARNING. A missed
+  entry costs one LLM call; a wrong one is another conversation's answer.
+- **Why.** Entries are stored under the raw query vector, so a vague follow-up's answer was filed under words like
+  "How do I speed it up?" — and every other conversation that asked them hit it. Found 2026-10-31 on sulci.io's
+  demo, which mirrors `Cache.set`; measured on all-MiniLM-L6-v2 with the default blend (α=0.70, decay=0.50): the
+  stored follow-up scored **0.961** in a Python conversation, the right (Python) answer **0.767**. A repeated
+  follow-up also misses on its own turn (0.631 / 0.620 at threshold 0.65), which is how such an entry was written.
+- **Cost.** Misses after a session's first turn are no longer written, so a multi-turn app caches less; `sulci-proxy`
+  with a stable `x-sulci-session-id` caches only each session's first miss (no header yet sets `standalone`).
+  Pass `standalone=True` where your app has rewritten a follow-up into a self-contained question. Context-tagged
+  entries, which would cache follow-ups again without crossing conversations, are planned for 1.2.0.
+- **What the caller is told.** `set` reads the session history once (0.10.0 made it write-only). When recording a
+  follow-up's turn fails, the `SulciSessionError` now says "no entry was stored (a follow-up)" and carries
+  `stored = False` (it said "the entry WAS stored" for every set); the proxy, LiteLLM and LlamaIndex warnings no
+  longer claim the reply was stored. The MCP `cache_store` tool answers `"stored": false` for a follow-up on a
+  self-hosted `Cache` or `AsyncCache` (on managed it still answers true: the transport does not report the
+  gateway's decision). A skipped set still emits its `set` event and `cache.set` telemetry, as the
+  gateway still meters it.
+- **Session state now changes on a hit.** Each `get()` hit with a `session_id` is a turn, as on managed: looking the
+  same query up repeatedly fills the window (with `context_window=4`, three probes push the real topic out), and code
+  that recorded hits itself (`get_context().add_turn` after `get`) now records them twice. `AsyncCache.aget` writes
+  the session from its worker thread; the in-process `SessionStore` takes no lock (unchanged, and already true of
+  `aset`). The MCP `cache_lookup` tool, annotated read-only, does not record (an internal `record_hit=False`).
+- **An unreadable session store stops the cache filling.** While an injected store's reads fail, every `set` with a
+  `session_id` — a first question too — stores nothing, with a WARNING each time; lookups keep working. That is the
+  gateway's choice (`session_unavailable`), stated plainly because it is an availability trade.
+- Not covered, by design: a session whose turns expired (`session_ttl`) starts again, so its next set is stored as
+  a first question. The MCP `cache_store` tool runs a `Cache` subclass's own `set()`, so for one it cannot tell
+  whether a follow-up was skipped and answers `"stored": true`, as before.
+- API unchanged: no parameter added, `set` still returns `None`.
+
 ### Documentation
 
 - **README shows the token counts by default (oss-0048).** 1.1.0 shipped `sulci.with_usage` and `Cache.set(usage=)`

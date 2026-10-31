@@ -271,8 +271,9 @@ class SulciCacheLLM(LLM):
         try:
             self._get_cache().set(prompt, result.text, session_id=session_id)
             logger.debug("sulci SET  prompt=%r", prompt[:60])
-        except SulciSessionError:
-            logger.warning("sulci complete() stored the response; the conversation turn was not recorded",
+        except SulciSessionError as exc:
+            # oss-0049: the error's own words say whether the response was stored (a follow-up is not).
+            logger.warning("sulci complete(): the conversation turn was not recorded: %s", exc,
                            exc_info=True)
         except Exception:
             logger.warning("sulci complete() store error — skipping", exc_info=True)
@@ -316,8 +317,9 @@ class SulciCacheLLM(LLM):
             if text:
                 self._get_cache().set(key, text, session_id=session_id)
                 logger.debug("sulci SET  key=%r", key[:60])
-        except SulciSessionError:
-            logger.warning("sulci chat() stored the response; the conversation turn was not recorded",
+        except SulciSessionError as exc:
+            # oss-0049: the error's own words say whether the response was stored (a follow-up is not).
+            logger.warning("sulci chat(): the conversation turn was not recorded: %s", exc,
                            exc_info=True)
         except Exception:
             logger.warning("sulci chat() store error — skipping", exc_info=True)
