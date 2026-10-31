@@ -8,6 +8,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- **README shows the token counts by default (oss-0048).** 1.1.0 shipped `sulci.with_usage` and `Cache.set(usage=)`
+  with no word of them in the README. Added: a **Tokens Saved (1.1.0)** paragraph under *Sulci Cloud* with the
+  `cached_call` and `set` forms; the *Drop-in with `cached_call`* quickstart returns `with_usage(...)` (on its local
+  backend the counts are accepted and not stored, and the comment says so); `usage=None` in the `set` row of the
+  methods table; and, under *Managed cloud backend*, that a set sends the response and, only when supplied, the two
+  token counts. Telemetry is unchanged and the README now says so where the counts are described: they travel in the
+  request that stores the answer, not in telemetry's eight fields. `usage` stays optional (owner's decision,
+  2026-10-31). Reaches PyPI with the next release. No code change.
+
 ## [1.1.0] — 2026-10-30 — The token counts behind a cached answer, for the managed tier's Tokens Saved
 
 One addition, below: `sulci.with_usage` and `usage=` on `Cache.set` / `AsyncCache.aset` record the token counts of the
