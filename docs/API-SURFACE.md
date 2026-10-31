@@ -1,5 +1,11 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-30 against `sulci` **1.1.0** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v1.0.1`: besides the version banner, the differing lines are `usage` on `Cache.set`,
+`AsyncCache.aset` and the `AsyncCache.set` passthrough (oss-0044, the 📌 oss-0044 block and rows below). Additive
+only, hence a minor release. `sulci.with_usage` is a module-level function, outside what the checker reads. The
+1.0.1 measurement follows.
+
 **Measured:** 2026-10-21 against `sulci` **1.0.1** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v1.0.0`: only the version banner differs (1.0.1 changes behaviour on the managed backend,
 not a signature). The 1.0.0 measurement follows.

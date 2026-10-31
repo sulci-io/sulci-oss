@@ -8,6 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-10-30 — The token counts behind a cached answer, for the managed tier's Tokens Saved
+
+One addition, below: `sulci.with_usage` and `usage=` on `Cache.set` / `AsyncCache.aset` record the token counts of the
+LLM call that produced an answer, and the managed backend sends them, so the Sulci Cloud dashboard can show the tokens
+your hits saved, as reported by your app. Additive: nothing that worked on 1.0.1 changes (docs/API-SURFACE.md). The
+README fix below (oss-0045) reaches PyPI with this release.
+
 ### Added — the token counts behind a cached answer (oss-0044)
 
 - **`sulci.with_usage(text, usage)`** — a `str` that carries the token counts of the LLM call that produced it. Return
