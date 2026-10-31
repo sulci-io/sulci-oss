@@ -529,6 +529,30 @@ cache.cached_call(prompt, llm_fn, session_id="task-42", standalone=True, thresho
 Before 0.10.2 the SDK sent neither, so a Python app on the managed backend blended no context unless the dashboard
 was set, and never stored a follow-up.
 
+**Tokens Saved (1.1.0).** Your dashboard can show the tokens your cache hits saved, as your app reports them. Hand
+the provider's usage object back with the answer, and every later hit on that entry is credited with its counts:
+
+```python
+import sulci
+
+def call_llm(prompt: str) -> str:
+    msg = client.messages.create(model="claude-haiku-4-5", max_tokens=1024,
+                                 messages=[{"role": "user", "content": prompt}])
+    return sulci.with_usage(msg.content[0].text, msg.usage)   # the text, carrying its token counts
+
+cache.cached_call("How do I deploy to AWS?", call_llm)
+
+# or, storing an answer yourself
+cache.set(query, text, usage=resp.usage)
+```
+
+Anthropic's, OpenAI's and Gemini's usage objects are read as they are, or a mapping with `input_tokens` and
+`output_tokens`. The counts are optional: an answer stored without them is cached and served exactly as before, and
+its hits add nothing to Tokens Saved. They are sent only on `backend="sulci"`, inside the request that stores the
+answer, and kept with that entry; a self-hosted backend accepts them and stores nothing. They are not telemetry —
+telemetry's eight fields are unchanged (below). Sulci records the counts as your app gives them, so the dashboard
+labels the figure "reported" and says how many hits it covers.
+
 See [sulci.io](https://sulci.io) for current plans. The free OSS-Connect key is
 open now; paid plans (Pro, Business) open for self-serve signup at general
 availability — until then, request access from the pricing page.
@@ -727,7 +751,7 @@ because no measurement supports one. See
 
 ```python
 import anthropic
-from sulci import Cache
+from sulci import Cache, with_usage
 
 cache = Cache(backend="sqlite", threshold=0.85)
 client = anthropic.Anthropic()
@@ -738,7 +762,9 @@ def call_llm(prompt: str) -> str:
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}]
     )
-    return msg.content[0].text
+    # with_usage (1.1.0) carries the call's token counts with the text. On backend="sulci" they feed your
+    # dashboard's Tokens Saved; on a local backend like this one they are accepted and not stored.
+    return with_usage(msg.content[0].text, msg.usage)
 
 result = cache.cached_call(
     query  = "How do I deploy to AWS?",
@@ -793,7 +819,7 @@ dashboard's Context window; leave the parameter out to use the dashboard's setti
 | Method                                                                                 | Returns                   | Description                                                        |
 | -------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------ |
 | `cache.get(query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None)`                   | `(str\|None, float, int)` | response, similarity, context_depth (tenant_id added in v0.4.0; plan added in v0.5.6) |
-| `cache.set(query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None)` | `None`                    | Store entry, advance context window (plan added in v0.5.6)                            |
+| `cache.set(query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None, usage=None)` | `None`                    | Store entry, advance context window (plan added in v0.5.6; usage — the LLM call's token counts — added in 1.1.0) |
 | `cache.cached_call(query, llm_fn, *, threshold=None, tenant_id=None, user_id=None, session_id=None, cost_per_call=None, plan=None)` | `dict`        | response, source, similarity, latency_ms, cache_hit, context_depth (plan added in v0.5.6) |
 | `cache.get_context(session_id, *, tenant_id=None, user_id=None)`                       | `ContextWindow`           | Return session's context window                                    |
 | `cache.clear_context(session_id, *, tenant_id=None, user_id=None)`                     | `None`                    | Reset session history                                              |
@@ -898,6 +924,8 @@ For a Qdrant server, pass `url=` (and `api_key=`) instead of `db_path=`.
 gateway, which embeds and searches server-side, so no local embedding model is
 loaded and `pip install sulci` alone is enough. The gateway URL resolves as
 `gateway_url=` → `SULCI_GATEWAY` → `https://api.sulci.io`.
+A set also sends the response, and — from 1.1.0, only when you supply them (`usage=` or `with_usage`) — the LLM
+call's two token counts, which the gateway keeps with the entry for your dashboard's Tokens Saved.
 
 `SyncCache` is exported as an alias of `Cache`, parallel to `AsyncCache`.
 
