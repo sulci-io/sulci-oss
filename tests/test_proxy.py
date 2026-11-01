@@ -374,3 +374,108 @@ def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, ca
     assert any("the entry WAS stored" in rec.getMessage() for rec in caplog.records)
     assert not any(rec.getMessage().startswith("sulci store failed") for rec in caplog.records)
     assert c.post("/v1/chat/completions", json=OPENAI_BODY).headers["x-sulci-cache"] == "hit"
+
+
+# ── oss-0051: x-sulci-standalone, and why a miss was not cached ─────────────
+def _stored(cache):
+    import sqlite3
+    con = sqlite3.connect(cache._backend._db_file)
+    try:
+        return [r[0] for r in con.execute("SELECT query FROM cache ORDER BY rowid")]
+    finally:
+        con.close()
+
+
+def _body(q):
+    return {"model": "gpt-4o", "messages": [{"role": "user", "content": q}]}
+
+
+def test_a_follow_up_miss_is_labelled_and_x_sulci_standalone_stores_it(tmp_path, fake_embedder):
+    """sulci 1.1.1 stores no follow-up; the proxy now says so (x-sulci-cache: miss-followup), and a client that has
+    rewritten a follow-up into a self-contained question can store it with x-sulci-standalone: true."""
+    cache = Cache(backend="sqlite", db_path=str(tmp_path / "px-st"), embedding_model=fake_embedder, threshold=0.85,
+                  context_threshold=0.85, telemetry=False, context_window=4)
+    c = make(cache, Upstream())
+    s = {"x-sulci-session-id": "s1"}
+    r1 = c.post("/v1/chat/completions", json=_body("How do I speed up slow PostgreSQL queries?"), headers=s)
+    assert r1.headers["x-sulci-cache"] == "miss"
+    r2 = c.post("/v1/chat/completions", json=_body("zzz qqq how do I make it faster"), headers=s)
+    assert r2.headers["x-sulci-cache"] == "miss-followup"
+    r3 = c.post("/v1/chat/completions", json=_body("Which PostgreSQL index types exist and when to use each"),
+                headers={**s, "x-sulci-standalone": "true"})
+    assert r3.headers["x-sulci-cache"] == "miss"
+    assert _stored(cache) == ["How do I speed up slow PostgreSQL queries?",
+                              "Which PostgreSQL index types exist and when to use each"]
+
+
+@pytest.mark.parametrize("value", ["", "false", "0", "no", "maybe"])
+def test_x_sulci_standalone_must_be_affirmative(tmp_path, fake_embedder, value):
+    cache = Cache(backend="sqlite", db_path=str(tmp_path / "px-sf"), embedding_model=fake_embedder, threshold=0.85,
+                  context_threshold=0.85, telemetry=False, context_window=4)
+    c = make(cache, Upstream())
+    s = {"x-sulci-session-id": "s1"}
+    c.post("/v1/chat/completions", json=_body("How do I speed up slow PostgreSQL queries?"), headers=s)
+    r = c.post("/v1/chat/completions", json=_body("zzz qqq how do I make it faster"),
+               headers={**s, "x-sulci-standalone": value})
+    assert r.headers["x-sulci-cache"] == "miss-followup"
+    assert len(_stored(cache)) == 1
+
+
+# ── oss-0051 review: reasons, wrapped sets, the error branch, headers not forwarded ──
+def _ctx_cache(tmp_path, fake_embedder, name, **kw):
+    return Cache(backend="sqlite", db_path=str(tmp_path / name), embedding_model=fake_embedder, threshold=0.85,
+                 context_threshold=0.85, telemetry=False, context_window=4, **kw)
+
+
+def test_an_unreadable_session_store_is_labelled_as_such_not_as_a_follow_up(tmp_path, fake_embedder):
+    from sulci.sessions import InMemorySessionStore
+
+    class _Unreadable(InMemorySessionStore):
+        def get(self, *a, **k):
+            raise ConnectionError("down")
+
+    c = make(_ctx_cache(tmp_path, fake_embedder, "px-u", session_store=_Unreadable()), Upstream())
+    r = c.post("/v1/chat/completions", json=_body("How do I speed up slow PostgreSQL queries?"),
+               headers={"x-sulci-session-id": "s1"})
+    assert r.headers["x-sulci-cache"] == "miss-session-unavailable"   # the FIRST question: not a follow-up
+
+
+def test_a_follow_up_whose_turn_write_fails_is_still_labelled_a_follow_up(tmp_path, fake_embedder):
+    from sulci.sessions import InMemorySessionStore
+
+    class _AppendFailsAfterOne(InMemorySessionStore):
+        n = 0
+        def append(self, *a, **k):
+            self.n += 1
+            if self.n > 1:
+                raise ConnectionError("down")
+            return super().append(*a, **k)
+
+    c = make(_ctx_cache(tmp_path, fake_embedder, "px-a", session_store=_AppendFailsAfterOne()), Upstream())
+    s = {"x-sulci-session-id": "s1"}
+    c.post("/v1/chat/completions", json=_body("How do I speed up slow PostgreSQL queries?"), headers=s)
+    r = c.post("/v1/chat/completions", json=_body("zzz qqq how do I make it faster"), headers=s)
+    assert r.headers["x-sulci-cache"] == "miss-followup"
+
+
+def test_an_instance_wrapped_set_runs(tmp_path, fake_embedder):
+    cache = _ctx_cache(tmp_path, fake_embedder, "px-w")
+    calls, real = [], cache.set
+
+    def audited(q, r, **kw):
+        calls.append(q)
+        return real(q, r, **kw)
+
+    cache.set = audited
+    make(cache, Upstream()).post("/v1/chat/completions", json=_body("What is semantic caching?"))
+    assert calls == ["What is semantic caching?"]
+
+
+def test_the_proxy_s_own_headers_are_not_forwarded_upstream(cache):
+    up = Upstream()
+    make(cache, up).post("/v1/chat/completions", json=OPENAI_BODY, headers={
+        "x-sulci-tenant-id": "acme", "x-sulci-session-id": "s1", "x-sulci-standalone": "true",
+        "authorization": "Bearer sk-test"})
+    sent = {k.lower() for k in up.calls[0].headers}
+    assert not any(k.startswith("x-sulci-") for k in sent)
+    assert "authorization" in sent                                    # the client's own headers still go

@@ -94,6 +94,12 @@ _STRIP_RESPONSE_HEADERS = {
     "keep-alive",
 }
 _STRIP_REQUEST_HEADERS = {"host", "content-length", "accept-encoding"}
+# oss-0051: the proxy's own headers (x-sulci-tenant-id, x-sulci-session-id, x-sulci-standalone) are for the proxy.
+# Before oss-0051 they were forwarded to OpenAI / Anthropic with every miss — an app's tenant and conversation ids
+# sent to the provider. Stripped by prefix, so a future x-sulci-* header cannot leak either.
+_STRIP_REQUEST_PREFIX = "x-sulci-"
+# oss-0051: why a miss was not cached, from Cache._set's reason (self-hosted only; the managed transport does not say).
+_SKIP_LABELS = {"context_dependent": "miss-followup", "session_unavailable": "miss-session-unavailable"}
 
 
 # ── payload helpers ──────────────────────────────────────────────────────
@@ -255,6 +261,12 @@ def build_app(
     app.state.client = client or httpx.AsyncClient(timeout=timeout)
     router = APIRouter()
 
+    def _standalone(request: Request) -> bool:
+        """oss-0051: ``x-sulci-standalone: true`` (or 1 / yes) says the request's last user turn stands on its own —
+        a self-contained rewrite of a follow-up, or an agent prompt carrying its own state — so its answer is stored
+        even when ``x-sulci-session-id`` already holds a turn (sulci 1.1.1 stores no follow-up otherwise)."""
+        return (request.headers.get("x-sulci-standalone") or "").strip().lower() in ("1", "true", "yes")
+
     def _scope(request: Request, body: dict) -> tuple:
         tenant = request.headers.get("x-sulci-tenant-id") or None   # 0.9.3: an empty header is no tenant
         if not share_across_models:
@@ -266,7 +278,7 @@ def build_app(
         return {
             k: v
             for k, v in request.headers.items()
-            if k.lower() not in _STRIP_REQUEST_HEADERS
+            if k.lower() not in _STRIP_REQUEST_HEADERS and not k.lower().startswith(_STRIP_REQUEST_PREFIX)
         }
 
     async def _passthrough(request: Request, upstream: str, path: str, raw: bytes):
@@ -372,10 +384,24 @@ def build_app(
                 text = text_of(payload)
                 if text:
                     try:
-                        sulci_cache.set(
-                            prompt, text, tenant_id=tenant, session_id=session
-                        )
+                        # oss-0051: standalone from the header; and, for a plain Cache, whether the reply was stored
+                        # (Cache._set: False for a follow-up), so the response can say why it was not cached.
+                        # Cache._set only for Cache's own set: a subclass override or an instance-wrapped set
+                        # (redaction, auditing) must run, and then the outcome cannot be read (label stays "miss").
+                        kw = {"standalone": True} if _standalone(request) else {}
+                        plain = (type(sulci_cache).set is Cache.set and "set" not in vars(sulci_cache)
+                                 and hasattr(sulci_cache, "_set"))
+                        if plain:
+                            _stored, reason = sulci_cache._set(
+                                prompt, text, tenant_id=tenant, session_id=session, with_reason=True, **kw
+                            )
+                            if reason in _SKIP_LABELS:
+                                headers["x-sulci-cache"] = _SKIP_LABELS[reason]
+                        else:
+                            sulci_cache.set(prompt, text, tenant_id=tenant, session_id=session, **kw)
                     except SulciSessionError as exc:
+                        if getattr(exc, "reason", None) in _SKIP_LABELS:
+                            headers["x-sulci-cache"] = _SKIP_LABELS[exc.reason]
                         logger.warning("sulci: the conversation turn was not recorded: %s", exc)   # the message says whether the reply was stored (oss-0049)
                     except Exception as exc:
                         logger.warning("sulci store failed: %s", exc)

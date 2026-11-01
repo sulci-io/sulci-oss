@@ -247,7 +247,11 @@ def build_server(
             description=(
                 "Store `response` as the answer to `query` so a later run can "
                 "skip the work. WRITE: this modifies the cache file. It does "
-                "not touch repository state."
+                "not touch repository state. With `session_id`, a query asked "
+                "once the session holds a turn (an earlier store, or a lookup "
+                "that hit) is a follow-up: it is recorded but not stored "
+                "(\"stored\": false), unless `standalone` is true — set it "
+                "when `query` makes sense on its own."
             ),
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
         )
@@ -256,6 +260,7 @@ def build_server(
             response: str,
             session_id: Optional[str] = None,
             tenant_id: Optional[str] = None,
+            standalone: bool = False,
         ) -> str:
             """Store `query` -> `response`. Returns a JSON object."""
             from sulci.sessions.errors import SulciSessionError
@@ -271,6 +276,8 @@ def build_server(
                     response,
                     tenant_id=_tenant(tenant_id),
                     session_id=session_id,
+                    # oss-0051: store even when the session already holds a turn (a self-contained query).
+                    **({"standalone": True} if standalone else {}),
                 )
             except SulciSessionError as exc:
                 # 0.10.0: the turn is missing; oss-0049: the entry is stored unless the set was a follow-up.

@@ -8,6 +8,33 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — `standalone` through the proxy and the integrations (oss-0051)
+
+1.1.1 stores no follow-up (a miss after a session's first turn) unless `standalone=True`, and only `Cache.set` /
+`cached_call` / `AsyncCache` could say so. Now every integration can:
+
+- **`sulci-proxy`:** request header **`x-sulci-standalone: true`** (also `1` / `yes`; anything else is false) stores the
+  reply even when `x-sulci-session-id` already holds a turn. A miss that was not stored now says why, on a self-hosted
+  backend: **`x-sulci-cache: miss-followup`** (a follow-up) or **`miss-session-unavailable`** (the session store could
+  not be read) instead of `miss`. The managed backend does not report its decision, so there it stays `miss`.
+- **`sulci-proxy` no longer forwards its own headers upstream.** `x-sulci-tenant-id`, `x-sulci-session-id` and
+  `x-sulci-standalone` (any `x-sulci-*`) went to OpenAI / Anthropic with every miss — an app's tenant and conversation
+  ids sent to the provider. They are now stripped; the client's other headers (`Authorization` included) still go.
+- **LiteLLM:** `metadata={"sulci_standalone": True}` beside `sulci_session_id` (only the boolean `True` counts).
+- **LlamaIndex:** `complete(..., standalone=True)` / `chat(..., standalone=True)` (and the async forms, which delegate);
+  the keyword is removed before the call reaches the wrapped LLM, as `session_id` is. The uncached streaming methods now
+  remove both `session_id` and `standalone` too (they forwarded `session_id` to the wrapped LLM before).
+- **MCP:** `cache_store` takes `standalone` (default false); its description tells the agent what a follow-up is and
+  when to set it.
+- **What a client may notice:** a proxy follow-up miss reads `miss-followup`, not `miss` (a client testing
+  `== "miss"` should accept `miss-*`); the provider no longer receives `x-sulci-*` headers. `Cache` / `AsyncCache`
+  signatures are unchanged. Internally `Cache._set(..., with_reason=True)` returns `(stored, reason)` and a
+  `SulciSessionError` from `set` carries `.reason` — the gateway's `context_dependent` / `session_unavailable`.
+- Tests: 15 across `test_proxy.py`, `test_integrations_litellm.py`, `test_integrations_mcp.py`,
+  `test_integrations_llamaindex.py`; the 10 for the routes fail with the code reverted, and each proxy fix (labels,
+  the error branch, the header strip, an instance-wrapped `set`) has a test that a mutant of it fails. Independent
+  review: no blocker; its 2 should-fix and 5 notes taken.
+
 ## [1.1.1] — 2026-10-31 — A follow-up is not stored on self-hosted backends
 
 A behaviour change on self-hosted backends, below (oss-0049): they now apply the managed gateway's follow-up rule, so a

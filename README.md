@@ -280,9 +280,15 @@ export ANTHROPIC_BASE_URL=http://localhost:8787
 
 Serves `POST /v1/chat/completions` and `POST /v1/messages`, plus `/healthz`
 and `/stats`. Every response carries `x-sulci-cache: hit | miss |
-miss-uncacheable | bypass`; hits also carry `x-sulci-similarity`.
+miss-followup | miss-session-unavailable | miss-uncacheable | bypass`; hits also carry
+`x-sulci-similarity`. The proxy's own `x-sulci-*` request headers are not forwarded upstream.
 
 Scope a lookup with the `x-sulci-tenant-id` and `x-sulci-session-id` headers.
+In a session, a miss after the first turn is a follow-up: it is answered and
+recorded, not stored, and reads `miss-followup` (1.1.1; on `--backend sulci` the
+managed gateway decides and the label stays `miss`). Send
+`x-sulci-standalone: true` when the request's last user turn stands on its own
+(a self-contained rewrite), and it is stored.
 On `--backend sulci` (1.0.1) the tenant header is refused with 400 — the API key is the only partition there —
 and `x-sulci-cache` reads `refused`.
 
@@ -329,7 +335,10 @@ print(reply.choices[0].message.content)
 LiteLLM has no `custom` cache type — `install()` replaces the inner
 implementation on `litellm.cache`, which is how LiteLLM's own semantic
 caches are wired. Pass the conversation id as
-`metadata={"sulci_session_id": ...}` to get context blending.
+`metadata={"sulci_session_id": ...}` to get context blending, and
+`metadata={"sulci_standalone": True}` to store a follow-up that stands on its
+own (LlamaIndex: `complete(..., session_id=..., standalone=True)`; MCP:
+`cache_store(..., standalone=true)`).
 
 
 ## ⚠️ The MCP, proxy, LiteLLM and LlamaIndex extras need Python 3.10+
