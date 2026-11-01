@@ -294,8 +294,11 @@ class Cache:
     -------------
     Enable by setting ``context_window > 0`` and passing a ``session_id``
     to ``cached_call`` / ``get`` / ``set``.  Sulci blends the current
-    query embedding with recent conversation history so that ambiguous
-    follow-up queries resolve correctly::
+    query embedding with recent conversation history, so a vague follow-up's
+    lookup leans toward its conversation's earlier, self-contained entries
+    (strongest one turn back; several unrelated turns dilute it). A
+    follow-up's own answer is recorded, not stored, unless ``standalone=True``
+    (1.1.1)::
 
         cache = Cache(backend="sqlite", context_window=6)
 
@@ -781,8 +784,8 @@ class Cache:
         Check cache for a semantically similar query.
 
         When ``session_id`` is set and ``context_window > 0``, the lookup
-        uses a context-blended embedding so ambiguous queries resolve
-        correctly within the current conversation.
+        uses a context-blended embedding, so a vague query can find its
+        conversation's earlier, self-contained entries.
 
         Args:
             query:      The query string to look up.

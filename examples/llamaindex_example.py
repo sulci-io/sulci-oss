@@ -24,8 +24,9 @@ How it works:
     automatically with no further code changes.
 
     Context-aware mode (context_window=4) blends prior turns into the
-    lookup vector so ambiguous follow-up queries resolve correctly within
-    the ongoing conversation. Each session_id keeps context isolated —
+    lookup vector, so a vague follow-up leans toward its conversation's
+    earlier entries; its own answer is not stored (1.1.1) unless
+    standalone=True. Each session_id keeps context isolated —
     questions in one session don't influence lookups in another.
 """
 import os, sys, time, tempfile

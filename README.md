@@ -57,10 +57,11 @@ before planning against it.
 **Context-aware mode** blends prior conversation turns into the lookup vector, so
 a vague follow-up such as *"what about the second one?"* is moved toward stored
 questions that resemble the conversation and can find a fully specified answer
-already in the cache. It does **not** keep apart answers stored under the same
-words: entries are stored under their own query's embedding, with no context, so
-an answer stored as *"how do I fix it?"* is a candidate for every conversation
-that asks it. Store answers under a self-contained version of the question. How
+already in the cache. Since 1.1.1 a follow-up in a session (a set after the session's first turn) is answered and
+recorded but **not stored** unless `standalone=True`: entries are stored under their own query's embedding, with no
+context, so an answer stored as *"how do I fix it?"* would be a candidate for every conversation that asks it. Vague
+words you store yourself (no `session_id`, or `standalone=True`) still are — store a self-contained question. The
+blend is strongest one turn back; several unrelated turns dilute it. How
 much blending helps depends entirely on your query mix, and **this README does not carry
 a number for it.** Run `python3 benchmark/run.py --use-sulci --fresh --no-sweep
 --context --out /tmp/sulci-bench-context` and read the harness's own note: the context corpus is 125 follow-ups
@@ -249,7 +250,8 @@ sulci-mcp --backend sqlite --db-path ./sulci_db
 ```
 
 Tools: `cache_lookup` and `cache_stats` (both annotated `readOnlyHint`), and
-`cache_store` (annotated as a write). `SULCI_MCP_READ_ONLY=1` registers only
+`cache_store` (annotated as a write; it takes `standalone` since 1.2.0 — with a
+`session_id` that already holds a turn it stores nothing unless `standalone` is true). `SULCI_MCP_READ_ONLY=1` registers only
 the read-only pair. Transports: `stdio` (default), `sse`, `streamable-http`.
 
 Requires **mcp >= 2.0.0**. mcp 1.x is not supported — the `FastMCP` entry
@@ -285,8 +287,8 @@ miss-followup | miss-session-unavailable | miss-uncacheable | bypass`; hits also
 
 Scope a lookup with the `x-sulci-tenant-id` and `x-sulci-session-id` headers.
 In a session, a miss after the first turn is a follow-up: it is answered and
-recorded, not stored, and reads `miss-followup` (1.1.1; on `--backend sulci` the
-managed gateway decides and the label stays `miss`). Send
+recorded, not stored, and reads `miss-followup` (the rule since 1.1.1, the label since 1.2.0; on `--backend sulci`
+the managed gateway decides and the label stays `miss`). Send
 `x-sulci-standalone: true` when the request's last user turn stands on its own
 (a self-contained rewrite), and it is stored.
 On `--backend sulci` (1.0.1) the tenant header is refused with 400 — the API key is the only partition there —
@@ -536,8 +538,8 @@ cache.cached_call(prompt, llm_fn, session_id="task-42", standalone=True, thresho
 ```
 
 Before 0.10.2 the SDK sent neither, so a Python app on the managed backend blended no context unless the dashboard
-was set, and never stored a follow-up. Self-hosted backends apply the same rule from oss-0049 (unreleased): a follow-up is recorded and not stored
-unless `standalone=True`.
+was set, and never stored a follow-up. Self-hosted backends apply the same rule since 1.1.1: a follow-up is recorded and not stored unless
+`standalone=True`.
 
 **Tokens Saved (1.1.0).** Your dashboard can show the tokens your cache hits saved, as your app reports them. Hand
 the provider's usage object back with the answer, and every later hit on that entry is credited with its counts:

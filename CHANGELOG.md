@@ -8,6 +8,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-11-01 — `standalone` through the proxy and integrations; the proxy keeps its headers to itself
+
+A minor release: new options in `sulci-proxy`, LiteLLM, LlamaIndex and MCP (below), one privacy fix, and one visible
+label change in the proxy. `Cache` / `AsyncCache` are unchanged (the public surface is identical to 1.1.1's).
+**Upgrade note for `sulci-proxy` users:** a follow-up miss now reads `x-sulci-cache: miss-followup` (or
+`miss-session-unavailable`) instead of `miss` on a self-hosted backend — a client that tests `== "miss"` should accept
+`miss-*`; and the provider no longer receives `x-sulci-*` request headers.
+
+Follow-up caching itself is unchanged from 1.1.1 (a follow-up is answered and recorded, not stored, unless
+`standalone=True`). Two ways of caching follow-ups again were measured for this release and neither was adopted:
+a context tag on the entry (no threshold separates near topics such as PostgreSQL / MySQL on all-MiniLM-L6-v2) and
+rewriting the follow-up into a standalone question with a small model (safe, but it recovers 10–27 % of repeated
+follow-ups for an extra model call on every follow-up).
+
 ### Added — `standalone` through the proxy and the integrations (oss-0051)
 
 1.1.1 stores no follow-up (a miss after a session's first turn) unless `standalone=True`, and only `Cache.set` /

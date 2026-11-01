@@ -59,7 +59,9 @@ What this demonstrates:
     2. Context-aware caching with context_window=4 + a per-Crew
        session_id. Each run of the same Crew shares context so that
        the second agent's prompt-conditioning hits the cache against
-       the first agent's outputs from the prior run.
+       the first agent's outputs from the prior run. Steps are stored
+       with standalone=True: each prompt carries its own state (since
+       1.1.1 a follow-up in a session is otherwise not stored).
 
     3. Cumulative cost savings via `cache.stats()` — saved_cost is
        populated because the Cache below is constructed with
@@ -204,7 +206,9 @@ class CachedLLM(BaseLLM):
         object.__setattr__(self, "_run_misses", self._run_misses + 1)
         response = self._inner.call(messages, **kwargs)
         if isinstance(response, str):
-            self._cache.set(prompt, response, session_id=self._session_id)
+            # standalone=True: an agent step's prompt carries the task's state, so it stands on its own. Without it
+            # every step after the session's first is a follow-up, recorded but not stored (sulci 1.1.1+).
+            self._cache.set(prompt, response, session_id=self._session_id, standalone=True)
         return response
 
     def supports_function_calling(self) -> bool:

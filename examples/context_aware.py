@@ -6,7 +6,8 @@ Demonstrates Sulci's context-aware caching for multi-turn conversations.
 Without context, ambiguous follow-up queries like "How do I fix it?" match
 whatever happens to be closest in the cache — which is often wrong.  With
 context, sulci blends recent conversation history into the lookup vector so
-the same follow-up resolves correctly based on what was discussed earlier.
+the same follow-up is looked up in the context of what was discussed. Follow-ups
+are answered and recorded, not cached (sulci 1.1.1+).
 
 Run:
     pip install "sulci[sqlite]"

@@ -29,12 +29,16 @@ DESIGN DECISIONS, so they are not re-litigated
 2. **Only the last user turn is embedded**, with prior turns supplied as
    session context — that is what ``context_window`` is for. Embedding the
    whole flattened transcript would make every turn a unique key and defeat
-   the cache.
+   the cache. A miss after a session's first turn is a follow-up: answered,
+   recorded, not stored (``x-sulci-cache: miss-followup``) unless the request
+   sends ``x-sulci-standalone: true`` (1.2.0).
 3. **Tool-call responses are not cached.** A response with ``tool_calls`` /
    ``tool_use`` is a control-flow instruction whose arguments are usually
    state-dependent. Serving a stale one sends an agent to the wrong file.
 4. **Auth headers are forwarded, never stored or logged.** The proxy holds
-   no credentials of its own.
+   no credentials of its own. Its own ``x-sulci-*`` request headers are
+   stripped before forwarding (1.2.0; before, tenant and session ids went to
+   the provider on every miss).
 
    ⚠️  **BUT A CACHE HIT IS NOT AUTHENTICATED.** The Authorization header is
    forwarded upstream only on a MISS. On a hit the response is served from

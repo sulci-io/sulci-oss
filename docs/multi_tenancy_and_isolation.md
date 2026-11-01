@@ -423,7 +423,7 @@ those values, that's the customer's concern within their own tenant.
 
 The integrations scope by tenant in their own ways: `sulci-mcp
 --tenant-id` (or `SULCI_MCP_TENANT_ID`), the proxy's
-`x-sulci-tenant-id` header (combined with the model unless
+`x-sulci-tenant-id` header (read by the proxy and, since 1.2.0, not forwarded upstream; combined with the model unless
 `--share-across-models`), and LiteLLM's `namespace_by_model=True`. Since
 0.9.3 each of these scopes for real on every backend. Consult each
 integration's docstring for its exact form.
