@@ -673,23 +673,24 @@ class Cache:
         session_id: Optional[str],
     ) -> tuple:
         """
-        Return (embedding_vector, context_depth).
+        Return (embedding_vector, context_depth, raw_vector).
 
         context_depth = number of prior turns that influenced the embedding.
-        0 means stateless — no blending occurred.
+        0 means stateless — no blending occurred. oss-0049: the raw vector is returned too, so a hit can record its
+        turn without embedding the query a second time.
         """
         raw_vec = self._embedder.embed(query)
 
         if self._sessions is None or not session_id:
-            return raw_vec, 0
+            return raw_vec, 0, raw_vec
 
         window = self._sessions.get(session_id)
         depth  = window.depth
         if depth == 0:
-            return raw_vec, 0
+            return raw_vec, 0, raw_vec
 
         blended = window.blend(raw_vec, embedder=self._embedder)
-        return blended, depth
+        return blended, depth, raw_vec
 
     def _record_turn(
         self,
@@ -838,6 +839,13 @@ class Cache:
             response is None on cache miss.
             context_depth = number of prior turns that influenced lookup.
         """
+        return self._get(query, threshold=threshold, tenant_id=tenant_id, user_id=user_id, session_id=session_id,
+                         plan=plan, context_threshold=context_threshold, record_hit=True)
+
+    def _get(self, query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None,
+             context_threshold=None, record_hit=True) -> tuple:
+        """``get``'s body. oss-0049: ``record_hit=False`` looks up without recording a hit's turn — for a caller that
+        promises not to write (the MCP ``cache_lookup`` tool is annotated read-only). Not public API."""
         # 0.9.3: "global" and "" address the shared scope; refused before anything is read or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         # 1.0.1 (G33): the managed transport sends no tenant_id — refuse it, as delete_user() does, instead of
@@ -936,7 +944,7 @@ class Cache:
                 eff_threshold = remote_kwargs["context_threshold"]
         else:
             # Self-hosted path — library is the engine in-process.
-            vec, depth = self._context_vec(query, self._session_key(session_id, tenant_id, user_id))
+            vec, depth, raw_vec = self._context_vec(query, self._session_key(session_id, tenant_id, user_id))
 
             # unreleased (2026-08-12) — blended-lookup threshold, applied HERE and
             # nowhere earlier: `depth` is the only thing that says whether this
@@ -1023,6 +1031,19 @@ class Cache:
                 )
         latency_ms = round((_time.time() - _t0) * 1000, 2)
 
+        # oss-0049: a HIT in a session is a turn of that conversation, so get() records it — as the managed
+        # gateway's /cache/get has since 0164 ("the library's own cached_call() has always recorded hits; the HTTP
+        # lookup now does the same"). Without it, code that calls get() and then set() on a miss (the proxy, the
+        # LiteLLM / LlamaIndex / MCP integrations, the README's FastAPI example) left a session whose first
+        # question HIT empty, so its next set looked like a first question and stored a follow-up under its vague
+        # words. cached_call() no longer records the hit itself. A failure is logged and the hit stands.
+        if (record_hit and resp is not None and session_id and self._sessions is not None
+                and not self._is_remote_transport):
+            try:
+                self._record_turn(self._session_key(session_id, tenant_id, user_id), query, resp, raw_vec)
+            except SulciSessionError as exc:
+                _log.warning("sulci.Cache: get() returned the cached response, but %s", exc)
+
         # #42 — count every .get() call so users who use the raw .get()/.set()
         # API (not just cached_call()) see non-zero stats(). Previously these
         # counters only incremented inside cached_call(), which left raw users
@@ -1108,6 +1129,15 @@ class Cache:
         reusable across different sessions and conversation states.
         Context blending only happens at lookup time.
 
+        oss-0049: so a follow-up is NOT stored. When ``session_id``'s window already holds a turn (a set's or a
+        hit's — ``get`` records a hit's turn) and ``standalone`` is not set, the turn is recorded but no entry is
+        written — on every backend, the managed gateway's rule since 0.10.2. Words like "how do I speed it up?" mean
+        something only in their conversation; stored under their raw vector, the answer for one conversation
+        out-scored the right answer in every other conversation that asked them (measured 2026-10-31 on
+        all-MiniLM-L6-v2: 0.961 against 0.767). If an injected session store cannot be read, the set cannot tell,
+        so it stores nothing and records no turn (WARNING), as the gateway does. The first question of a session, a
+        set without ``session_id``, a Cache with ``context_window=0`` and ``standalone=True`` store as before.
+
         When ``session_id`` is provided, the turn is also recorded in
         the session window to inform future context-blended lookups.
 
@@ -1120,15 +1150,16 @@ class Cache:
 
         0.10.0: when an injected session store fails to record the turn, ``set`` raises
         ``sulci.sessions.SulciSessionError`` — AFTER the entry is stored and the ``set`` event emitted, so
-        the entry is in the cache; only the conversation turn is missing.
+        the entry is in the cache; only the conversation turn is missing. oss-0049: for a follow-up no entry
+        was written, and the message says so (the error's ``stored`` attribute is False).
 
-        ``standalone`` (0.10.2) is for the managed backend. There, a set whose ``session_id`` already holds a turn
+        ``standalone`` (0.10.2; every backend since oss-0049). A set whose ``session_id`` already holds a turn
         is a follow-up, and the gateway records the turn but stores NO entry (``reason: "context_dependent"``):
         words like "how do I fix it?" mean something only in their conversation, and an entry stored under them was
         served to every conversation that asked them. ``standalone=True`` tells the gateway that ``query`` stands on
         its own — a self-contained rewrite of the follow-up, or an agent prompt that carries its own state — so it is
-        stored. Before 0.10.2 the SDK could not say so, and no follow-up in a session was ever stored. Self-hosted
-        backends store every set already; there ``standalone`` changes nothing.
+        stored. Before 0.10.2 the SDK could not say so, and no follow-up in a session was ever stored. oss-0049:
+        self-hosted backends apply the same rule, and ``standalone=True`` means the same there.
 
         ``usage`` (oss-0044) is the token counts of the LLM call that produced ``response`` — the provider's usage
         object or a mapping (``input_tokens``/``output_tokens``, ``prompt_tokens``/``completion_tokens``, or
@@ -1137,6 +1168,14 @@ class Cache:
         (the dashboard's Tokens Saved); self-hosted backends store nothing for them. A ``usage`` that cannot be read
         raises ``TypeError`` or ``ValueError`` before anything is embedded, stored or sent.
         """
+        self._set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, metadata=metadata,
+                  plan=plan, standalone=standalone, usage=usage)
+
+    def _set(self, query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None,
+             standalone=False, usage=None) -> Optional[bool]:
+        """``set``'s body. oss-0049: returns whether an entry was written — True or False on a self-hosted backend,
+        None on the managed one (the gateway decides and the transport does not report it). Not public API: the MCP
+        tool reads it so ``cache_store`` can answer truthfully."""
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         # 1.0.1 (G33): see get().
@@ -1176,18 +1215,40 @@ class Cache:
         else:
             # Self-hosted path — library is the engine in-process.
             raw_vec = self._embedder.embed(query)
-            key     = hashlib.sha256(query.encode()).hexdigest()[:16]
-            expires = time.time() + self.ttl_seconds if self.ttl_seconds else None
-            self._backend.store(
-                key       = key,
-                query     = query,
-                response  = response,
-                embedding = raw_vec,
-                tenant_id = tenant_id,
-                user_id   = user_id if self.personalized else None,
-                expires   = expires,
-                metadata  = metadata,
-            )
+            # oss-0049: the managed gateway's rule (routes/cache.py, item 158 decision D). A set whose session
+            # already holds a turn — any turn, set or hit — is a follow-up: its turn is recorded below, no entry is
+            # written. If the session cannot be read the set cannot tell, so it stores nothing and records nothing
+            # ("session_unavailable"): a missed entry costs one LLM call; a wrong one is another conversation's
+            # answer. Read BEFORE this turn is recorded. standalone=True skips the check.
+            skip_reason = None
+            if session_id and self._sessions is not None and not standalone:
+                turns = self._session_turns(self._session_key(session_id, tenant_id, user_id))
+                if turns is None:
+                    skip_reason = "session_unavailable"
+                elif turns > 0:
+                    skip_reason = "context_dependent"
+            if skip_reason is not None:
+                stored = False
+                _log.debug("sulci.Cache.set: not stored (%s); pass standalone=True if the query stands on its own",
+                           skip_reason)
+                if skip_reason == "session_unavailable":
+                    raw_vec = None   # the turn is not recorded either, as on the gateway
+            else:
+                stored = True
+                key     = hashlib.sha256(query.encode()).hexdigest()[:16]
+                expires = time.time() + self.ttl_seconds if self.ttl_seconds else None
+                self._backend.store(
+                    key       = key,
+                    query     = query,
+                    response  = response,
+                    embedding = raw_vec,
+                    tenant_id = tenant_id,
+                    user_id   = user_id if self.personalized else None,
+                    expires   = expires,
+                    metadata  = metadata,
+                )
+        if self._is_remote_transport:
+            stored = None
         session_error = None
         if session_id and self._sessions and raw_vec is not None:
             try:
@@ -1232,9 +1293,25 @@ class Cache:
             pass
 
         if session_error is not None:
-            raise SulciSessionError(
-                f"Cache.set: the entry WAS stored, but {session_error}"
-            ) from session_error.__cause__
+            # oss-0049: say what happened to the entry — a follow-up's set stores none.
+            what = "the entry WAS stored" if stored is not False else "no entry was stored (a follow-up)"
+            err = SulciSessionError(f"Cache.set: {what}, but {session_error}")
+            err.stored = stored
+            raise err from session_error.__cause__
+        return stored
+
+    def _session_turns(self, session_key) -> Optional[int]:
+        """oss-0049: how many turns the session holds, or None when its store cannot be read. Reads an injected
+        store directly (its adapter would turn a failure into "no history"), so set() can tell "empty" from
+        "unreadable"."""
+        if isinstance(self._sessions, _ProtocolAdaptedSessionStore):
+            try:
+                return len(list(self._sessions._inner.get(session_key)))
+            except Exception as exc:
+                _log.warning("sulci.Cache: the session store failed to read conversation history, so this set "
+                             "stores nothing and records no turn (%s: %s)", type(exc).__name__, exc)
+                return None
+        return self._sessions.get(session_key).depth
 
     def cached_call(
         self,
@@ -1278,8 +1355,8 @@ class Cache:
             plan:          Optional customer plan tier; forwarded onto
                            the underlying .get/.set calls and thence onto
                            emitted CacheEvent.plan. v0.5.6 (sulci-oss #36).
-            standalone:    0.10.2, managed backend: store this call's answer even when
-                           ``session_id`` already holds a turn (see ``set``). Since it is now a
+            standalone:    0.10.2: store this call's answer even when ``session_id`` already
+                           holds a turn (see ``set``; oss-0049: on every backend). Since it is now a
                            parameter of ``cached_call``, a ``standalone=`` keyword is no longer
                            forwarded to ``llm_fn``.
             context_threshold: 0.10.2: the blended-lookup threshold for this call (see ``get``).
@@ -1319,18 +1396,8 @@ class Cache:
             # mix instance-default and per-call costs.
             if cost_per_call is not None and cost_per_call != self._cost_per_call:
                 self._stats["saved_cost"] += (cost_per_call - self._cost_per_call)
-            # Record turn even on hits so future queries see this exchange.
-            # v0.6.1 (sulci-oss #60) — skip on remote transport: self._embedder
-            # is None there (gateway-side library tracks session state for the
-            # cloud path); without this gate, a session-aware cloud Cache would
-            # crash here on None.embed(). Mirrors the `raw_vec is not None`
-            # guard already present in Cache.set's session-record path.
-            if session_id and self._sessions and not self._is_remote_transport:
-                raw_vec = self._embedder.embed(query)
-                try:
-                    self._record_turn(self._session_key(session_id, tenant_id, user_id), query, hit, raw_vec)
-                except SulciSessionError as exc:
-                    _log.warning("sulci.Cache: cached_call returned the cached response, but %s", exc)
+            # The hit's turn is recorded by get() (oss-0049; it was recorded here, with a second embed, since
+            # v0.6.1). Remote transport: the gateway records it.
             return {
                 "response":      hit,
                 "source":        "cache",

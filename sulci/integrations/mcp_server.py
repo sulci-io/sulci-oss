@@ -161,6 +161,23 @@ def build_server(
     def _tenant(explicit: Optional[str]) -> Optional[str]:
         return explicit if explicit is not None else default_tenant_id
 
+    def _inner(c):
+        # An AsyncCache wraps a Cache (its sync passthroughs call it); the tools are sync.
+        from sulci.async_cache import AsyncCache
+        return c._cache if isinstance(c, AsyncCache) else c
+
+    def _plain_cache(c) -> bool:
+        """oss-0049: True when `c` (or the Cache an AsyncCache wraps) uses Cache's own get/set, so the private
+        _get/_set (which report what happened) are the same operations."""
+        from sulci.async_cache import AsyncCache
+        from sulci.core import Cache
+        inner = _inner(c)
+        if not isinstance(inner, Cache):
+            return False
+        if c is not inner and (type(c).set is not AsyncCache.set or type(c).get is not AsyncCache.get):
+            return False
+        return type(inner).set is Cache.set and type(inner).get is Cache.get
+
     @server.tool(
         name="cache_lookup",
         title="Look up a cached answer",
@@ -182,12 +199,12 @@ def build_server(
             # Cache.get returns a 3-TUPLE (response, similarity, context_depth).
             # `response` is None on a miss. Verified against core.py:488-666 on
             # 2026-08-11 — do not "simplify" this to a scalar.
-            resp, similarity, depth = cache.get(
-                query,
-                threshold=threshold,
-                tenant_id=_tenant(tenant_id),
-                session_id=session_id,
-            )
+            # oss-0049: Cache.get records a hit's turn; this tool is annotated read-only and says "Does not
+            # modify anything", so it looks up through _get(record_hit=False) when it can.
+            lookup = getattr(_inner(cache), "_get", None) if _plain_cache(cache) else None
+            kwargs = dict(threshold=threshold, tenant_id=_tenant(tenant_id), session_id=session_id)
+            resp, similarity, depth = (lookup(query, record_hit=False, **kwargs) if lookup is not None
+                                       else cache.get(query, **kwargs))
         except Exception as exc:  # never take the agent down with us
             logger.warning("sulci cache_lookup failed: %s", exc)
             return json.dumps({"cache_hit": False, "error": str(exc)})
@@ -242,21 +259,28 @@ def build_server(
         ) -> str:
             """Store `query` -> `response`. Returns a JSON object."""
             from sulci.sessions.errors import SulciSessionError
+            # oss-0049: a follow-up (the session already holds a turn) is recorded but not stored, so "stored" is
+            # read from Cache._set (True / False; None on the managed backend, whose transport does not report it,
+            # where it stays true as before).
+            # Only for a Cache whose set() is Cache.set itself: a subclass's override (redaction, auditing) must
+            # run, and then "stored" cannot be read (None, reported as true, as before oss-0049).
+            write = _inner(cache)._set if _plain_cache(cache) else cache.set
             try:
-                cache.set(
+                stored = write(
                     query,
                     response,
                     tenant_id=_tenant(tenant_id),
                     session_id=session_id,
                 )
             except SulciSessionError as exc:
-                # 0.10.0: the entry IS stored; only the conversation turn is missing.
+                # 0.10.0: the turn is missing; oss-0049: the entry is stored unless the set was a follow-up.
                 logger.warning("sulci cache_store: %s", exc)
-                return json.dumps({"stored": True, "session_recorded": False, "error": str(exc)})
+                return json.dumps({"stored": getattr(exc, "stored", True) is not False,
+                                   "session_recorded": False, "error": str(exc)})
             except Exception as exc:
                 logger.warning("sulci cache_store failed: %s", exc)
                 return json.dumps({"stored": False, "error": str(exc)})
-            return json.dumps({"stored": True})
+            return json.dumps({"stored": stored is not False})
 
     return server
 

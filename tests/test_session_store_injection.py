@@ -201,7 +201,9 @@ class TestFailingSessionStore:
     def test_set_raises_and_the_entry_is_stored(self, tmp_path, fake_embedder):
         import pytest
         from sulci.sessions import SulciSessionError
-        c = self._cache(tmp_path, fake_embedder, _FailingStore("append", "get", "clear"))
+        # oss-0049: reads succeed here — a set whose session cannot be READ stores nothing (the gateway's
+        # "session_unavailable"); this test is about a failed WRITE of the turn, after the entry is stored.
+        c = self._cache(tmp_path, fake_embedder, _FailingStore("append", "clear"))
         with pytest.raises(SulciSessionError, match="WAS stored") as info:
             c.set(self.Q, self.R, session_id="s1")
         assert isinstance(info.value.__cause__, ConnectionError)
@@ -259,15 +261,22 @@ class TestFailingSessionStore:
             assert c.get_context("s1").depth == 0
         assert any("failed to read conversation history" in r.getMessage() for r in caplog.records)
 
-    def test_set_does_not_read_the_history_to_record_a_turn(self, tmp_path, fake_embedder, caplog):
+    def test_set_reads_the_history_once_and_an_unreadable_session_stores_nothing(self, tmp_path, fake_embedder,
+                                                                                  caplog):
+        # 0.10.0 made set() record a turn WITHOUT reading the history. oss-0049 needs one read — whether the session
+        # already holds a turn is what makes a set a follow-up (recorded, not stored). A session that cannot be read
+        # cannot tell, so — as the managed gateway ("session_unavailable") — nothing is stored and no turn recorded:
+        # a missed entry costs one LLM call; a wrong one is another conversation's answer. One WARNING says so.
         import logging
         store = _FailingStore("get")
         c = self._cache(tmp_path, fake_embedder, store)
         with caplog.at_level(logging.WARNING, logger="sulci"):
             c.set(self.Q, self.R, session_id="s1")
-        assert caplog.records == [] and store.reads == 0
+        assert store.reads == 1
+        assert [r.getMessage() for r in caplog.records if "stores nothing and records no turn" in r.getMessage()]
         store.failing.clear()
-        assert len(store.get(scoped_session_id(None, None, "s1"))) == 1
+        assert store.get(scoped_session_id(None, None, "s1")) == []
+        assert c.get(self.Q)[0] is None
 
     def test_clear_context_raises_and_says_nothing_was_cleared(self, tmp_path, fake_embedder):
         import pytest
@@ -324,7 +333,8 @@ class TestFailingSessionStore:
         with caplog.at_level(logging.WARNING, logger="sulci"):
             out = c.cached_call(self.Q, lambda q: "never called", session_id="s1")
         assert (out["response"], out["source"]) == (self.R, "cache")
-        assert any("cached_call returned the cached response" in r.getMessage() for r in caplog.records)
+        # oss-0049: get() records the hit's turn now (as the gateway's /cache/get), so get() warns.
+        assert any("get() returned the cached response" in r.getMessage() for r in caplog.records)
 
     def test_async_cache_aset_and_aclear_context_raise(self, tmp_path, fake_embedder):
         import asyncio

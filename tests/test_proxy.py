@@ -370,6 +370,7 @@ def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, ca
     with caplog.at_level(logging.WARNING):
         r = c.post("/v1/chat/completions", json=OPENAI_BODY, headers={"x-sulci-session-id": "s1"})
     assert r.status_code == 200
-    assert any("stored the reply" in rec.getMessage() for rec in caplog.records)
+    # oss-0049: the warning carries the error's own words, which say whether the reply was stored.
+    assert any("the entry WAS stored" in rec.getMessage() for rec in caplog.records)
     assert not any(rec.getMessage().startswith("sulci store failed") for rec in caplog.records)
     assert c.post("/v1/chat/completions", json=OPENAI_BODY).headers["x-sulci-cache"] == "hit"

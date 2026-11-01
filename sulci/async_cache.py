@@ -190,7 +190,7 @@ class AsyncCache:
             ``sulci._metadata.RESERVED_METADATA_KEYS``, else TypeError/ValueError). Mirrors
             ``Cache.set``. v0.8.1.
         standalone : bool, optional
-            Managed backend: store the entry even when ``session_id`` already holds a turn. Mirrors
+            Store the entry even when ``session_id`` already holds a turn. Mirrors
             ``Cache.set``. 0.10.2.
         usage : mapping or usage object, optional
             The token counts of the call that produced ``response`` (managed backend: Tokens Saved). Mirrors
@@ -250,7 +250,7 @@ class AsyncCache:
             paths never leak ``plan=None`` into the stream. Mirrors
             ``Cache.cached_call`` (v0.5.6). v0.8.1.
         standalone : bool, optional
-            Managed backend: store the answer even when ``session_id`` already holds a turn. Mirrors
+            Store the answer even when ``session_id`` already holds a turn. Mirrors
             ``Cache.cached_call``. 0.10.2.
 
         Returns

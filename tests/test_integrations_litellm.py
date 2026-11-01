@@ -214,7 +214,8 @@ def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, ca
     a = SulciLiteLLMCache(cache, namespace_by_model=False)
     with caplog.at_level(logging.WARNING):
         a.set_cache("k", VALUE, messages=MESSAGES, metadata={"sulci_session_id": "s1"})
-    assert any("stored the value" in rec.getMessage() for rec in caplog.records)
+    # oss-0049: the warning carries the error's own words, which say whether the value was stored.
+    assert any("the entry WAS stored" in rec.getMessage() for rec in caplog.records)
     assert not any("set_cache failed" in rec.getMessage() for rec in caplog.records)
     assert a.get_cache("k", messages=MESSAGES) is not None
 

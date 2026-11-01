@@ -55,7 +55,9 @@ def _seed(cache):
     have one each."""
     for t, u, q in [("t1", "u-42", "alpha"), ("t1", "u-42", "beta"), ("t2", "u-42", "alpha"),
                     ("t1", "u-7", "alpha"), ("t1", None, "alpha")]:
-        cache.set(f"question {q}", f"{q} for {t}/{u}", tenant_id=t, user_id=u, session_id="s1")
+        # oss-0049: standalone — the seed means two ENTRIES for u-42 in t1; without it, "beta" is a follow-up in
+        # s1 and only its turn is recorded.
+        cache.set(f"question {q}", f"{q} for {t}/{u}", tenant_id=t, user_id=u, session_id="s1", standalone=True)
 
 
 SEEDED = [("t1", "global", 1), ("t1", "u-42", 2), ("t1", "u-7", 1), ("t2", "u-42", 1)]
