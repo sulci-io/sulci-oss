@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-10-31 — A follow-up is not stored on self-hosted backends
+
+A behaviour change on self-hosted backends, below (oss-0049): they now apply the managed gateway's follow-up rule, so a
+vague follow-up's answer is no longer filed under its bare words and served to other conversations. No signature
+changes (docs/API-SURFACE.md), hence a patch release, as 1.0.1. **Multi-turn apps will cache less:** a miss after a
+session's first turn is answered and recorded, not stored — pass `standalone=True` for a follow-up your app has rewritten
+into a self-contained question. The README changes below (oss-0048, oss-0049) reach PyPI with this release.
+
 ### Changed — a follow-up is not stored on self-hosted backends (oss-0049)
 
 Self-hosted backends now apply the managed gateway's follow-up rule (0.10.2; `sulci-platform` routes/cache.py, item 158

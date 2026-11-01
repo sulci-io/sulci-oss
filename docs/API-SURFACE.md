@@ -1,5 +1,10 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-10-31 against `sulci` **1.1.1** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v1.1.0` (each tree importing its own source): identical, 88 lines. 1.1.1 changes behaviour on
+self-hosted backends (oss-0049: a follow-up is recorded, not stored; `get` records a hit's turn), not a signature. The
+1.1.0 measurement follows.
+
 **Measured:** 2026-10-30 against `sulci` **1.1.0** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v1.0.1`: besides the version banner, the differing lines are `usage` on `Cache.set`,
 `AsyncCache.aset` and the `AsyncCache.set` passthrough (oss-0044, the 📌 oss-0044 block and rows below). Additive
