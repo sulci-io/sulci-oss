@@ -240,6 +240,12 @@ class SulciCacheLLM(LLM):
         """Extract and remove session_id from kwargs if present."""
         return kwargs.pop("session_id", None)
 
+    @staticmethod
+    def _pop_standalone(kwargs: dict) -> dict:
+        """oss-0051: extract and remove ``standalone`` (never forwarded to the wrapped LLM). ``standalone=True`` stores
+        the answer even when ``session_id`` already holds a turn (sulci 1.1.1 stores no follow-up otherwise)."""
+        return {"standalone": True} if kwargs.pop("standalone", False) is True else {}
+
     # ── Cached sync methods ───────────────────────────────────────────────────
 
     def complete(
@@ -254,6 +260,7 @@ class SulciCacheLLM(LLM):
         Cache errors are swallowed — a failure must never raise to the caller.
         """
         session_id = self._pop_session_id(kwargs)
+        extra      = self._pop_standalone(kwargs)
         try:
             resp, sim, depth = self._get_cache().get(prompt, session_id=session_id)
             if resp is not None:
@@ -269,7 +276,7 @@ class SulciCacheLLM(LLM):
         result = self.llm.complete(prompt, formatted=formatted, **kwargs)
 
         try:
-            self._get_cache().set(prompt, result.text, session_id=session_id)
+            self._get_cache().set(prompt, result.text, session_id=session_id, **extra)
             logger.debug("sulci SET  prompt=%r", prompt[:60])
         except SulciSessionError as exc:
             # oss-0049: the error's own words say whether the response was stored (a follow-up is not).
@@ -291,6 +298,7 @@ class SulciCacheLLM(LLM):
         Cache errors are swallowed.
         """
         session_id = self._pop_session_id(kwargs)
+        extra      = self._pop_standalone(kwargs)
         key        = self._last_user_message(messages)
 
         try:
@@ -315,7 +323,7 @@ class SulciCacheLLM(LLM):
         try:
             text = result.message.content or ""
             if text:
-                self._get_cache().set(key, text, session_id=session_id)
+                self._get_cache().set(key, text, session_id=session_id, **extra)
                 logger.debug("sulci SET  key=%r", key[:60])
         except SulciSessionError as exc:
             # oss-0049: the error's own words say whether the response was stored (a follow-up is not).
@@ -340,6 +348,8 @@ class SulciCacheLLM(LLM):
         Streaming responses are generators that cannot be reliably stored
         mid-stream. Cache the non-streaming path instead.
         """
+        # oss-0051: streaming is uncached; the cache's own keywords are not the wrapped LLM's.
+        kwargs.pop("session_id", None); kwargs.pop("standalone", None)
         return self.llm.stream_complete(prompt, formatted=formatted, **kwargs)
 
     def stream_chat(
@@ -348,6 +358,8 @@ class SulciCacheLLM(LLM):
         **kwargs: Any,
     ) -> ChatResponseGen:
         """Streaming chat — passes through to underlying LLM uncached."""
+        # oss-0051: streaming is uncached; the cache's own keywords are not the wrapped LLM's.
+        kwargs.pop("session_id", None); kwargs.pop("standalone", None)
         return self.llm.stream_chat(messages, **kwargs)
 
     # ── Async methods (run_in_executor — event loop never blocked) ────────────
@@ -382,6 +394,8 @@ class SulciCacheLLM(LLM):
         **kwargs:  Any,
     ) -> CompletionResponseAsyncGen:
         """Async streaming completion — passes through uncached."""
+        # oss-0051: streaming is uncached; the cache's own keywords are not the wrapped LLM's.
+        kwargs.pop("session_id", None); kwargs.pop("standalone", None)
         return await self.llm.astream_complete(prompt, formatted=formatted, **kwargs)
 
     async def astream_chat(
@@ -390,6 +404,8 @@ class SulciCacheLLM(LLM):
         **kwargs: Any,
     ) -> ChatResponseAsyncGen:
         """Async streaming chat — passes through uncached."""
+        # oss-0051: streaming is uncached; the cache's own keywords are not the wrapped LLM's.
+        kwargs.pop("session_id", None); kwargs.pop("standalone", None)
         return await self.llm.astream_chat(messages, **kwargs)
 
     # ── Extras ────────────────────────────────────────────────────────────────

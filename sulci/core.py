@@ -1172,10 +1172,13 @@ class Cache:
                   plan=plan, standalone=standalone, usage=usage)
 
     def _set(self, query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None,
-             standalone=False, usage=None) -> Optional[bool]:
+             standalone=False, usage=None, with_reason=False):
         """``set``'s body. oss-0049: returns whether an entry was written — True or False on a self-hosted backend,
-        None on the managed one (the gateway decides and the transport does not report it). Not public API: the MCP
-        tool reads it so ``cache_store`` can answer truthfully."""
+        None on the managed one (the gateway decides and the transport does not report it). oss-0051:
+        ``with_reason=True`` returns ``(stored, reason)``, reason ``"context_dependent"`` or
+        ``"session_unavailable"`` when nothing was stored, else None — the gateway's ``reason`` field. Not public API:
+        the MCP tool and sulci-proxy read it so they can answer truthfully."""
+        skip_reason = None
         # 0.9.3: "global" and "" address the shared scope; refused before anything is written or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         # 1.0.1 (G33): see get().
@@ -1220,7 +1223,6 @@ class Cache:
             # written. If the session cannot be read the set cannot tell, so it stores nothing and records nothing
             # ("session_unavailable"): a missed entry costs one LLM call; a wrong one is another conversation's
             # answer. Read BEFORE this turn is recorded. standalone=True skips the check.
-            skip_reason = None
             if session_id and self._sessions is not None and not standalone:
                 turns = self._session_turns(self._session_key(session_id, tenant_id, user_id))
                 if turns is None:
@@ -1297,8 +1299,9 @@ class Cache:
             what = "the entry WAS stored" if stored is not False else "no entry was stored (a follow-up)"
             err = SulciSessionError(f"Cache.set: {what}, but {session_error}")
             err.stored = stored
+            err.reason = skip_reason            # oss-0051
             raise err from session_error.__cause__
-        return stored
+        return (stored, skip_reason) if with_reason else stored
 
     def _session_turns(self, session_key) -> Optional[int]:
         """oss-0049: how many turns the session holds, or None when its store cannot be read. Reads an injected

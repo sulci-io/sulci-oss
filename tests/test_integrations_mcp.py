@@ -235,3 +235,22 @@ def test_a_reserved_default_tenant_from_the_environment_is_refused_at_build(cach
 def test_an_empty_tenant_environment_variable_means_no_tenant(cache, monkeypatch):
     monkeypatch.setenv("SULCI_MCP_TENANT_ID", "")
     build_server(cache)
+
+
+# ── oss-0051: cache_store's standalone parameter ─────────────────────────────
+def test_cache_store_standalone_stores_a_follow_up(tmp_path, fake_embedder):
+    c = Cache(backend="sqlite", db_path=str(tmp_path / "mcp-st"), embedding_model=fake_embedder, threshold=0.85,
+              telemetry=False, context_window=4)
+    server = build_server(c)
+    assert _call(server, "cache_store", query="How do I speed up slow PostgreSQL queries?", response="a",
+                 session_id="s1") == {"stored": True}
+    assert _call(server, "cache_store", query="zzz qqq how do I make it faster", response="b",
+                 session_id="s1") == {"stored": False}
+    assert _call(server, "cache_store", query="Which PostgreSQL index types exist", response="c",
+                 session_id="s1", standalone=True) == {"stored": True}
+
+
+def test_cache_store_describes_follow_ups_and_standalone(server):
+    t = _tools(server)["cache_store"]
+    assert "standalone" in t.description and "follow-up" in t.description
+    assert "standalone" in t.input_schema["properties"]   # mcp 2.x: input_schema

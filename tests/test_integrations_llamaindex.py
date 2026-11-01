@@ -375,3 +375,48 @@ def test_a_session_store_failure_is_logged_as_stored(tmp_path, fake_embedder, ca
     assert any("chat(): the conversation turn was not recorded" in m and "the entry WAS stored" in m
                for m in messages)
     assert not any("store error" in m for m in messages)
+
+
+# ── oss-0051: standalone= on complete() and chat() ────────────────────────────
+def test_standalone_stores_a_follow_up_and_is_not_forwarded_to_the_llm(tmp_path, fake_embedder):
+    import sqlite3
+    from sulci import Cache
+    seen = []
+
+    class _KwLLM(MockLLM):
+        def complete(self, prompt, formatted=False, **kwargs):
+            seen.append(sorted(kwargs))
+            return super().complete(prompt, formatted=formatted, **kwargs)
+
+        def chat(self, messages, **kwargs):
+            seen.append(sorted(kwargs))
+            return super().chat(messages, **kwargs)
+
+    llm = SulciCacheLLM(llm=_KwLLM())
+    llm._sulci_cache = Cache(backend="sqlite", db_path=str(tmp_path / "li-st"), threshold=0.85,
+                             embedding_model=fake_embedder, telemetry=False, context_window=4,
+                             context_threshold=0.85)
+    llm.complete("How do I speed up slow PostgreSQL queries?", session_id="s1")
+    llm.complete("zzz qqq how do I make it faster", session_id="s1")
+    llm.complete("Which PostgreSQL index types exist", session_id="s1", standalone=True)
+    llm.chat([ChatMessage(role=MessageRole.USER, content="qqq when to vacuum a PostgreSQL table")],
+             session_id="s1", standalone=True)
+    con = sqlite3.connect(llm._sulci_cache._backend._db_file)
+    stored = [r[0] for r in con.execute("SELECT query FROM cache ORDER BY rowid")]
+    con.close()
+    assert stored == ["How do I speed up slow PostgreSQL queries?", "Which PostgreSQL index types exist",
+                      "qqq when to vacuum a PostgreSQL table"]
+    assert all("standalone" not in kw and "session_id" not in kw for kw in seen)
+
+
+def test_streaming_does_not_forward_the_cache_s_keywords():
+    seen = []
+
+    class _KwLLM(MockLLM):
+        def stream_complete(self, prompt, formatted=False, **kwargs):
+            seen.append(sorted(kwargs))
+            return super().stream_complete(prompt, formatted=formatted, **kwargs)
+
+    llm = SulciCacheLLM(llm=_KwLLM())
+    list(llm.stream_complete("hi", session_id="s1", standalone=True, temperature=0))
+    assert seen == [["temperature"]]

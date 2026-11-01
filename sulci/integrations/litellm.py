@@ -180,6 +180,12 @@ class SulciLiteLLMCache(BaseCache):
         model = kwargs.get("model")
         return str(model) if model else None
 
+    def _standalone(self, **kwargs: Any) -> bool:
+        """oss-0051: ``metadata={"sulci_standalone": True}`` stores this call's answer even when its session already
+        holds a turn (sulci 1.1.1 stores no follow-up otherwise)."""
+        meta = kwargs.get("metadata") or {}
+        return isinstance(meta, dict) and meta.get("sulci_standalone") is True
+
     def _session(self, **kwargs: Any) -> Optional[str]:
         meta = kwargs.get("metadata") or {}
         if isinstance(meta, dict):
@@ -238,11 +244,13 @@ class SulciLiteLLMCache(BaseCache):
             logger.warning("sulci set_cache: unserialisable value: %s", exc)
             return
         try:
+            extra = {"standalone": True} if self._standalone(**kwargs) else {}   # oss-0051
             self.sulci.set(
                 prompt,
                 payload,
                 tenant_id=self._tenant(**kwargs),
                 session_id=self._session(**kwargs),
+                **extra,
             )
         except SulciSessionError as exc:
             logger.warning("sulci set_cache: the conversation turn was not recorded: %s", exc)   # says whether stored (oss-0049)

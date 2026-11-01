@@ -302,3 +302,26 @@ def test_different_prompt_does_not_hit(installed):
     _completion(MESSAGES)
     _completion([{"role": "user", "content": "zebra migration patterns"}])
     assert installed.stats()["hits"] == 0
+
+
+# ── oss-0051: metadata={"sulci_standalone": True} ─────────────────────────────
+def test_sulci_standalone_metadata_stores_a_follow_up(tmp_path, fake_embedder):
+    import sqlite3
+    cache = Cache(backend="sqlite", db_path=str(tmp_path / "ll-st"), embedding_model=fake_embedder, threshold=0.85,
+                  context_threshold=0.85, telemetry=False, context_window=4)
+    a = SulciLiteLLMCache(cache, namespace_by_model=False)
+
+    def msgs(q):
+        return [{"role": "user", "content": q}]
+
+    a.set_cache("k1", VALUE, messages=msgs("How do I speed up slow PostgreSQL queries?"),
+                metadata={"sulci_session_id": "s1"})
+    a.set_cache("k2", VALUE, messages=msgs("zzz qqq how do I make it faster"), metadata={"sulci_session_id": "s1"})
+    a.set_cache("k3", VALUE, messages=msgs("Which PostgreSQL index types exist"),
+                metadata={"sulci_session_id": "s1", "sulci_standalone": True})
+    a.set_cache("k4", VALUE, messages=msgs("qqq truthy string is not true"),
+                metadata={"sulci_session_id": "s1", "sulci_standalone": "yes"})   # only True counts
+    con = sqlite3.connect(cache._backend._db_file)
+    stored = [r[0] for r in con.execute("SELECT query FROM cache ORDER BY rowid")]
+    con.close()
+    assert stored == ["How do I speed up slow PostgreSQL queries?", "Which PostgreSQL index types exist"]

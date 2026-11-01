@@ -26,3 +26,5 @@ class SulciSessionError(RuntimeError):
 
     #: oss-0049, set by ``Cache.set`` only: whether that set wrote an entry (False for a follow-up). None elsewhere.
     stored = None
+    #: oss-0051, set by ``Cache.set`` only: why no entry was written ("context_dependent"), else None.
+    reason = None
