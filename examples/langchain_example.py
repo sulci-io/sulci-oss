@@ -22,9 +22,12 @@ Two patterns demonstrated:
   1. Stateless semantic cache — set_llm_cache(SulciCache(...)) + llm.invoke()
      Every LangChain call goes through the cache with zero code changes.
 
-  2. Context-aware semantic cache — SulciCache subclass uses llm_string as
-     session_id so prior conversation turns influence the lookup vector,
-     dramatically improving hit rates on ambiguous follow-up questions.
+  2. Context-aware semantic cache — a SulciCache subclass passes a session_id
+     (here llm_string, which identifies the MODEL CONFIG, not a conversation —
+     use a real conversation id in your app) so prior turns are blended into the
+     lookup vector. LangChain prompts usually carry their own history, so the
+     subclass stores with standalone=True (since 1.1.1 a follow-up is otherwise
+     not stored).
 """
 import os, sys, time, tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -42,9 +45,10 @@ class ContextAwareSulciCache(SulciCache):
     """
     Extends SulciCache with context-aware lookup.
 
-    By using llm_string as session_id, each unique conversation gets its own
-    context window. Sulci Cache blends prior turns into the lookup vector so
-    ambiguous follow-up questions resolve correctly within the session.
+    llm_string is used as session_id for the demo; it is the same for every
+    call to one model config, so in a real app pass a conversation id instead.
+    Sulci blends prior turns into the lookup vector; a follow-up's lookup leans
+    toward the session's earlier entries.
 
     Usage:
         cache = ContextAwareSulciCache(backend="sqlite", context_window=4)
@@ -80,8 +84,10 @@ class ContextAwareSulciCache(SulciCache):
         if not return_val:
             return
         try:
+            # standalone=True: a LangChain prompt usually carries its own history, so it stands on its own.
+            # Without it every update after the session's first would be a follow-up, not stored (1.1.1+).
             self._default_cache.set(
-                prompt, return_val[0].text, session_id=llm_string
+                prompt, return_val[0].text, session_id=llm_string, standalone=True
             )
         except Exception:
             pass
@@ -295,7 +301,7 @@ def demo_stateless():
 def demo_context_aware():
     """
     Uses llm_string as session_id so each conversation gets its own context
-    window. Ambiguous follow-up questions resolve correctly within the session.
+    window; follow-up lookups are blended with the session's earlier turns.
 
     How much this helps depends on the query mix; run it yourself rather than
     quoting a figure, and run it on the SHIPPED engine:

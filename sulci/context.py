@@ -30,6 +30,9 @@ Result
   - "How do I fix it?" after "My payment failed" → billing solutions ✓
   - Isolated "How do I fix it?" → most common standalone match ✓
   - First turn in any session → pure query embedding, zero overhead ✓
+  (found among entries stored by earlier, self-contained turns; the follow-up
+  itself is recorded, not stored, since 1.1.1. The blend is strongest one turn
+  back — several unrelated turns dilute it.)
 
 Sessions
 --------
@@ -49,7 +52,7 @@ Quick usage
         session_id="user-42",
     )
     result = cache.cached_call(
-        "How do I fix it?",       # resolved in Docker context
+        "How do I fix it?",       # looked up in Docker context; not stored (a follow-up)
         llm_fn,
         session_id="user-42",
     )

@@ -92,8 +92,9 @@ class Chat:
 
     Each call to .ask() passes the session_id so Sulci blends prior
     turns into the lookup vector.  Ambiguous follow-up queries like
-    "Can you give me an example?" correctly resolve in the context of
-    the ongoing conversation rather than matching unrelated cached entries.
+    "Can you give me an example?" are looked up blended with the ongoing
+    conversation, so they lean toward its earlier, self-contained entries.
+    A follow-up's own answer is not stored (sulci 1.1.1+).
 
     Usage:
         chat = Chat(user_id="alice")
@@ -153,6 +154,9 @@ def main():
         "How do Python decorators work?",
         "Explain the CAP theorem",
     ]:
+        # Each is a new topic: start a fresh context so it is the session's first turn and its answer is stored.
+        # (Since 1.1.1 a question after the session's first turn is a follow-up: answered, recorded, not stored.)
+        chat.new_topic()
         r = chat.ask(q)
         icon = "⚡" if r["cache_hit"] else "🌐"
         print(f"{icon} [{r['source'].upper()}] {r['latency_ms']:.0f}ms — {q}")
@@ -170,9 +174,10 @@ def main():
         sim  = f" sim={r['similarity']:.0%}" if r["cache_hit"] else ""
         print(f"{icon} [{r['source'].upper()}] {r['latency_ms']:.0f}ms{sim} — {q}")
 
-    # Round 3 — ambiguous follow-ups resolved by context
-    print("\nRound 3: Ambiguous follow-ups resolved by context")
+    # Round 3 — vague follow-ups, looked up blended with the conversation (answered, not stored: follow-ups)
+    print("\nRound 3: Vague follow-ups looked up in context")
     print("-" * 50)
+    chat.new_topic()
     chat.ask("I'm trying to understand Python decorators better")
     for q in [
         "Can you give me a simple example?",     # context → Python decorators

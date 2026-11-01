@@ -53,10 +53,11 @@ What this demonstrates:
        in the graph automatically goes through Sulci — no LangGraph-
        specific code changes needed.
 
-    2. Context-aware caching with context_window=4. The agent's session
-       state (current task) is passed as session_id, so the planner's
-       "what's next?" prompt is blended with prior turns and resolves
-       to the right cached answer based on what was just discussed.
+    2. context_window=4 is set, but LangChain's cache interface carries no
+       session_id, so the stock SulciCache used here does no context
+       blending — each prompt is matched on its own (LangGraph prompts carry
+       the agent's state). For blending, use a subclass that passes a
+       session_id (examples/langchain_example.py).
 
     3. Cumulative cost savings across repeated task executions, with
        real wall-clock timings that show the 1000×+ speedup on cache

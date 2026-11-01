@@ -61,7 +61,9 @@ seed_pairs = [
     ("My billing payment keeps failing",            fake_llm("billing payment")),
 ]
 for q, r in seed_pairs:
-    cache.set(q, r, session_id="seed")
+    # No session: these are self-contained questions. In one session the 2nd and 3rd would be follow-ups,
+    # which are recorded but not stored since 1.1.1.
+    cache.set(q, r)
 
 print(f"  Seeded {len(seed_pairs)} entries")
 
