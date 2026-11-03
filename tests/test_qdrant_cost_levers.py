@@ -285,5 +285,10 @@ class TestExistingCollectionIsNotSilentlyIgnored:
             QdrantBackend(db_path=path, on_disk=True, quantization="scalar")
             warnings.warn("some library is deprecated", DeprecationWarning)
 
-        assert len(caught) == 3
+        # Both injected warnings were recorded, so they really landed inside the block. Not `len(caught) == 3`:
+        # under "always", garbage another test left can be collected inside the block and warn too (oss-0056: the
+        # Release gate's 3.11 leg caught 5), which is the very case this test is about.
+        messages = [str(w.message) for w in caught]
+        assert "unclosed <socket.socket fd=7>" in messages
+        assert "some library is deprecated" in messages
         assert [str(w.message)[:13] for w in _own(caught)] == ["QdrantBackend"]
