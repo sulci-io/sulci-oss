@@ -18,6 +18,7 @@ from sulci import Cache
 ll = pytest.importorskip(
     "sulci.integrations.litellm",
     reason='litellm not installed; pip install "sulci[litellm]"',
+    exc_type=ImportError,   # oss-0056: the module re-raises a plain ImportError; pytest 9.1 errors without this
 )
 SulciLiteLLMCache = ll.SulciLiteLLMCache
 

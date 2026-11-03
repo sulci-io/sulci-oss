@@ -351,7 +351,7 @@ jobs:
       # the failure family §0 records four times over.
       - name: Release guard (tag vs pyproject)
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_tag_version.py -v --tb=short
+        run: pytest tests/test_tag_version.py tests/test_release_gate.py -v --tb=short
 
       # 0.10.0 (oss-0027): covers how `make release-check` reads the version
       # docs/API-SURFACE.md was measured against -- the newest measurement

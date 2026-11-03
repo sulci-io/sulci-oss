@@ -295,12 +295,12 @@ class _Runner:
     (["--backend", "sqlite", "--context-window", "0"], 0),
 ])
 def test_the_cli_entry_points_do_not_override_the_dashboard(argv, want, monkeypatch):
-    mcp_server = pytest.importorskip("sulci.integrations.mcp_server", reason="mcp extra not installed")
+    mcp_server = pytest.importorskip("sulci.integrations.mcp_server", reason="mcp extra not installed", exc_type=ImportError)
     monkeypatch.delenv("SULCI_BACKEND", raising=False)
     kw = _cli_kwargs(mcp_server.main, argv + ["--transport", "stdio"], monkeypatch, (mcp_server, "build_server"))
     assert kw["context_window"] == want
 
-    proxy_main = pytest.importorskip("sulci.proxy.__main__", reason="proxy extra not installed")
+    proxy_main = pytest.importorskip("sulci.proxy.__main__", reason="proxy extra not installed", exc_type=ImportError)
     import types
     monkeypatch.setitem(__import__("sys").modules, "uvicorn", types.SimpleNamespace(run=lambda *a, **k: None))
     import sulci.proxy.app as proxy_app
