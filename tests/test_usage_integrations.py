@@ -321,6 +321,6 @@ def test_litellm_value_without_usage_is_stored_without_counts():
 
 @pytest.mark.parametrize("value", ["not json", b"\xff\xfe", 42, None])
 def test_litellm_odd_values_never_raise(value):
+    pytest.importorskip("litellm", reason='pip install "sulci[litellm]"')   # before the import: 3.9 has no litellm
     from sulci.integrations.litellm import _usage_from_value
-    _litellm(_managed()[0])   # skips without litellm
     assert _usage_from_value(value) is None
