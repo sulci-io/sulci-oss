@@ -1,5 +1,10 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-11-03 against `sulci` **1.3.0** — `check_api_surface.py --show`, its output diffed against the
+same command at 1.2.0 (`ef8a139`, tagged `v1.2.0`; each tree importing its own source): identical, 88 lines. 1.3.0's
+additions are module functions (`sulci.llm`, `sulci._usage.accepts_usage`) and integration behaviour (the proxy's and
+LiteLLM's token counts; oss-0053), which this surface does not enumerate. The 1.2.0 measurement follows.
+
 **Measured:** 2026-11-01 against `sulci` **1.2.0** — `check_api_surface.py --show`, its output diffed against the
 same command at 1.1.1 (`5e17a75`, the oss-0050 commit tagged `v1.1.1`; each tree importing its own source): identical,
 88 lines. 1.2.0's additions are options of the integrations (`x-sulci-standalone` on `sulci-proxy`, LiteLLM's
