@@ -21,6 +21,7 @@ from sulci import Cache
 mcp_server = pytest.importorskip(
     "sulci.integrations.mcp_server",
     reason='mcp>=2.0.0 not installed; pip install "sulci[mcp]"',
+    exc_type=ImportError,   # oss-0056: the module re-raises a plain ImportError; pytest 9.1 errors without this
 )
 build_server = mcp_server.build_server
 
