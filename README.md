@@ -293,6 +293,10 @@ the managed gateway decides and the label stays `miss`). Send
 (a self-contained rewrite), and it is stored.
 On `--backend sulci` (1.0.1) the tenant header is refused with 400 — the API key is the only partition there —
 and `x-sulci-cache` reads `refused`.
+On `--backend sulci` (1.3.0) each stored reply carries the upstream response's own token counts, so your dashboard's
+Tokens Saved fills in with no code change. Streams (`bypass`) and tool-call replies (`miss-uncacheable`) are not
+stored and carry none; local backends are sent none. A hit's reply still reports zero tokens, because nothing was
+consumed upstream.
 
 ⚠️ **A cache hit is not authenticated.** Your `Authorization` header is
 forwarded upstream only on a **miss**; a hit is served from the store without
@@ -333,6 +337,9 @@ reply = litellm.completion(
 )   # now cached: the same question again is served from Sulci
 print(reply.choices[0].message.content)
 ```
+
+On `backend="sulci"` (1.3.0) every stored response carries its own token counts, so Tokens Saved fills in with no
+code change; local backends are sent none.
 
 LiteLLM has no `custom` cache type — `install()` replaces the inner
 implementation on `litellm.cache`, which is how LiteLLM's own semantic
@@ -564,6 +571,26 @@ its hits add nothing to Tokens Saved. They are sent only on `backend="sulci"`, i
 answer, and kept with that entry; a self-hosted backend accepts them and stores nothing. They are not telemetry —
 telemetry's eight fields are unchanged (below). Sulci records the counts as your app gives them, so the dashboard
 labels the figure "reported" and says how many hits it covers.
+
+**Provider helpers (1.3.0) — the counts without writing `with_usage`.** `sulci.llm` builds the LLM function for you,
+calling your own client and handing back the answer with the call's counts:
+
+```python
+from sulci import llm
+
+ask = llm.anthropic(anthropic.Anthropic(), model="claude-haiku-4-5", max_tokens=1024, system="Be brief.")
+# or: llm.openai(openai.OpenAI(), model="gpt-4o-mini")
+# or: llm.gemini(genai.Client(), model="gemini-2.5-flash")
+
+cache.cached_call("How do I deploy to AWS?", ask)
+```
+
+Every token the avoided call would have used is counted: prompt-cache reads and writes as input, reasoning and
+thinking tokens as output. The helpers take sync clients and refuse what a cache cannot hold honestly — `stream=True`
+(stream outside the cache, or `cache.set(..., usage=...)` once it ends), tool parameters (a tool call is not an
+answer), and more than one choice (`n` / `candidate_count` > 1). A reply with no text raises `sulci.llm.NoTextError`
+and nothing is cached. **`sulci-proxy` and the LiteLLM adapter send the counts by themselves** on `backend="sulci"`
+(1.3.0): no code change.
 
 See [sulci.io](https://sulci.io) for current plans. The free OSS-Connect key is
 open now; paid plans (Pro, Business) open for self-serve signup at general

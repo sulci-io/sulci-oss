@@ -432,6 +432,34 @@ method.** The section above describes 0.9.3 and is kept as the record.
 
 ---
 
+## `sulci.llm` — provider helpers, module functions (📌 oss-0053, 1.3.0)
+
+Module-level functions, outside what `check_api_surface.py` reads (as `with_usage`). Each returns a callable
+`fn(query, **params) -> str` (a `with_usage` `UsageText`) for `cached_call` / `acached_call`:
+
+| Function | Calls | Text | Counts |
+|---|---|---|---|
+| `llm.anthropic(client, model, *, max_tokens=1024, system=None, **params)` | `client.messages.create` | text blocks joined | `response.usage` |
+| `llm.openai(client, model, *, system=None, **params)` | `client.chat.completions.create` | first choice's content | `response.usage` |
+| `llm.gemini(client, model, *, system=None, config=None, **params)` | `client.models.generate_content` | `response.text` | `response.usage_metadata` |
+
+**Parameters and refusals:**
+- Helper `params` and call-time `**params` are merged into the provider call, and call-time values win.
+- `TypeError` for:
+  - `stream=True`;
+  - `tools` / `tool_choice` / `functions` / `function_call` / Anthropic `mcp_servers` / Gemini `config.tools`,
+    `config.tool_config`, `config.automatic_function_calling`;
+  - OpenAI `n` ≠ 1, Gemini `candidate_count` ≠ 1;
+  - an async client (its coroutine is closed);
+  - an empty `model`;
+  - `system` with an object (non-dict) Gemini config.
+- `sulci.llm.NoTextError(ValueError)` when the reply has no text or carries a tool / server-tool block, so nothing
+  is cached.
+
+**Usage:** a missing usage object returns the text without counts; an unreadable one warns (as `with_usage`).
+
+---
+
 ## `AsyncCache` — a complete mirror of *which* kwargs, not of *how*
 
 As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
@@ -635,6 +663,10 @@ Added 2026-08-11. `sulci.integrations.litellm`. Subclasses
 Seven public methods. Keyword-only constructor args: `namespace_by_model`
 (default `True`), `session_key` (default `"sulci_session_id"`).
 
+**Token counts (📌 oss-0053, 1.3.0).** On `backend="sulci"`, `set_cache` reads `usage` from LiteLLM's value
+(`{"timestamp", "response": <model_dump_json>}`, or a response given directly) and passes it to `Cache.set` when that
+`set` accepts `usage=`. Local backends are sent none. Unreadable counts are stored without them, warned once per adapter.
+
 **`key` is not usable for semantic lookup.** LiteLLM computes it as a hash of
 the whole request, so it changes with every prompt. The prompt itself arrives
 in `kwargs` — the same contract `RedisSemanticCache._get_prompt_from_kwargs`
@@ -660,6 +692,10 @@ undocumented-drift state these two sections exist to prevent.
 | `sulci.integrations.mcp_server.main` | `(argv=None) -> None` — console script `sulci-mcp` |
 | `sulci.proxy.build_app` | `(cache=None, *, openai_upstream, anthropic_upstream, share_across_models, timeout, client, **cache_kwargs) -> FastAPI` |
 | `sulci.proxy.__main__.main` | `(argv=None) -> None` — console script `sulci-proxy` |
+
+📌 oss-0053 (1.3.0): on `--backend sulci` the proxy passes each stored reply's upstream `usage` to `Cache.set`.
+That covers non-streaming, non-tool replies only, and only when `set` accepts `usage=`. Helpers:
+`sulci.proxy.app.usage_from_payload(payload) -> dict | None` never raises; `sulci._usage.accepts_usage(fn) -> bool`.
 
 MCP tools: `cache_lookup`, `cache_stats` (`readOnlyHint=True`), `cache_store`.
 Proxy routes: `POST /v1/chat/completions`, `POST /v1/messages`, `GET /healthz`,

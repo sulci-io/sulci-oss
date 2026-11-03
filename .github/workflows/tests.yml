@@ -335,6 +335,12 @@ jobs:
         if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
         run: pytest tests/test_proxy.py -v --tb=short
 
+      # oss-0053 (1.3.0): the proxy and LiteLLM send token counts on the managed backend. Needs fastapi + litellm,
+      # so 3.10+ like the two suites above.
+      - name: Token counts through the proxy and LiteLLM
+        if: needs.changes.outputs.code == 'true' && matrix.python-version != '3.9'
+        run: pytest tests/test_usage_integrations.py -v --tb=short
+
       # ── the release guard ────────────────────────────────────────────────
       # Covers scripts/check_tag_version.py, which gates publish.yml. It has
       # no runtime dependencies and runs on every matrix leg including 3.9.
@@ -374,7 +380,7 @@ jobs:
 
       - name: Cloud backend
         if: needs.changes.outputs.code == 'true'
-        run: pytest tests/test_cloud_backend.py tests/test_cloud_erasure.py tests/test_managed_tenant_refused.py tests/test_usage.py -v --tb=short
+        run: pytest tests/test_cloud_backend.py tests/test_cloud_erasure.py tests/test_managed_tenant_refused.py tests/test_usage.py tests/test_llm_helpers.py -v --tb=short
 
       - name: Attribution, nudge, thresholds, session-store injection
         if: needs.changes.outputs.code == 'true'

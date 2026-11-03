@@ -45,6 +45,7 @@ nothing for it. A gateway that predates the field ignores it.
 
 from __future__ import annotations
 
+import inspect
 import warnings
 from collections.abc import Mapping
 from typing import Any, Optional
@@ -92,6 +93,24 @@ def checked_usage(usage: Any) -> Optional[dict]:
             if v is not None:
                 return n, v
         return None, None
+
+    # oss-0053: Anthropic's multi-iteration replies (server-side compaction, beta) report each iteration under
+    # ``iterations``; the top-level counts then cover only part of the call. Sum the iterations, as LiteLLM's own
+    # Anthropic transform does — every token the call used.
+    iterations = _read(usage, "iterations")
+    if isinstance(iterations, (list, tuple)) and iterations:
+        total_in = total_out = 0
+        for it in iterations:
+            for name in ("input_tokens",) + _INPUT_EXTRA_NAMES:
+                v = _read(it, name)
+                if v is not None:
+                    total_in += _count(v, f"iterations[].{name}")
+            v = _read(it, "output_tokens")
+            if v is not None:
+                total_out += _count(v, "iterations[].output_tokens")
+        if total_in > MAX_TOKENS or total_out > MAX_TOKENS:
+            raise ValueError(f"usage tokens must be between 0 and {MAX_TOKENS}")
+        return {"input_tokens": total_in, "output_tokens": total_out}
 
     in_name, in_value = first(_INPUT_NAMES)
     out_name, out_value = first(_OUTPUT_NAMES)
@@ -182,3 +201,16 @@ def usage_of(response: Any) -> Optional[dict]:
 def plain_text(response: Any) -> Any:
     """A :class:`UsageText` as a plain ``str``; anything else unchanged."""
     return str.__str__(response) if isinstance(response, UsageText) else response
+
+
+def accepts_usage(fn: Any) -> bool:
+    """oss-0053: whether a ``set`` callable takes ``usage=`` (by name or ``**kwargs``). ``Cache.set`` does; a subclass
+    override or an instance-wrapped ``set`` written before 1.1.0 may not, and an integration must keep storing
+    answers there rather than fail on a keyword it added."""
+    try:
+        # follow_wrapped=False: a @functools.wraps(Cache.set) wrapper reports Cache.set's signature otherwise, and
+        # calling it with usage= then raises inside the integration's store (review, oss-0053).
+        params = inspect.signature(fn, follow_wrapped=False).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(p.name == "usage" or p.kind is inspect.Parameter.VAR_KEYWORD for p in params)

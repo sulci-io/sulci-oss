@@ -41,6 +41,17 @@ Install:
     custom type, switch to it; until then this is the supported shape and it
     is the one their own semantic caches are wired through.
 
+Token counts (1.3.0, oss-0053): on the managed backend (``backend="sulci"``)
+    every stored response carries its own ``usage`` — LiteLLM normalises every
+    provider to OpenAI's ``prompt_tokens`` / ``completion_tokens`` — so each
+    later hit is credited to the dashboard's Tokens Saved. The whole call's
+    counts: a hit avoids the whole call. Not sent for a streamed call:
+    LiteLLM caches the assembled stream, and when the provider sent no usage
+    in its chunks LiteLLM estimates the counts — never guessed here. Not sent
+    for more than one choice (``n`` > 1), nor for embeddings (LiteLLM caches
+    those without a ``usage``). A response whose counts cannot be read is
+    stored without them. Local backends are sent none (they store no counts).
+
 ⚠️  The `key` argument LiteLLM passes to `get_cache`/`set_cache` is a hash of
     the whole request, so it is useless as a semantic lookup. The prompt
     arrives in `kwargs["messages"]` (chat) or `kwargs["input"]` (Responses
@@ -68,9 +79,25 @@ except ImportError as _ll_err:  # pragma: no cover
     ) from _ll_err
 
 from sulci import Cache
+from sulci._usage import accepts_usage, checked_usage
 from sulci.sessions.errors import SulciSessionError
 
 __all__ = ["SulciLiteLLMCache", "install"]
+
+
+def _usage_from_value(value: Any) -> Any:
+    """oss-0053: the raw usage object inside what LiteLLM hands ``set_cache`` — ``{"timestamp", "response"}`` with
+    the response as a JSON string (``model_dump_json``) or a dict — or a response given directly. None if none."""
+    if isinstance(value, dict) and "response" in value:
+        value = value["response"]
+    if isinstance(value, (bytes, str)):
+        try:
+            value = json.loads(value)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+    if isinstance(value, dict):
+        return value.get("usage")
+    return getattr(value, "usage", None)
 
 
 def _prompt_from_kwargs(**kwargs: Any) -> Optional[str]:
@@ -172,6 +199,7 @@ class SulciLiteLLMCache(BaseCache):
             namespace_by_model = False
         self.namespace_by_model = namespace_by_model
         self.session_key = session_key
+        self._usage_warned = False   # oss-0053: say once that counts could not be read, not on every set
 
     # ── helpers ──────────────────────────────────────────────────────────
     def _tenant(self, **kwargs: Any) -> Optional[str]:
@@ -193,6 +221,25 @@ class SulciLiteLLMCache(BaseCache):
             if sid:
                 return str(sid)
         return None
+
+    def _usage(self, value: Any, **kwargs: Any) -> Optional[dict]:
+        """oss-0053: the response's token counts, checked, on the managed backend only — else None. Never raises:
+        the response has been paid for, and it is stored whether or not its counts are. None for a streamed call
+        (LiteLLM may have estimated its counts) and for more than one choice (one is served on a hit)."""
+        if not getattr(self.sulci, "_is_remote_transport", False):
+            return None
+        if kwargs.get("stream") or kwargs.get("n") not in (None, 1):
+            return None
+        raw = _usage_from_value(value)
+        if raw is None:
+            return None
+        try:
+            return checked_usage(raw)
+        except (TypeError, ValueError) as exc:
+            if not self._usage_warned:
+                self._usage_warned = True
+                logger.warning("sulci set_cache: token counts not recorded (stored without them): %s", exc)
+            return None
 
     @staticmethod
     def _decode(stored: Any) -> Any:
@@ -245,6 +292,9 @@ class SulciLiteLLMCache(BaseCache):
             return
         try:
             extra = {"standalone": True} if self._standalone(**kwargs) else {}   # oss-0051
+            usage = self._usage(value, **kwargs)   # oss-0053
+            if usage is not None and accepts_usage(self.sulci.set):
+                extra["usage"] = usage
             self.sulci.set(
                 prompt,
                 payload,
