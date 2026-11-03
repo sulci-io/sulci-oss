@@ -8,6 +8,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-11-03 — Token counts without writing `with_usage`: provider helpers, and the proxy and LiteLLM send them
+
+One addition, below (oss-0053, #190):
+- `sulci.llm`'s provider helpers return an answer carrying its token counts;
+- `sulci-proxy` and `SulciLiteLLMCache` send each stored reply's counts on the managed backend, with no code change.
+
+So the Sulci Cloud dashboard's Tokens Saved fills in without hand-written `with_usage`. Every token the avoided call
+would have used is counted. Streams, tool calls and extra choices are never credited with a guess. Additive: nothing
+that worked on 1.2.0 changes (docs/API-SURFACE.md: the measured surface is identical). One behaviour to know:
+Anthropic `usage.iterations`, where present, is now summed, so `with_usage` and `set(usage=)` credit a multi-iteration
+reply with all its tokens rather than the top-level part.
+
 ### Added — token counts without writing `with_usage` (oss-0053, #190)
 
 - **`sulci.llm`: provider helpers.** `llm.anthropic(client, model, *, max_tokens=1024, system=None, **params)`,
