@@ -8,6 +8,51 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — token counts without writing `with_usage` (oss-0053, #190)
+
+- **`sulci.llm`: provider helpers.** `llm.anthropic(client, model, *, max_tokens=1024, system=None, **params)`,
+  `llm.openai(client, model, *, system=None, **params)` and `llm.gemini(client, model, *, system=None, config=None,
+  **params)` return a `cached_call`-ready function that calls your own sync client and returns
+  `with_usage(text, usage)`. So every entry they produce is credited to the managed dashboard's Tokens Saved, and
+  `cached_call` still returns plain text. Every token the avoided call would have used is counted (owner,
+  2026-11-03): prompt-cache input as input, reasoning and thinking tokens as output. Refused, with the reason in the
+  message:
+  - `stream=True`: a stream's counts are never guessed (owner);
+  - tool parameters, including Anthropic `mcp_servers` and Gemini `config.tools` /
+    `config.automatic_function_calling`: a tool call is not an answer, and a tool loop's answer comes from several
+    calls whose counts one response doesn't carry;
+  - `n` / `candidate_count` > 1: one answer is cached, and its counts would include choices nobody receives again;
+  - async clients (the coroutine is closed).
+
+  A reply with no text, or one carrying a tool or server-tool block, raises `sulci.llm.NoTextError` (a
+  `ValueError`), and nothing is cached. No provider SDK is imported by `sulci.llm`.
+- **`sulci-proxy` sends the counts on `--backend sulci`.** A stored reply carries the upstream response's `usage`:
+  OpenAI `prompt_tokens` / `completion_tokens`, or Anthropic `input_tokens` plus the prompt-cache counts /
+  `output_tokens`. These are the whole call's counts, because a hit avoids the whole call. Not sent:
+  - for streams (passed through uncached) or tool-call replies (never stored);
+  - for more than one choice (`n` > 1): one is cached and served, so the call's counts would over-credit every hit;
+  - to local backends (they store no counts; self-hosted Tokens Saved is sulci-platform #822);
+  - when the counts can't be read (the reply is stored without them, with a warning).
+
+  A subclass or instance-wrapped `set` that doesn't take `usage=` still stores, without counts.
+- **`SulciLiteLLMCache` sends the counts on `backend="sulci"`.** They come from the response LiteLLM hands
+  `set_cache`. LiteLLM normalises every provider to `prompt_tokens` / `completion_tokens`, with Anthropic's
+  prompt-cache tokens already inside `prompt_tokens`, so they are counted once. Not sent for a streamed call
+  (LiteLLM caches the assembled stream, and estimates its counts when the provider sent none), for `n` > 1, or for
+  embeddings (cached by LiteLLM without a `usage`). Counts that can't be read are stored without them, warned once
+  per adapter.
+- **Anthropic `usage.iterations` is summed** (`sulci._usage`, so `with_usage` and `set(usage=)` too). A
+  multi-iteration reply (server-side compaction, beta) reports each iteration there, and its top-level counts cover
+  only part of the call. Input is the sum of each iteration's `input_tokens` plus both prompt-cache counts; output is
+  the sum of its `output_tokens`, as LiteLLM's Anthropic transform does.
+- `sulci._usage.accepts_usage(fn)`: whether a `set` takes `usage=`, shared by both integrations. It reads the
+  wrapper's own signature (`follow_wrapped=False`), so a `functools.wraps(Cache.set)` wrapper with a narrower
+  signature keeps storing, without counts.
+- Independent review before cut: no blockers; its eight findings are all addressed. One is a documentation change
+  only: a reply cut short by `max_tokens` or a content filter is cached as it is, as the proxy does.
+- Not changed: telemetry's eight fields; the gateway (it has accepted `usage` since sulci-platform 0325); the hit
+  envelope's zero usage; `sulci-mcp` (an agent's `cache_store` has no provider response to read counts from).
+
 ## [1.2.0] — 2026-11-01 — `standalone` through the proxy and integrations; the proxy keeps its headers to itself
 
 A minor release: new options in `sulci-proxy`, LiteLLM, LlamaIndex and MCP (below), one privacy fix, and one visible

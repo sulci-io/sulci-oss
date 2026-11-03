@@ -49,7 +49,15 @@ DESIGN DECISIONS, so they are not re-litigated
    Treat read access to the proxy as equivalent to read access to the cache
    contents. Do not bind it to 0.0.0.0 on a shared network without putting
    your own authentication in front of it.
-5. **The cache key includes the model** unless ``--share-across-models``.
+5. **Token counts on the managed backend (1.3.0, oss-0053).** On ``--backend sulci`` a stored reply carries the
+   upstream response's own ``usage`` (OpenAI ``prompt_tokens`` / ``completion_tokens``, Anthropic ``input_tokens``
+   plus prompt-cache counts / ``output_tokens``), so every later hit on it is credited to the dashboard's Tokens
+   Saved — the whole call's counts, because a hit avoids the whole call. Streams pass through uncached and carry
+   none (decision 1); tool-call replies are never stored (decision 3); a reply with more than one choice (``n`` > 1)
+   is stored without counts — one choice is cached, so the call's counts would over-credit every hit; a reply whose
+   ``usage`` cannot be read is stored without counts. Local backends are sent none: they store no counts (self-hosted Tokens Saved would be a
+   telemetry change — sulci-platform #822).
+6. **The cache key includes the model** unless ``--share-across-models``.
    1.0.1: not on the managed backend (``--backend sulci``), whose only partition is the API key — there the proxy
    shares across models (with a warning) and answers ``x-sulci-tenant-id`` with 400.
 
@@ -82,6 +90,7 @@ except ImportError as _px_err:  # pragma: no cover
     ) from _px_err
 
 from sulci import Cache
+from sulci._usage import accepts_usage, checked_usage
 from sulci.sessions.errors import SulciSessionError
 
 __all__ = ["build_app", "extract_prompt", "is_cacheable_response"]
@@ -104,6 +113,22 @@ _STRIP_REQUEST_HEADERS = {"host", "content-length", "accept-encoding"}
 _STRIP_REQUEST_PREFIX = "x-sulci-"
 # oss-0051: why a miss was not cached, from Cache._set's reason (self-hosted only; the managed transport does not say).
 _SKIP_LABELS = {"context_dependent": "miss-followup", "session_unavailable": "miss-session-unavailable"}
+
+
+def usage_from_payload(payload: Any) -> Optional[dict]:
+    """oss-0053: the upstream response's own token counts, checked — or None when it has none or they cannot be
+    read. Never raises: by now the call has been paid for, and the reply is stored whether or not its counts are."""
+    if not isinstance(payload, dict):
+        return None
+    raw = payload.get("usage")
+    if raw is None:
+        return None
+    try:
+        return checked_usage(raw)
+    except (TypeError, ValueError) as exc:
+        logger.warning("sulci-proxy: the reply's token counts were not recorded: %s", exc)
+        return None
+
 
 
 # ── payload helpers ──────────────────────────────────────────────────────
@@ -395,6 +420,13 @@ def build_app(
                         kw = {"standalone": True} if _standalone(request) else {}
                         plain = (type(sulci_cache).set is Cache.set and "set" not in vars(sulci_cache)
                                  and hasattr(sulci_cache, "_set"))
+                        # oss-0053: the managed backend only (design decision 5). Not for more than one choice:
+                        # one is cached and a hit serves one, so the whole call's counts would over-credit it.
+                        one_choice = (body.get("n") in (None, 1)
+                                      and len(payload.get("choices") or [None]) <= 1)
+                        usage = usage_from_payload(payload) if managed and one_choice else None
+                        if usage is not None and (plain or accepts_usage(sulci_cache.set)):
+                            kw["usage"] = usage
                         if plain:
                             _stored, reason = sulci_cache._set(
                                 prompt, text, tenant_id=tenant, session_id=session, with_reason=True, **kw
