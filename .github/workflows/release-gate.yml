@@ -21,7 +21,9 @@ permissions:
 jobs:
   test:
     name: publish.yml's tests (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, not ubuntu-latest (oss-0059): ubuntu-latest became Ubuntu 26.04, where
+    # actions/setup-python has no Python 3.9 (sulci-web's checks failed on it 2026-11-04).
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     strategy:
       fail-fast: false

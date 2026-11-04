@@ -158,7 +158,9 @@ jobs:
     # Read it as: `code == 'true' ? matrix.os : 'ubuntu-latest'`. GitHub has no
     # ternary, so `&&`/`||` is the idiom — safe here because matrix.os is
     # always a non-empty string and can never be falsy.
-    runs-on: ${{ needs.changes.outputs.code == 'true' && matrix.os || 'ubuntu-latest' }}
+    # oss-0059: the matrix value stays `ubuntu-latest` so the required check names do not change; runs-on maps
+    # it to ubuntu-24.04, because ubuntu-latest became Ubuntu 26.04, where actions/setup-python has no 3.9.
+    runs-on: ${{ needs.changes.outputs.code == 'true' && (matrix.os == 'ubuntu-latest' && 'ubuntu-24.04' || matrix.os) || 'ubuntu-24.04' }}
 
     # Measured 2026-08-19: an apt-get failover to archive.ubuntu.com stalled
     # on three ubuntu legs of run 32270792542 and GitHub's 360-minute ceiling
@@ -413,7 +415,9 @@ jobs:
   # job exists to make the first one unambiguous. See #149.
   install-all:
     name: sulci[all] resolves (${{ matrix.python-version }})
-    runs-on: ubuntu-latest
+    # ubuntu-24.04, not ubuntu-latest (oss-0059): ubuntu-latest became Ubuntu 26.04, where
+    # actions/setup-python has no Python 3.9 (sulci-web's checks failed on it 2026-11-04).
+    runs-on: ubuntu-24.04
     needs: changes
     timeout-minutes: 15
     strategy:
