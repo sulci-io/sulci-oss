@@ -8,6 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-11-04 — Documentation: the configuration defaults the README and docstrings state
+
+A documentation release, so the README and docstrings shown on PyPI say what 1.3.0 already does: unset
+`context_window` is `None` (an explicit `0` on `backend="sulci"` turns off the account's default window of 2), and
+the Sulci Cloud fallbacks are stated (oss-0057, below). No code change: the measured API surface is identical to
+1.3.0's (docs/API-SURFACE.md).
+
 ### Documentation
 
 - **Configuration defaults corrected against 1.3.0 (oss-0057).** README: the "Every parameter, at its default" block
