@@ -527,7 +527,8 @@ On `backend="sulci"`, leave `threshold` out to use the threshold saved in your d
 passed to the constructor or per call, 0.85 included, is sent with every lookup and overrides it.
 
 On `backend="sulci"`, `context_window` works the same way (0.10.2): a window you pass, `Cache(backend="sulci",
-context_window=2)`, is sent with every lookup; leave it out to use the Context window saved in your dashboard. The
+context_window=2)`, is sent with every lookup; leave it out to use the Context window saved in your dashboard. With
+nothing saved, the gateway's defaults apply: threshold 0.65, context window 2, context threshold 0.80. The
 managed backend also treats a set in a session that already holds a turn as a follow-up: it records the turn but
 stores no entry, because words like "how do I fix it?" mean something only in their conversation. Pass
 `standalone=True` when the query stands on its own — a self-contained rewrite of the follow-up, or an agent prompt
@@ -777,7 +778,10 @@ A blended vector scores lower against stored entries than an exact-match lookup,
 so with `context_threshold` unset, context lookups are compared against
 `threshold` and Sulci emits a `UserWarning` saying so. Set `context_threshold=`
 to a value calibrated on your own follow-up queries; sulci ships no default
-because no measurement supports one. See
+because no measurement supports one. That is the self-hosted behaviour: on
+`backend="sulci"` an unset value sends none, and the gateway uses the call's
+`threshold` if it sent one, else your tenant's Context threshold (default
+0.80), with no warning. See
 [`docs/context-threshold.md`](docs/context-threshold.md).
 
 ### Drop-in with `cached_call`
@@ -830,36 +834,35 @@ from sulci import Cache
 
 cache = Cache(
     backend         = "chroma",     # chroma | sqlite | faiss | qdrant | redis | milvus | sulci
-    threshold       = None,         # cosine similarity cutoff (0–1); None = 0.85 on a local backend, your dashboard's setting on "sulci" (0.10.1)
+    threshold       = None,         # cosine similarity cutoff (0–1); None = 0.85 on a local backend; on "sulci" none is sent: your dashboard setting, else 0.65
     embedding_model = "minilm",     # minilm | mpnet | bge | openai
-    ttl_seconds     = 86400,        # 24h. None = no expiry
+    ttl_seconds     = 86400,        # 24h. None or 0 = no expiry. On "sulci" sent but not honoured: every entry lives 24 h
     personalized    = False,        # scope lookups to the user_id passed on get/set
     db_path         = "./sulci_db", # on-disk path for sqlite / faiss
-    context_window  = 0,            # turns to remember; 0 = stateless
-                                    # 0.10.2: the default is None (reads as 0); on "sulci", your dashboard's setting
+    context_window  = None,         # turns to remember; None or 0 = stateless locally, unless you pass session_store=, which blends the last 6 turns; on "sulci" none is sent: your dashboard setting, else 2
     query_weight    = 0.70,         # α in blending formula
     context_decay   = 0.50,         # per-turn decay weight
-    session_ttl     = 3600,         # session expiry in seconds
+    session_ttl     = 3600,         # idle expiry of the built-in session store; ignored with session_store= and on "sulci" (sessions end 1 h after the last turn, last 20 turns kept)
     telemetry       = True,         # set False to disable per-instance
     api_key         = None,         # required when backend="sulci"; also SULCI_API_KEY
     gateway_url     = "",           # cloud gateway override; also SULCI_GATEWAY (v0.7.4)
     session_store   = None,         # custom SessionStore implementation
     event_sink      = None,         # custom EventSink implementation
     cost_per_call   = 0.005,        # $ per LLM call, for saved-cost stats
-    context_threshold = None,       # threshold for context-blended lookups; None = use threshold (warns)
+    context_threshold = None,       # blended lookups. None: locally use threshold (warns); on "sulci" the call's threshold if sent, else your dashboard's Context threshold, else 0.80
 )
 ```
 
-📌 0.10.2: on `backend="sulci"`, writing `context_window = 0` as above now sends 0 (stateless) and overrides your
-dashboard's Context window; leave the parameter out to use the dashboard's setting.
+📌 0.10.2: on `backend="sulci"`, `context_window = 0` sends 0 (stateless) and overrides your dashboard's Context
+window (default 2); leave it unset (`None`, as above) to use the dashboard's setting.
 
 ### Methods
 
 | Method                                                                                 | Returns                   | Description                                                        |
 | -------------------------------------------------------------------------------------- | ------------------------- | ------------------------------------------------------------------ |
-| `cache.get(query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None)`                   | `(str\|None, float, int)` | response, similarity, context_depth (tenant_id added in v0.4.0; plan added in v0.5.6) |
-| `cache.set(query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None, usage=None)` | `None`                    | Store entry, advance context window (plan added in v0.5.6; usage — the LLM call's token counts — added in 1.1.0) |
-| `cache.cached_call(query, llm_fn, *, threshold=None, tenant_id=None, user_id=None, session_id=None, cost_per_call=None, plan=None)` | `dict`        | response, source, similarity, latency_ms, cache_hit, context_depth (plan added in v0.5.6) |
+| `cache.get(query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None, context_threshold=None)` | `(str\|None, float, int)` | response, similarity, context_depth (tenant_id added in v0.4.0; plan added in v0.5.6; context_threshold added in 0.10.2) |
+| `cache.set(query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None, standalone=False, usage=None)` | `None`                    | Store entry, advance context window (plan added in v0.5.6; standalone added in 0.10.2; usage — the LLM call's token counts — added in 1.1.0) |
+| `cache.cached_call(query, llm_fn, *, threshold=None, tenant_id=None, user_id=None, session_id=None, cost_per_call=None, plan=None, standalone=False, context_threshold=None, **llm_kwargs)` | `dict`        | response, source, similarity, latency_ms, cache_hit, context_depth (plan added in v0.5.6; standalone and context_threshold added in 0.10.2; `**llm_kwargs` go to `llm_fn`) |
 | `cache.get_context(session_id, *, tenant_id=None, user_id=None)`                       | `ContextWindow`           | Return session's context window                                    |
 | `cache.clear_context(session_id, *, tenant_id=None, user_id=None)`                     | `None`                    | Reset session history                                              |
 | `cache.context_summary(session_id=None, *, tenant_id=None, user_id=None)`              | `dict`                    | Snapshot of one or all sessions                                    |
@@ -875,7 +878,7 @@ dashboard's Context window; leave the parameter out to use the dashboard's setti
 > `tenant_id` or `user_id` but no `session_id` raises `TypeError`.
 
 **That is the whole public surface — nine methods.** The constructor defaults and method signatures above match an
-AST measurement of `sulci/core.py` at 0.10.1 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
+AST measurement of `sulci/core.py` at 1.3.0, re-measured 2026-11-03 (`python3 scripts/check_api_surface.py --show`), not memory. Re-run it
 before trusting any restatement of this table found elsewhere; the full measured surface is in
 [`docs/API-SURFACE.md`](docs/API-SURFACE.md).
 

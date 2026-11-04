@@ -329,7 +329,7 @@ class Cache:
                          "chroma" | "qdrant" | "faiss" | "redis" | "sqlite" | "milvus"
         threshold:       Cosine similarity threshold (0.0–1.0). ``None`` (default, 0.10.1): 0.85
                          (``DEFAULT_THRESHOLD``) on a local backend; on the managed backend
-                         nothing is sent and the tenant's dashboard setting applies.
+                         nothing is sent and the tenant's dashboard setting applies (default 0.65).
         context_threshold:
                          Cosine similarity threshold applied ONLY to lookups
                          that actually blended prior turns (context_depth > 0).
@@ -341,9 +341,15 @@ class Cache:
                          it looks. **No default ships and no value is
                          recommended**: calibrate it against your own held-out
                          follow-ups. See docs/context-threshold.md.
+                         That is the self-hosted behaviour. On backend="sulci"
+                         an unset value sends none; the gateway uses the call's
+                         threshold if sent, else the tenant's context threshold
+                         (default 0.80).
         embedding_model: Local: "minilm" (default), "mpnet", "bge"
                          API:   "openai" (requires OPENAI_API_KEY)
-        ttl_seconds:     Cache entry time-to-live. None = no expiry.
+        ttl_seconds:     Cache entry time-to-live. None (or 0) = no expiry.
+                         On backend="sulci" it is sent but not honoured:
+                         every entry lives 24 h.
         personalized:    Scope lookups to the user_id passed on get/set/
                          cached_call. A call without user_id is unscoped.
                          0.10.0: per-user erasure (delete_user) needs it —
@@ -351,18 +357,22 @@ class Cache:
                          are filed under no user, and delete_user refuses.
         db_path:         Local storage path (ChromaDB, SQLite, FAISS).
         context_window:  Number of recent turns to remember per session.
-                         0  = stateless (default, original behaviour).
-                         4–8 is recommended for conversational apps.
+                         None (default) = 0, stateless, on a local backend
+                         (with a session_store=, 6 turns). 4–8 is recommended
+                         for conversational apps.
                          0.10.2: on backend="sulci", a window you set is sent
                          with every lookup (the gateway accepts 0–20); left
-                         out (None), none is sent and your dashboard's
-                         Context window setting applies.
+                         out (None), none is sent and the tenant's Context
+                         window setting applies (default 2).
         query_weight:    Current query's weight vs blended history (0.0–1.0).
                          0.70 = query dominates, context nudges direction.
         context_decay:   Exponential decay per turn (older → less weight).
                          0.5 = each older turn contributes half as much.
         session_ttl:     Seconds of inactivity before a session is evicted.
                          None = sessions live forever (not recommended).
+                         Built-in session store only: a session_store= keeps
+                         its own expiry, and on backend="sulci" sessions end
+                         1 h after their last turn (last 20 turns kept).
     """
 
     threshold = _InstanceThreshold()   # 0.10.1: None = not set by the caller (see _InstanceThreshold)

@@ -151,22 +151,22 @@ from sulci import Cache
 
 cache = Cache(
     backend         = "chroma",    # chroma|sqlite|faiss|qdrant|redis|milvus|sulci
-    threshold       = None,        # 0.10.1: 0.85 locally; on "sulci", the tenant's setting
+    threshold       = None,        # 0.10.1: 0.85 locally; on "sulci", the tenant's setting (else 0.65)
     embedding_model = "minilm",    # minilm|mpnet|bge|openai
-    ttl_seconds     = 86400,       # 24h — entries DO expire by default
+    ttl_seconds     = 86400,       # 24h — entries DO expire by default; on "sulci" sent, not honoured (24 h)
     personalized    = False,
     db_path         = "./sulci_db",
-    context_window  = None,        # 0.10.2: reads as 0; on "sulci", the tenant's setting
+    context_window  = None,        # 0.10.2: reads as 0; on "sulci", the tenant's setting (else 2)
     query_weight    = 0.7,
     context_decay   = 0.5,
-    session_ttl     = 3600,
+    session_ttl     = 3600,        # built-in session store only; on "sulci" sessions end 1 h after the last turn
     telemetry       = True,
     api_key         = None,        # also SULCI_API_KEY
     gateway_url     = "",          # empty; resolved downstream, not defaulted here
     session_store   = None,
     event_sink      = None,
     cost_per_call   = 0.005,
-    context_threshold = None,   # blended lookups only; None = use `threshold`
+    context_threshold = None,   # blended lookups only; None = use `threshold` locally; on "sulci": the call's threshold, else tenant setting, else 0.80
 )
 ```
 
