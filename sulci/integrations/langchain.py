@@ -102,9 +102,11 @@ class SulciCache(BaseCache):
             All remaining arguments are forwarded to ``sulci.Cache``::
 
                 backend         "sqlite"|"chroma"|"qdrant"|"faiss"|
-                                "redis"|"milvus"|"sulci"  (default "sqlite")
+                                "redis"|"milvus"|"sulci"  (default "chroma",
+                                sulci.Cache's; name the one you installed)
                 threshold       Cosine similarity cutoff 0–1  (default: 0.85
-                                locally; the tenant's setting on "sulci")
+                                locally; the tenant's setting on "sulci",
+                                else 0.65)
                 embedding_model "minilm"|"mpnet"|"bge"|"openai"
                 ttl_seconds     Entry lifetime in seconds (None = no expiry)
                 context_window  No effect with the stock lookup (warns);

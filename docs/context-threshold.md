@@ -4,8 +4,8 @@
 
 | parameter | applies to | default |
 |---|---|---|
-| `threshold` | every lookup that did not blend (`context_depth == 0`) | `None` — 0.85 on a local backend; on `backend="sulci"` nothing is sent and the tenant's dashboard setting applies (0.10.1) |
-| `context_threshold` | lookups that actually blended (`context_depth > 0`) | unset — falls back to `threshold` |
+| `threshold` | every lookup that did not blend (`context_depth == 0`) | `None` — 0.85 on a local backend; on `backend="sulci"` nothing is sent and the tenant's dashboard setting applies, else 0.65 (0.10.1) |
+| `context_threshold` | lookups that actually blended (`context_depth > 0`) | unset — locally falls back to `threshold`; on `backend="sulci"` the gateway uses the call's `threshold` if sent, else the tenant's setting, else 0.80 |
 
 ## Why two
 
@@ -34,9 +34,10 @@ defect this parameter exists to fix rather than a version of the fix.
 
 ## Precedence
 
-1. An explicit `threshold=` on the call. A caller who names a number gets it.
-2. `context_threshold`, when the lookup blended and the value is set.
-3. `threshold`.
+1. A per-call `context_threshold=`, when the lookup blended (0.10.2).
+2. A per-call `threshold=`. A caller who names a number gets it.
+3. `Cache.context_threshold`, when the lookup blended and the value is set.
+4. `Cache.threshold` (`None` → 0.85).
 
 Whichever wins is the number used for the backend search, the telemetry
 payload, **and** the emitted `CacheEvent`. That is deliberate: `Cache.get`'s
@@ -68,26 +69,20 @@ recoverable from the follow-up's own text.
 
 ## Remote transport
 
-`context_threshold` is a self-hosted parameter. On the cloud transport
-(`backend="sulci"`) the gateway performs the blending, so a value set here has no
-effect; `Cache.get` warns once rather than accepting it silently.
+On the cloud transport (`backend="sulci"`) the gateway performs the blending and
+applies the thresholds; the SDK sends what you set (0.10.2, oss-0037; read from
+`sulci/core.py` `_get` and `sulci/backends/cloud.py` `remote_get`).
 
-What the gateway does compare against (0.10.1, read from
-`sulci/backends/cloud.py` `remote_get` and the platform's cache route): the SDK
-sends a threshold only when the caller set one — the per-call value, else the
-`Cache`'s `threshold`; with neither, it sends none and the gateway applies the
-tenant's own setting. The gateway uses that one number for every lookup, blended
-or not, so a blended lookup on the managed tier has no separate threshold. How much history the gateway blends is its
-`context_window` (the tenant setting; 0, the default, is stateless); the Python
-SDK does not send one.
-
-📌 2026-10-19 (0.10.2, oss-0037): the Python SDK now sends `context_window` when the caller set one — at
-construction or by assignment — and the gateway prefers it over the tenant's setting; left unset, none is sent and
-the tenant's setting applies. It also sends `context_threshold` — `get(..., context_threshold=)` per call, else
-`Cache(context_threshold=)` — and from sulci-platform 0248 the gateway applies a separate threshold to lookups that
-blended: the request's, else the tenant's (default 0.80, measured in sulci-platform `benchmark/context_e`). The
-library itself gained the per-call `context_threshold` the gateway uses; the instance parameter above is unchanged.
-This supersedes two statements above: the precedence list now has a per-call `context_threshold` first — for a
-lookup that blended it wins over an explicit `threshold=`, which still wins over the instance `context_threshold` — and
-on the cloud transport `context_threshold` is sent rather than ignored (no warning on a transport that declares it
-accepts it). Sent with the same precedence: the instance value is not sent when a per-call `threshold` is given.
+- **`context_threshold`** is sent when set, with the precedence above: the
+  per-call value, else `Cache(context_threshold=)` — but the instance value only
+  when the call passes no `threshold`. Unset, none is sent, and for a lookup that
+  blended the gateway uses the call's `threshold` if it sent one, else the
+  tenant's Context threshold (default 0.80, measured in sulci-platform
+  `benchmark/context_e`; sulci-platform 0248). No warning on a transport that
+  declares it accepts the value (`ACCEPTS_CONTEXT_THRESHOLD`); a custom transport
+  that does not is not sent it, and `Cache.get` warns once.
+- **`threshold`** is sent only when set — per call, else `Cache(threshold=)`;
+  unset, the tenant's Threshold applies (default 0.65).
+- **`context_window`** — how much history the gateway blends — is sent when set
+  at construction or by assignment (`0` included, which turns blending off);
+  unset, the tenant's Context window applies (default 2, at most 20).

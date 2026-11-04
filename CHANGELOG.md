@@ -8,6 +8,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- **Configuration defaults corrected against 1.3.0 (oss-0057).** README: the "Every parameter, at its default" block
+  now reads `context_window = None` (was `0`, which on `backend="sulci"` sends 0 and turns off the tenant's default
+  window of 2); the methods table gains `get(context_threshold=)`, `set(standalone=)` and
+  `cached_call(standalone=, context_threshold=, **llm_kwargs)`, and its "measured at" sentence says 1.3.0. The
+  constructor comments, the `Cache` docstring and `docs/API-SURFACE.md` now give the Sulci Cloud fallbacks
+  (threshold 0.65, context window 2, context threshold 0.80), say `ttl_seconds` is sent but not honoured there
+  (entries live 24 h), and that `session_ttl` applies only to the built-in session store (Sulci Cloud: 1 h after
+  the last turn, last 20 turns). `docs/context-threshold.md`: the precedence list puts a per-call
+  `context_threshold` first, and the *Remote transport* section, which still said the value had no effect on the
+  cloud and that the tenant window defaulted to 0, now describes 0.10.2's behaviour. The LangChain and LlamaIndex
+  adapter docstrings named `"sqlite"` as the default backend; it is `"chroma"`. No code change.
+
 ## [1.3.0] — 2026-11-03 — Token counts without writing `with_usage`: provider helpers, and the proxy and LiteLLM send them
 
 One addition, below (oss-0053, #190):

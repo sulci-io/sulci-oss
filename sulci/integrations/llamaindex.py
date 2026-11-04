@@ -140,12 +140,13 @@ class SulciCacheLLM(LLM):
         backend (str):
             Sulci backend — ``"sqlite"`` | ``"chroma"`` | ``"qdrant"`` |
             ``"faiss"`` | ``"redis"`` | ``"milvus"`` | ``"sulci"``
-            (default ``"sqlite"``).
+            (default ``"chroma"``, ``sulci.Cache``'s).
         threshold (float):
             Cosine similarity cutoff 0–1 (default: ``0.85`` locally; the
-            tenant's setting on ``backend="sulci"``, 0.10.1).
-        context_window (int):
-            Turns to remember per session; 0 = stateless (default).
+            tenant's setting on ``backend="sulci"``, else 0.65; 0.10.1).
+        context_window (Optional[int]):
+            Turns to remember per session. ``None`` (default): stateless
+            locally; on ``backend="sulci"`` the tenant's setting (default 2).
             Set to 4 for context-aware multi-turn caching.
         api_key (Optional[str]):
             Sulci Cloud key — required when ``backend="sulci"``.
