@@ -720,7 +720,7 @@ fails at import, which is why the extra pins 2.
 
 | Backend | ID | Native vectors | Tenant isolation |
 |---|---|---|---|
-| ChromaDB | `chroma` | ✓ | label only |
+| Chroma | `chroma` | ✓ | label only |
 | Qdrant | `qdrant` | ✓ | **enforced** — payload `Filter`, `ENFORCES_TENANT_ISOLATION = True` |
 | Redis + RedisVL | `redis` | manual | label only |
 | FAISS | `faiss` | ✓ | label only |

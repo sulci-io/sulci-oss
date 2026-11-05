@@ -105,7 +105,7 @@ pip install "sulci[sqlite]"
 | Backend | Install |
 |---|---|
 | SQLite — zero infra, local dev | `pip install "sulci[sqlite]"` |
-| ChromaDB | `pip install "sulci[chroma]"` |
+| Chroma | `pip install "sulci[chroma]"` |
 | FAISS | `pip install "sulci[faiss]"` |
 | Qdrant | `pip install "sulci[qdrant]"` |
 | Redis + RedisVL | `pip install "sulci[redis]"` |
@@ -1047,7 +1047,7 @@ embedder, carried no n, described the corpus as 800 pairs when
 | Backend         | ID       | Best for                                | Tenant isolation |
 | --------------- | -------- | --------------------------------------- | ---------------- |
 | SQLite          | `sqlite` | Local dev, edge, serverless, zero infra | yes (0.9.3) |
-| ChromaDB        | `chroma` | Fastest path to working, Python-native  | yes (0.9.3) |
+| Chroma          | `chroma` | Fastest path to working, Python-native  | yes (0.9.3) |
 | FAISS           | `faiss`  | Local, file-backed (`faiss-cpu`); exact search within a scope since 0.9.3 | yes (0.9.3) |
 | Qdrant          | `qdrant` | Production, metadata filtering          | yes |
 | Redis + RedisVL | `redis`  | Existing Redis infra                    | yes (0.9.3) |
