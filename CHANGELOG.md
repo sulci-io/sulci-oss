@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- **The vector database is called Chroma (oss-0060).** The README's install and backends tables,
+  `docs/API-SURFACE.md`'s backends table, the module docstring of `sulci/core.py` (and its `db_path` line) and
+  `sulci/backends/chroma.py`'s docstring said "ChromaDB"; the project's own name is Chroma, as sulci.io has said
+  since 0393. The backend id `chroma`, the `chromadb` package and its import, and the `ImportError` text are
+  unchanged. No code change.
+
 ## [1.3.1] — 2026-11-04 — Documentation: the configuration defaults the README and docstrings state
 
 A documentation release, so the README and docstrings shown on PyPI say what 1.3.0 already does: unset

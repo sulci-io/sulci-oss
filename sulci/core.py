@@ -6,7 +6,7 @@ sulci/core.py
 ================
 Core semantic cache engine — backend-agnostic, context-aware.
 
-Supports backends : ChromaDB, Qdrant, FAISS, Redis, SQLite, Milvus
+Supports backends : Chroma, Qdrant, FAISS, Redis, SQLite, Milvus
 Embedding models  : MiniLM / MPNet / BGE (local, free) or OpenAI API
 Context-awareness : sliding window per session, blended embedding lookup
 """
@@ -355,7 +355,7 @@ class Cache:
                          0.10.0: per-user erasure (delete_user) needs it —
                          without it user_id is ignored, entries and history
                          are filed under no user, and delete_user refuses.
-        db_path:         Local storage path (ChromaDB, SQLite, FAISS).
+        db_path:         Local storage path (Chroma, SQLite, FAISS).
         context_window:  Number of recent turns to remember per session.
                          None (default) = 0, stateless, on a local backend
                          (with a session_store=, 6 turns). 4–8 is recommended

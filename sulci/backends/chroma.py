@@ -3,7 +3,7 @@
 
 """
 sulci/backends/chroma.py
-ChromaDB backend — recommended for getting started.
+Chroma backend — recommended for getting started.
 
 Install  : pip install "sulci[chroma]"
 Free tier: self-hosted (unlimited) or Chroma Cloud (1 M embeddings free)
