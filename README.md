@@ -291,7 +291,7 @@ recorded, not stored, and reads `miss-followup` (the rule since 1.1.1, the label
 the managed gateway decides and the label stays `miss`). Send
 `x-sulci-standalone: true` when the request's last user turn stands on its own
 (a self-contained rewrite), and it is stored.
-On `--backend sulci` (1.0.1) the tenant header is refused with 400 — the API key is the only partition there —
+On `--backend sulci` (1.0.1) the tenant header is refused with 400 — the Sulci account behind the API key is the only partition there —
 and `x-sulci-cache` reads `refused`.
 On `--backend sulci` (1.3.0) each stored reply carries the upstream response's own token counts, so your dashboard's
 Tokens Saved fills in with no code change. Streams (`bypass`) and tool-call replies (`miss-uncacheable`) are not
@@ -367,7 +367,7 @@ Since **0.9.3, every backend enforces `tenant_id` and `user_id`** on every looku
 | backend | isolation |
 |---|---|
 | chroma, faiss, milvus, qdrant, redis, sqlite | **enforced** — `search()` reads only the caller's own tenant and user, inside the search itself; each declares `ENFORCES_TENANT_ISOLATION = True` |
-| sulci (cloud) | **enforced server-side** by the Sulci Cloud gateway, keyed off the API key (one key per tenant). Its `ENFORCES_TENANT_ISOLATION` flag reads `False` only because the OSS test suite cannot reach the gateway to verify it. |
+| sulci (cloud) | **enforced server-side** by the Sulci Cloud gateway, keyed off the Sulci account the API key belongs to (one account per tenant; every key on one account shares its cache). Its `ENFORCES_TENANT_ISOLATION` flag reads `False` only because the OSS test suite cannot reach the gateway to verify it. |
 
 `None` means the shared scope and nothing else: an entry stored without a
 tenant is not visible to a lookup with one, and the reverse. The three surfaces
@@ -375,12 +375,12 @@ above — `sulci-mcp --tenant-id`, `namespace_by_model=True`, the proxy's
 `x-sulci-tenant-id` and per-model scoping — therefore scope for real on every
 backend.
 
-> ❌ **Corrected in 1.0.1:** except the managed backend (`sulci (cloud)` above). Its gateway isolates by **API key**
-> only: the SDK never sent `tenant_id`, so before 1.0.1 these scopes were dropped there and one cache was shared
+> ❌ **Corrected in 1.0.1:** except the managed backend (`sulci (cloud)` above). Its gateway isolates by **Sulci account**
+> only (every API key on one account shares one cache): the SDK never sent `tenant_id`, so before 1.0.1 these scopes were dropped there and one cache was shared
 > across the tenants (and models) you passed. Since 1.0.1 a `tenant_id` on the managed backend raises `TypeError`;
 > the proxy answers `x-sulci-tenant-id` with 400 and shares across models; LiteLLM's `namespace_by_model` and
 > LangChain's `namespace_by_llm` share across models with a warning; `sulci-mcp --tenant-id` refuses to start. One
-> API key per tenant isolates tenants on the managed backend.
+> Sulci account per tenant isolates tenants on the managed backend; a second API key on the same account does not.
 
 **`user_id` is a separate scope.** It takes effect only with `personalized=True`
 — with the default `personalized=False`, `Cache` ignores it. With

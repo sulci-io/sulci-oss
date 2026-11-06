@@ -160,8 +160,9 @@ class SulciLiteLLMCache(BaseCache):
             model is never served for another — the model name becomes the
             Sulci ``tenant_id``. Set False to share across models, which is
             cheaper and occasionally wrong. 1.0.1: on the managed backend
-            (``backend="sulci"``) models cannot be kept apart — the API key is
-            the only partition — so it is turned off there with a warning.
+            (``backend="sulci"``) models cannot be kept apart — the Sulci account
+            behind the API key is the only partition — so it is turned off
+            there with a warning.
         session_key: Which LiteLLM metadata key carries the conversation id
             used for context blending. Defaults to ``"sulci_session_id"``;
             pass it as ``metadata={"sulci_session_id": ...}`` on the call.
@@ -193,8 +194,8 @@ class SulciLiteLLMCache(BaseCache):
         if namespace_by_model and getattr(self.sulci, "_is_remote_transport", False):
             logger.warning(
                 "SulciLiteLLMCache: namespace_by_model=True cannot isolate models on the managed backend "
-                "(backend='sulci'): the API key is the only partition. Responses are shared across models. "
-                "Pass namespace_by_model=False to silence this, or use one API key per model."
+                "(backend='sulci'): the Sulci account behind the API key is the only partition. Responses are shared "
+                "across models. Pass namespace_by_model=False to silence this, or use one Sulci account per model."
             )
             namespace_by_model = False
         self.namespace_by_model = namespace_by_model

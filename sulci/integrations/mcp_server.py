@@ -95,8 +95,9 @@ returned for new code.
 _MANAGED_INSTRUCTIONS = _DEFAULT_INSTRUCTIONS.split("Pass the same `session_id`")[0] + """\
 Pass the same `session_id` for every call within one task so the cache can
 blend prior turns into the lookup. Do not pass `tenant_id`: this cache is the
-managed backend, where the API key is the only partition (a tenant_id is
-refused). One API key per project keeps their caches apart.
+managed backend, where the Sulci account behind the API key is the only
+partition (a tenant_id is refused, and every key on one account shares one
+cache). One Sulci account per project keeps their caches apart.
 
 IMPORTANT: a cached answer is keyed on the question, not on the state of
 the world. If the answer depends on code that may have changed, say so in
@@ -149,7 +150,8 @@ def build_server(
     # 1.0.1 (G33): the managed backend refuses tenant_id on every lookup; a default tenant would fail every tool call.
     if default_tenant_id is not None and getattr(cache, "_is_remote_transport", False):
         raise ValueError("build_server(): --tenant-id / SULCI_MCP_TENANT_ID is not supported with the managed backend "
-                         "(backend=\"sulci\"): the API key is the only partition. Use one API key per tenant.")
+                         "(backend=\"sulci\"): the Sulci account behind the API key is the only partition, and every "
+                         "key on one account shares one cache. Use one Sulci account per tenant.")
     # 1.0.1 (G33): the default instructions tell the agent to pass a tenant_id, which the managed backend refuses.
     if instructions is _DEFAULT_INSTRUCTIONS and getattr(cache, "_is_remote_transport", False):
         instructions = _MANAGED_INSTRUCTIONS

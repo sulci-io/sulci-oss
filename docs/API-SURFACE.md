@@ -289,8 +289,8 @@ Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 📌 0.9.3: every backend enforces it — and `user_id` when `personalized=True` — on every lookup; `None` is the
 shared scope and nothing else (before, only Qdrant and the managed backend filtered on `tenant_id`).
 
-❌ **Corrected in 1.0.1:** the managed backend never filtered on `tenant_id` — it never sent one; the API key is its
-partition. Since 1.0.1 `get`, `set` and `cached_call` raise `TypeError` for a `tenant_id` there (as `delete_user`
+❌ **Corrected in 1.0.1:** the managed backend never filtered on `tenant_id` — it never sent one; the Sulci account behind the API key is its
+partition (every key on one account shares one cache). Since 1.0.1 `get`, `set` and `cached_call` raise `TypeError` for a `tenant_id` there (as `delete_user`
 did since 0.10.0), instead of sharing one cache across tenants. `docs/multi_tenancy_and_isolation.md` has the
 integrations' behaviour.
 
