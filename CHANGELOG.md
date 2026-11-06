@@ -8,6 +8,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-11-06 — Messages and docs: on Sulci Cloud the account is the partition, not the API key
+
+A patch release so the messages users see say how the managed backend isolates tenants. Every API key on one Sulci
+account shares that account's cache; 1.0.1–1.3.1's refusals told users to "use one API key per tenant", which keeps
+nobody apart. 1.3.2 says "use one Sulci account per tenant" (oss-0061, below), and calls the vector database Chroma
+(oss-0060). What is refused, and when, is unchanged: the measured API surface is identical to 1.3.1's
+(docs/API-SURFACE.md).
+
 ### Documentation
 
 - **On the managed backend the Sulci account is the partition, not the API key (oss-0061).** Every API key on one
