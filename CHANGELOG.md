@@ -10,6 +10,14 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Documentation
 
+- **On the managed backend the Sulci account is the partition, not the API key (oss-0061).** Every API key on one
+  account shares that account's cache, so the advice "use one API key per tenant" did not keep tenants apart. The
+  `TypeError` for a `tenant_id` on `backend="sulci"`, `sulci-mcp`'s build refusal and managed instructions,
+  `sulci-proxy`'s 400 for `x-sulci-tenant-id` and its per-model warning, and LiteLLM's `namespace_by_model` warning
+  now say "one Sulci account per tenant" (or model, or project); so do the README's isolation rows,
+  `docs/multi_tenancy_and_isolation.md` and `docs/API-SURFACE.md`. Message text only: what is refused, and when, is
+  unchanged. `tests/test_managed_tenant_refused.py` pins the new wording and fails if the package advises a key per
+  tenant again.
 - **The vector database is called Chroma (oss-0060).** The README's install and backends tables,
   `docs/API-SURFACE.md`'s backends table, the module docstring of `sulci/core.py` (and its `db_path` line) and
   `sulci/backends/chroma.py`'s docstring said "ChromaDB"; the project's own name is Chroma, as sulci.io has said

@@ -270,7 +270,7 @@ def build_app(
     # tenant_id, never sent): share across models and say so. A tenant header is refused per request below.
     managed = bool(getattr(sulci_cache, "_is_remote_transport", False))
     if managed and not share_across_models:
-        logger.warning("sulci-proxy: --backend sulci cannot scope by model (the API key is the only partition); "
+        logger.warning("sulci-proxy: --backend sulci cannot scope by model (the Sulci account behind the API key is the only partition); "
                        "responses are shared across models. Pass --share-across-models to silence this.")
         share_across_models = True
 
@@ -345,9 +345,10 @@ def build_app(
         # 1.0.1 (G33): on the managed backend a tenant header cannot be honoured — refuse it rather than share one
         # tenant's answers with another, before anything (a streaming passthrough included) goes upstream.
         if managed and request.headers.get("x-sulci-tenant-id"):
-            message = ("x-sulci-tenant-id is not supported with the managed backend (--backend sulci): the API key "
-                       "is the only partition. Run one proxy, with its own API key, per tenant. Nothing was sent "
-                       "upstream.")
+            message = ("x-sulci-tenant-id is not supported with the managed backend (--backend sulci): the Sulci "
+                       "account behind the API key is the only partition, and every key on one account shares one "
+                       "cache. Run one proxy per tenant, each with a key from that tenant's own Sulci account. "
+                       "Nothing was sent upstream.")
             payload = ({"type": "error", "error": {"type": "invalid_request_error", "message": message}}
                        if path.endswith("/messages") else
                        {"error": {"message": message, "type": "invalid_request_error",

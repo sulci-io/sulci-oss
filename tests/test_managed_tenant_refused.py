@@ -232,3 +232,29 @@ def test_mcp_tool_tenant_on_managed_returns_the_error():
     out = json.loads("".join(getattr(b, "text", "") for b in getattr(result, "content", result)))
     assert out["cache_hit"] is False and "managed backend" in out["error"]
     assert sent == []
+
+
+# ── oss-0061: the account is the partition, not the key ──────────────────────
+# Every API key on one Sulci account shares that account's cache (the gateway scopes by the key's account), so
+# "one API key per tenant" did not isolate tenants. The refusals now name the account; nothing in the package
+# may advise a key per tenant, model or project again.
+def test_the_refusal_names_the_account_as_the_partition():
+    cache = _managed()
+    _capture(cache)
+    with pytest.raises(TypeError) as e:
+        cache.get("how do refunds work?", tenant_id="acme")
+    msg = str(e.value)
+    assert "Sulci account" in msg and "one Sulci account per tenant" in msg
+    assert "API key per tenant" not in msg
+
+
+def test_no_message_in_the_package_advises_a_key_per_tenant():
+    import pathlib
+    import re
+    import sulci
+    root = pathlib.Path(sulci.__file__).parent
+    bad = re.compile(r"API key per (tenant|model|project)|its own API key|(?<!behind )the API key is the (only )?partition",
+                     re.IGNORECASE)
+    hits = [f"{p.relative_to(root)}:{i}" for p in root.rglob("*.py") if "tests" not in p.parts
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if bad.search(line)]
+    assert hits == [], hits

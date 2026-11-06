@@ -60,9 +60,10 @@ _NUDGE_SHOWN     = False
 
 # 1.0.1 (G33): why get() and set() refuse a tenant_id on the managed backend (delete_user() has since 0.10.0).
 _MANAGED_TENANT_ID_REFUSED = (
-    "tenant_id is not accepted on the managed backend (backend='sulci'): the API key is the partition there, and "
-    "the gateway has no other. Before 1.0.1 it was dropped without a word, so entries were shared across every "
-    "tenant_id passed. Use one API key per tenant. Nothing was read, written or sent."
+    "tenant_id is not accepted on the managed backend (backend='sulci'): the Sulci account behind the API key is the "
+    "partition there, and the gateway has no other (every API key on one account shares one cache). Before 1.0.1 it "
+    "was dropped without a word, so entries were shared across every tenant_id passed. Use one Sulci account per "
+    "tenant. Nothing was read, written or sent."
 )
 
 
@@ -822,7 +823,7 @@ class Cache:
                         number, in one place. See ADR 0022 Open-7
                         (sulci-platform), and issues #44 / #59 there.
             tenant_id:  Optional tenant identifier for multi-tenant isolation.
-                        1.0.1: ``TypeError`` on the managed backend, whose only partition is the API key.
+                        1.0.1: ``TypeError`` on the managed backend, whose only partition is the Sulci account behind the API key.
             user_id:    Optional user identifier for personalization.
             session_id: Optional session identifier for context-aware lookup.
                         When this resolves to a non-empty window, the lookup
@@ -1699,7 +1700,7 @@ class Cache:
 
     def _delete_user_remote(self, user_id) -> dict:
         """The managed backend: DELETE /v1/cache/user/{id}, mapped to delete_user's shape. The gateway erases the
-        user's entries and sessions in the API key's tenant; this Cache holds neither locally."""
+        user's entries and sessions in the API key's Sulci account; this Cache holds neither locally."""
         try:
             body = self._backend.delete_user(user_id)
         except SulciErasureError as exc:
