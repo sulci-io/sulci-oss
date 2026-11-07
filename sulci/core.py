@@ -299,7 +299,11 @@ class Cache:
     lookup leans toward its conversation's earlier, self-contained entries
     (strongest one turn back; several unrelated turns dilute it). A
     follow-up's own answer is recorded, not stored, unless ``standalone=True``
-    (1.1.1)::
+    (1.1.1), so it is never served to another conversation. That is the
+    guarantee. A follow-up is served from the cache only when a stored,
+    self-contained question is close enough to the blended lookup; at a
+    careful threshold most vague follow-ups are not, and your LLM answers
+    them::
 
         cache = Cache(backend="sqlite", context_window=6)
 
@@ -318,7 +322,7 @@ class Cache:
             session_id="user-42",
         )
         result = cache.cached_call(
-            "How do I fix it?",          # resolved in Docker context
+            "How do I fix it?",          # looked up with the Docker turn; not stored
             my_llm,
             session_id="user-42",
         )
