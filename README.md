@@ -54,7 +54,8 @@ draws, and `run.py` refuses to write loose output beside them.
 benchmark machine, not a property of the cache. Measure it on your own hardware
 before planning against it.
 
-**Context-aware mode** blends prior conversation turns into the lookup vector, so
+**Context-aware mode** is safe in conversations: a follow-up never gets another conversation's answer.
+It blends prior conversation turns into the lookup vector, so
 a vague follow-up such as *"what about the second one?"* is moved toward stored
 questions that resemble the conversation and can find a fully specified answer
 already in the cache. Since 1.1.1 a follow-up in a session (a set after the session's first turn) is answered and

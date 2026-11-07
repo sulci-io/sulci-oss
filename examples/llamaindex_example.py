@@ -305,8 +305,8 @@ def main():
         print_result(q, r)
 
     # ── Round 2: paraphrases in same sessions — cache hits expected ───────────
-    # Reusing the same session_id means prior context boosts similarity
-    # for semantically equivalent follow-up questions.
+    # Reusing the same session_id blends Round 1's question into the lookup,
+    # which can raise a paraphrase's similarity to the entry Round 1 stored.
     print("\nRound 2: Paraphrased questions in same sessions — hits expected")
     print("-" * 50)
     paraphrases = [
@@ -319,8 +319,10 @@ def main():
         print_result(q, r)
 
     # ── Round 3: context-aware follow-ups — single topic session ─────────────
-    # Ambiguous follow-ups resolve correctly because session context anchors
-    # them to the ongoing topic — this is Sulci Cache's key differentiator.
+    # Each follow-up is looked up with the session's topic, and its answer is
+    # never stored under its vague words, so no other session can be handed it.
+    # Most go to the LLM: a hit needs a stored, self-contained question close
+    # enough to the blended lookup. Context makes follow-ups safe, not free.
     print("\nRound 3: Context-aware follow-ups — single topic session")
     print("-" * 50)
     ctx_chat = Chat(session_id="session-context-demo")

@@ -99,7 +99,7 @@ class Chat:
     Usage:
         chat = Chat(user_id="alice")
         chat.ask("How do Python decorators work?")
-        chat.ask("Can you give me a simple example?")  # context-resolved
+        chat.ask("Can you give me a simple example?")  # looked up with the decorators turn; not stored
     """
 
     def __init__(self, user_id: str = "default"):

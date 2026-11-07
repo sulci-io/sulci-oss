@@ -8,15 +8,20 @@ Context-aware semantic caching for multi-turn LLM conversations.
 
 The core problem
 ----------------
-Without context, "How do I fix it?" is ambiguous — the cache might return a
-Docker fix when the user is actually asking about billing, or miss a valid
-hit entirely because the bare query doesn't match anything closely enough.
+"How do I fix it?" means nothing on its own. A plain semantic cache stores
+its answer under those words, so the next conversation to ask it (about
+billing, say) is handed the Docker fix. Looked up alone, it also matches
+whichever stored question happens to be closest.
 
-The solution
-------------
-Each conversation turn is embedded and held in a sliding window.  When
-looking up a cache entry, sulci blends the current query embedding with a
-*decayed* summary of recent turns:
+What sulci does
+---------------
+1. It knows a follow-up is a follow-up. Once a session holds a turn, a set
+   records the turn and stores no entry (since 1.1.1; ``standalone=True``
+   overrides), so a follow-up's answer is never served to another
+   conversation.
+2. It reads a follow-up with its conversation. Each turn is embedded and
+   held in a sliding window, and a lookup blends the current query embedding
+   with a *decayed* summary of recent turns:
 
     lookup_vec = α · embed(query) + (1-α) · Σ wᵢ · embed(turnᵢ)
 
@@ -26,13 +31,15 @@ looking up a cache entry, sulci blends the current query embedding with a
 
 Result
 ------
-  - "How do I fix it?" after "My Docker container crashes" → Docker fixes ✓
-  - "How do I fix it?" after "My payment failed" → billing solutions ✓
-  - Isolated "How do I fix it?" → most common standalone match ✓
-  - First turn in any session → pure query embedding, zero overhead ✓
-  (found among entries stored by earlier, self-contained turns; the follow-up
-  itself is recorded, not stored, since 1.1.1. The blend is strongest one turn
-  back — several unrelated turns dilute it.)
+  - "How do I fix it?" after "My Docker container crashes" is looked up
+    leaning toward Docker entries, and never toward an answer another
+    conversation got for "How do I fix it?" (none is stored).
+  - It is served from the cache only when a stored, self-contained question
+    is close enough to the blended lookup. At a careful threshold most vague
+    follow-ups are not, and your LLM answers them with the conversation:
+    context makes follow-ups safe, not free.
+  - First turn in any session → pure query embedding, zero overhead.
+  The blend is strongest one turn back; several unrelated turns dilute it.
 
 Sessions
 --------

@@ -7,7 +7,9 @@ Without context, ambiguous follow-up queries like "How do I fix it?" match
 whatever happens to be closest in the cache — which is often wrong.  With
 context, sulci blends recent conversation history into the lookup vector so
 the same follow-up is looked up in the context of what was discussed. Follow-ups
-are answered and recorded, not cached (sulci 1.1.1+).
+are answered and recorded, not cached (sulci 1.1.1+), so one conversation's
+follow-up answer is never served to another. Most vague follow-ups miss and
+are answered by your LLM; context keeps them safe, it does not make them free.
 
 Run:
     pip install "sulci[sqlite]"
@@ -40,7 +42,7 @@ _DB_PATH = os.path.join(tempfile.mkdtemp(prefix="sulci_ctx_"), "cache")
 
 cache = Cache(
     backend        = "sqlite",
-    threshold      = 0.78,      # slightly lower to catch follow-up queries
+    threshold      = 0.78,      # a demo value; calibrate yours on your own traffic
     context_window = 6,         # remember last 6 turns per session
     query_weight   = 0.70,      # 70% current query, 30% history
     context_decay  = 0.60,      # moderate decay — recent turns matter most
@@ -60,10 +62,10 @@ def show(label: str, result: dict) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# DEMO 1 — Context resolves ambiguous follow-up correctly
+# DEMO 1 — The same vague follow-up in two conversations
 # ═══════════════════════════════════════════════════════════════════════════
 print("=" * 60)
-print("DEMO 1: Ambiguous follow-up resolved by context")
+print("DEMO 1: The same vague follow-up, read with two conversations")
 print("=" * 60)
 
 # ── Session A: Docker conversation ────────────────────────────
@@ -94,12 +96,14 @@ r = cache.cached_call(
 show("My billing payment keeps failing", r)
 
 r = cache.cached_call(
-    "How do I fix it?",      # same query, DIFFERENT context → different result
+    "How do I fix it?",      # same words, different conversation: never handed the answer Session A got
     mock_llm,
     session_id="session-B",
 )
 show("How do I fix it? [after Billing discussion]", r)
-print(f"  → context_depth={r['context_depth']} (Billing context influenced lookup)\n")
+print(f"  → context_depth={r['context_depth']} (Billing context influenced lookup)")
+print("  Neither follow-up was stored, so a third conversation asking \"How do I fix it?\"")
+print("  cannot be handed either answer.\n")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -149,7 +153,7 @@ r = cache.cached_call(
     session_id="session-D",
 )
 show("What's the best way to fix it? [pre-seeded context]", r)
-print(f"  context_depth={r['context_depth']} — {summary['depth']} prior turns informed this")
+print(f"  context_depth={r['context_depth']} — the injected turns informed this lookup")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -164,14 +168,14 @@ session = "session-E"
 cache.cached_call("My PostgreSQL query is running slowly", mock_llm, session_id=session)
 print("  [Topic 1: PostgreSQL]")
 r = cache.cached_call("How do I fix it?", mock_llm, session_id=session)
-print(f"  Follow-up resolved with context_depth={r['context_depth']}\n")
+print(f"  Follow-up looked up with context_depth={r['context_depth']}\n")
 
 # New topic — clear context so follow-ups don't carry over
 cache.clear_context(session)
 print("  [Context cleared — new topic: billing]")
 cache.cached_call("My invoice shows the wrong amount", mock_llm, session_id=session)
 r = cache.cached_call("How do I fix it?", mock_llm, session_id=session)
-print(f"  Follow-up resolved with context_depth={r['context_depth']} (fresh context)")
+print(f"  Follow-up looked up with context_depth={r['context_depth']} (fresh context)")
 
 
 # ── Final stats ───────────────────────────────────────────────

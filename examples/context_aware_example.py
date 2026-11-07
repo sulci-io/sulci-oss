@@ -6,7 +6,9 @@ Demonstrates context-aware semantic caching with sulci.
 The classic problem:
     "How do I fix it?" means something completely different depending
     on whether the previous turn was about Docker, Python, or billing.
-    A stateless cache can't tell them apart - sulci's context window can.
+    A stateless cache can't tell them apart - sulci's context window can:
+    it looks a follow-up up with its conversation, and never stores the
+    follow-up's own answer, so no other conversation can be handed it.
 
 Run:
     pip install "sulci[sqlite]"
@@ -151,7 +153,7 @@ separator("5. Clearing session context (user starts new topic)")
 print(f"\n  Before clear: depth={cache.context_summary('docker-session')['depth']}")
 cache.clear_context("docker-session")
 print(f"  After  clear: depth={cache.context_summary('docker-session')['depth']}")
-print("  → 'How do I fix it?' will now match without Docker context")
+print("  → 'How do I fix it?' will now be looked up without Docker context")
 
 
 # ══════════════════════════════════════════════════════════════════

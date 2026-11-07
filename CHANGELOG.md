@@ -8,6 +8,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Documentation
+
+- **Context-aware means safe in conversations, not "follow-ups resolve correctly" (oss-0063).** The positioning set
+  on 2026-11-06 keeps the headline ("context-aware semantic cache") and changes the promise under it: a follow-up
+  never gets another conversation's answer. Measured on the Acme Service Desk evaluation (Sulci Cloud, MiniLM), a
+  vague follow-up's blended similarity is 0.32–0.65, so at a careful threshold most are answered by the LLM. The
+  `Cache` docstring now says what is guaranteed (a follow-up's answer is never stored, so never served to another
+  conversation) and what is not (most vague follow-ups miss). `sulci/context.py`'s "Result" list no longer shows
+  follow-ups returning Docker or billing fixes. The narration in `examples/context_aware.py`,
+  `examples/context_aware_example.py`, `examples/llamaindex_example.py` (Round 2 and 3) and
+  `examples/anthropic_example.py` says "looked up with the conversation", not "resolved". The README's context
+  paragraph leads with the promise. `examples/context_aware.py` DEMO 3 printed another session's depth; it now
+  doesn't. No library code change: `sulci/` is AST-equal once docstrings are stripped.
+
 ## [1.3.2] — 2026-11-06 — Messages and docs: on Sulci Cloud the account is the partition, not the API key
 
 A patch release so the messages users see say how the managed backend isolates tenants. Every API key on one Sulci
