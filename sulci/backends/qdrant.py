@@ -20,11 +20,16 @@ from __future__ import annotations
 import contextlib, threading, time, uuid, warnings
 from typing import Any, Optional
 
-from sulci._metadata import checked_metadata
+from sulci._metadata import VARIANT_FIELD, checked_metadata
 
 
 class QdrantBackend:
     #: True if this backend enforces tenant_id partition isolation.
+    #: oss-0064: store() and search()/search_match() take ``variant=``. An entry stored with a variant is returned
+    #: only to a lookup with the same variant; a lookup without one never returns an entry that has one. Cache
+    #: feature-detects this flag and refuses ``variant=`` on a backend without it rather than ignoring it.
+    SUPPORTS_VARIANT = True
+
     #: When True, search() must not return entries with mismatched tenant_id.
     ENFORCES_TENANT_ISOLATION: bool = True
 
@@ -201,7 +206,13 @@ class QdrantBackend:
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None, expires: Optional[float] = None,
         metadata: Optional[dict] = None,
+        variant: Optional[str] = None,
     ) -> None:
+        # oss-0064: checked here too, for a direct caller: "" or a non-string would be stored as a variant that
+        # Qdrant's empty-check treats unpredictably ("" hidden from plain lookups; a list matching any element).
+        if variant is not None and (not isinstance(variant, str) or not variant):
+            raise ValueError("store(): variant must be a non-empty string or None")
+        payload_variant = {} if variant is None else {VARIANT_FIELD: variant}
         with self._lock:
             from qdrant_client.models import PointStruct
             self._client.upsert(
@@ -222,6 +233,8 @@ class QdrantBackend:
                         # "last seen" for entries that have never been served,
                         # instead of fabricating one at aggregation time.
                         "created": time.time(),
+                        # oss-0064: written only when given, so entries stored without one look exactly as before.
+                        **payload_variant,
                     },
                 )],
             )
@@ -232,10 +245,11 @@ class QdrantBackend:
         *,
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None, now: Optional[float] = None,
+        variant: Optional[str] = None,
     ) -> tuple[Optional[str], float]:
         resp, score, _matched = self.search_match(
             embedding, threshold,
-            tenant_id=tenant_id, user_id=user_id, now=now,
+            tenant_id=tenant_id, user_id=user_id, now=now, variant=variant,
         )
         return resp, score
 
@@ -245,6 +259,7 @@ class QdrantBackend:
         *,
         tenant_id: Optional[str] = None,
         user_id: Optional[str] = None, now: Optional[float] = None,
+        variant: Optional[str] = None,
     ) -> tuple[Optional[str], float, Optional[str]]:
         """
         Like search(), but also returns the STORED query text of the
@@ -258,7 +273,7 @@ class QdrantBackend:
         protocol and the other backends are untouched.
         """
         with self._lock:
-            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            from qdrant_client.models import Filter, FieldCondition, IsEmptyCondition, MatchValue, PayloadField
             now = now or time.time()
 
             # Build payload filter conditions. Tenant isolation is a hard
@@ -278,6 +293,13 @@ class QdrantBackend:
                     match=MatchValue(value=user_id if user_id is not None else "global"),
                 ),
             ]
+            # oss-0064: the variant is part of the search, not a filter after it, so the hit/miss the caller's
+            # event reports is the answer it returns. A lookup without a variant must not see entries that have one:
+            # they were written for a request whose answer depends on more than the query text.
+            if variant is not None:
+                must_conditions.append(FieldCondition(key=VARIANT_FIELD, match=MatchValue(value=variant)))
+            else:
+                must_conditions.append(IsEmptyCondition(is_empty=PayloadField(key=VARIANT_FIELD)))
             filter_ = Filter(must=must_conditions)
 
             results = self._client.query_points(

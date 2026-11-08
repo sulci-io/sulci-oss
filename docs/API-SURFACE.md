@@ -285,6 +285,8 @@ There are eight. Not nine.
 | `set(query, response, *, …)` — 📌 0.10.2 | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone` | `None` |
 | `cached_call(query, llm_fn, *, …)` — 📌 0.10.2 | `threshold`, `tenant_id`, `user_id`, `session_id`, `cost_per_call`, `plan`, `standalone`, `context_threshold` | `{response, source, similarity, latency_ms, cache_hit, context_depth}` |
 | `set(query, response, *, …)` — 📌 oss-0044 | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone`, `usage` | `None` |
+| `get(query, *, …)` — 📌 oss-0064 (unreleased) | `threshold`, `tenant_id`, `user_id`, `session_id`, `plan`, `context_threshold`, `variant`, `accept` | `(response \| None, similarity, context_depth)` |
+| `set(query, response, *, …)` — 📌 oss-0064 (unreleased) | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone`, `usage`, `variant` | `None` |
 
 Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
@@ -351,6 +353,24 @@ def ask(q):
 
 cache.cached_call("How do I reset my password?", ask)
 ```
+
+### `variant` and `accept` (📌 oss-0064, unreleased)
+
+- **`variant`** (`get`, `set`): an entry stored with `variant="…"` is returned only to a lookup with the same
+  variant, and a lookup without one never returns it. It is a condition in the backend's own search (Qdrant:
+  `sulci_variant` must match, or must be empty), so the hit/miss event and the answer are one decision. It is for a
+  caller whose answer depends on more than the query text: the managed gateway's hosted chat endpoint passes a
+  fingerprint of the system prompt, model and parameters. `TypeError` on a backend that does not declare
+  `SUPPORTS_VARIANT` (only `QdrantBackend` does) and on the managed backend. It is a non-empty string of at most 256
+  characters. `sulci_variant` is now a reserved metadata key.
+- **`accept`** (`get`): `callable(response, similarity) -> bool`, run on a candidate hit before the turn is
+  recorded, the counters move or the event is emitted. Anything but `True` (an exception included, logged by type
+  only) turns the hit away: `get` returns `(None, similarity, depth)`, counts a miss, and emits a `"miss"` event
+  with `metadata={"refused": True}`. It must return exactly `True` (a `numpy.bool_` is a refusal), and an async
+  callable is refused (`TypeError`). `TypeError` on the managed backend, whose gateway emits the event.
+- A `QdrantBackend` **subclass** that overrides `store`, `search` or `search_match` must declare
+  `SUPPORTS_VARIANT = True` in its own body before `variant=` is accepted: an inherited flag is not trusted,
+  because an overriding copy of the lookup does not carry the variant condition.
 
 ### `delete_user` — a `Cache` method since 0.10.0
 
@@ -501,6 +521,10 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `cached_call` (sync passthrough) — 📌 0.10.2 | `threshold`, `tenant_id`, `plan`, `standalone`, `context_threshold` |
 | `aset` — 📌 oss-0044 | `tenant_id`, `plan`, `metadata`, `standalone`, `usage` |
 | `set` (sync passthrough) — 📌 oss-0044 | `tenant_id`, `plan`, `metadata`, `standalone`, `usage` |
+| `aget` — 📌 oss-0064 (unreleased) | `tenant_id`, `plan`, `context_threshold`, `variant`, `accept` |
+| `aset` — 📌 oss-0064 (unreleased) | `tenant_id`, `plan`, `metadata`, `standalone`, `usage`, `variant` |
+| `get` (sync passthrough) — 📌 oss-0064 (unreleased) | `threshold`, `tenant_id`, `plan`, `context_threshold`, `variant`, `accept` |
+| `set` (sync passthrough) — 📌 oss-0064 (unreleased) | `tenant_id`, `plan`, `metadata`, `standalone`, `usage`, `variant` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,

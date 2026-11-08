@@ -794,6 +794,8 @@ class Cache:
         session_id: Optional[str]   = None,
         plan:       Optional[str]   = None,
         context_threshold: Optional[float] = None,
+        variant:    Optional[str]   = None,
+        accept:     Optional[Callable[[str, float], bool]] = None,
     ) -> tuple:
         """
         Check cache for a semantically similar query.
@@ -851,6 +853,18 @@ class Cache:
                         managed gateway passes both (measured 2026-10-19: 0.65
                         and 0.80). On the managed backend it is sent to the
                         gateway, which applies it the same way.
+            variant:    oss-0064. Optional. Only entries stored with ``set(..., variant=)`` equal to this string are
+                        returned; without it, entries stored with any variant are never returned. For callers whose
+                        answer depends on more than the query text (the hosted chat endpoint passes a fingerprint
+                        of the system prompt, model and parameters). Part of the search itself, so the emitted
+                        event and the answer are one decision. ``TypeError`` on a backend that does not declare
+                        ``SUPPORTS_VARIANT`` (only Qdrant does), and on the managed backend.
+            accept:     oss-0064. Optional ``callable(response, similarity) -> bool``, run on a candidate hit before
+                        anything is recorded or emitted. ``False`` (or an exception, logged) turns the hit away: the
+                        call returns ``(None, similarity, depth)``, counts a miss, records no turn, and emits a
+                        ``"miss"`` event with ``metadata={"refused": True}``. For a guard the caller must apply to
+                        the answer (an identifier check) without billing a hit nobody was served. ``TypeError`` on
+                        the managed backend, whose gateway emits the event.
 
         Returns:
             (cached_response, similarity_score, context_depth)
@@ -858,10 +872,11 @@ class Cache:
             context_depth = number of prior turns that influenced lookup.
         """
         return self._get(query, threshold=threshold, tenant_id=tenant_id, user_id=user_id, session_id=session_id,
-                         plan=plan, context_threshold=context_threshold, record_hit=True)
+                         plan=plan, context_threshold=context_threshold, record_hit=True, variant=variant,
+                         accept=accept)
 
     def _get(self, query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None,
-             context_threshold=None, record_hit=True) -> tuple:
+             context_threshold=None, record_hit=True, variant=None, accept=None) -> tuple:
         """``get``'s body. oss-0049: ``record_hit=False`` looks up without recording a hit's turn — for a caller that
         promises not to write (the MCP ``cache_lookup`` tool is annotated read-only). Not public API."""
         # 0.9.3: "global" and "" address the shared scope; refused before anything is read or sent.
@@ -870,6 +885,17 @@ class Cache:
         # serving one tenant's entries to another.
         if self._is_remote_transport and tenant_id is not None:
             raise TypeError("get(): " + _MANAGED_TENANT_ID_REFUSED)
+        # oss-0064: refused before anything is read, rather than accepted and ignored.
+        self._check_variant("get", variant)
+        if accept is not None:
+            if not callable(accept):
+                raise TypeError(f"get(): accept must be callable(response, similarity) -> bool, got {type(accept).__name__}")
+            # An async function returns a coroutine, which is never True: every hit would be turned away in silence.
+            if inspect.iscoroutinefunction(accept) or inspect.iscoroutinefunction(getattr(accept, "__call__", None)):
+                raise TypeError("get(): accept must be a plain function returning bool, not an async one")
+            if self._is_remote_transport:
+                raise TypeError("get(): accept= is not supported on the managed backend: the gateway decides and "
+                                "emits the hit, so a check run here could not change what is billed")
         _t0 = _time.time()
         self._query_count += 1
         matched_query: Optional[str] = None
@@ -1031,6 +1057,12 @@ class Cache:
             # can carry matched_query_hash for per-entry hit counting
             # (see sinks/protocol.py). Feature-detected so the Backend
             # protocol and custom backends are untouched.
+            # oss-0064: variant= is passed only when given (_check_variant has made sure the backend supports it).
+            # Without one, QdrantBackend's own default (None) already keeps entries stored with a variant out of the
+            # result. Passing variant=None always would send an unexpected keyword to every subclass that overrides
+            # search_match without it (sulci-platform's ClockedQdrantBackend falls back to a slower path, losing
+            # Tokens Saved, on any keyword it does not know).
+            variant_kw = {"variant": variant} if variant is not None else {}
             if hasattr(self._backend, "search_match"):
                 resp, sim, matched_query = self._backend.search_match(
                     embedding = vec,
@@ -1038,6 +1070,7 @@ class Cache:
                     tenant_id = tenant_id,
                     user_id   = user_id if self.personalized else None,
                     now       = time.time(),
+                    **variant_kw,
                 )
             else:
                 resp, sim  = self._backend.search(
@@ -1046,7 +1079,22 @@ class Cache:
                     tenant_id = tenant_id,
                     user_id   = user_id if self.personalized else None,
                     now       = time.time(),
+                    **variant_kw,
                 )
+
+        # oss-0064: the caller's check on a candidate hit, BEFORE the turn is recorded, the counters move or the
+        # event is emitted, so a hit it turns away is a miss everywhere (billing included), never a hit in one place
+        # and a miss in another. An exception is a refusal: a check that cannot say yes has not said yes.
+        refused = False
+        if resp is not None and accept is not None:
+            try:
+                ok = accept(resp, float(sim)) is True
+            except Exception as exc:          # noqa: BLE001 - the caller's code; logged, and fails closed
+                _log.warning("sulci.Cache.get: accept() raised %s; the hit is turned away", type(exc).__name__)
+                ok = False
+            if not ok:
+                refused = True
+                resp, matched_query = None, None
         latency_ms = round((_time.time() - _t0) * 1000, 2)
 
         # oss-0049: a HIT in a session is a turn of that conversation, so get() records it — as the managed
@@ -1114,6 +1162,8 @@ class Cache:
                 context_depth   = depth,
                 timestamp       = _time.time(),
                 plan            = plan,
+                # oss-0064: a hit turned away by accept() is a miss, marked so it can be told apart.
+                metadata        = {"refused": True} if refused else {},
                 # v0.7.2 — identity of the served entry, hits only.
                 # Hash, never text (privacy posture; see protocol.py).
                 matched_query_hash = (
@@ -1139,6 +1189,7 @@ class Cache:
         plan:       Optional[str]  = None,
         standalone: bool           = False,
         usage:      Any            = None,
+        variant:    Optional[str]  = None,
     ) -> None:
         """
         Store a query-response pair in the cache.
@@ -1185,12 +1236,49 @@ class Cache:
         are used. On the managed backend they are stored with the entry and each hit on it is credited with them
         (the dashboard's Tokens Saved); self-hosted backends store nothing for them. A ``usage`` that cannot be read
         raises ``TypeError`` or ``ValueError`` before anything is embedded, stored or sent.
+
+        ``variant`` (oss-0064) stores the entry so that only ``get(..., variant=)`` with the same string returns it,
+        and a ``get`` without one never does. ``TypeError`` on a backend without ``SUPPORTS_VARIANT`` (only Qdrant
+        has it) and on the managed backend; ``TypeError``/``ValueError`` for anything but a non-empty string of at
+        most 256 characters. Checked before anything is embedded, stored or sent.
         """
         self._set(query, response, tenant_id=tenant_id, user_id=user_id, session_id=session_id, metadata=metadata,
-                  plan=plan, standalone=standalone, usage=usage)
+                  plan=plan, standalone=standalone, usage=usage, variant=variant)
+
+    def _backend_supports_variant(self) -> bool:
+        """oss-0064: whether the backend really honours ``variant=``. The flag must be exactly True, AND every
+        method that stores or searches must come from a class that declares the flag itself. A subclass of
+        QdrantBackend that overrides ``search_match`` or ``store`` inherits the flag but not the variant condition
+        (sulci-platform's ClockedQdrantBackend has its own copy of the lookup): trusting the inherited flag let a
+        plain lookup there return entries stored with a variant (oss-0064's review). Such a subclass must declare
+        ``SUPPORTS_VARIANT = True`` in its own body once its overrides handle the variant."""
+        cls = type(self._backend)
+        if getattr(cls, "SUPPORTS_VARIANT", False) is not True:
+            return False
+        for name in ("store", "search", "search_match"):
+            owner = next((k for k in cls.__mro__ if name in vars(k)), None)
+            if owner is not None and vars(owner).get("SUPPORTS_VARIANT") is not True:
+                return False
+        return True
+
+    def _check_variant(self, method: str, variant) -> None:
+        """oss-0064: refuse a variant this Cache cannot honour, before anything is read, written or sent. Accepting
+        it and ignoring it would serve entries written for a different request."""
+        if variant is None:
+            return
+        if self._is_remote_transport:
+            raise TypeError(f"{method}(): variant= is not supported on the managed backend")
+        if not self._backend_supports_variant():
+            raise TypeError(f"{method}(): variant= needs a backend that declares SUPPORTS_VARIANT in the class "
+                            f"that defines its store/search methods (QdrantBackend does); "
+                            f"{type(self._backend).__name__} does not")
+        if not isinstance(variant, str):
+            raise TypeError(f"{method}(): variant must be a string, got {type(variant).__name__}")
+        if not variant or len(variant) > 256:
+            raise ValueError(f"{method}(): variant must be 1 to 256 characters, got {len(variant)}")
 
     def _set(self, query, response, *, tenant_id=None, user_id=None, session_id=None, metadata=None, plan=None,
-             standalone=False, usage=None, with_reason=False):
+             standalone=False, usage=None, with_reason=False, variant=None):
         """``set``'s body. oss-0049: returns whether an entry was written — True or False on a self-hosted backend,
         None on the managed one (the gateway decides and the transport does not report it). oss-0051:
         ``with_reason=True`` returns ``(stored, reason)``, reason ``"context_dependent"`` or
@@ -1205,6 +1293,7 @@ class Cache:
         # 0.9.3: metadata may not use the entry's own field names (ValueError, as the gateway's 422) and
         # must be a mapping (TypeError) — checked here, on every backend, before anything is embedded or sent.
         metadata = checked_metadata(metadata)
+        self._check_variant("set", variant)
         # oss-0044: the token counts — explicit, or carried by a with_usage() response — checked here too, and the
         # response stored as plain text.
         usage = checked_usage(usage) if usage is not None else usage_of(response)
@@ -1266,6 +1355,8 @@ class Cache:
                     user_id   = user_id if self.personalized else None,
                     expires   = expires,
                     metadata  = metadata,
+                    # oss-0064: only when given, so a backend without the keyword is called exactly as before.
+                    **({"variant": variant} if variant is not None else {}),
                 )
         if self._is_remote_transport:
             stored = None

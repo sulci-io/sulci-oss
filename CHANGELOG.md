@@ -8,6 +8,41 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **`variant=` on `Cache.get` / `Cache.set`, and `accept=` on `Cache.get` (oss-0064).** Both are for the managed
+  gateway's hosted chat endpoint (sulci-platform 0455), and both keep the rule that the billed hit or miss and the
+  answer the caller gets are one decision, made in one place.
+  - **`variant`** stores an entry so that only a lookup with the same variant returns it, and a lookup without one
+    never does. It is a condition in the Qdrant search itself (`sulci_variant` must match, or must be empty), not
+    a filter afterwards. The hosted endpoint passes a fingerprint of the request (system prompt, model and
+    parameters), so an answer written for one app's system prompt is never served to another's, and never to a
+    plain `/v1/cache/get`.
+    - Only `QdrantBackend` supports it (`SUPPORTS_VARIANT = True`). Every other backend, and the managed backend,
+      raises `TypeError` before anything is read or written, rather than ignoring it.
+    - **`sulci_variant` is now a reserved metadata key** (`ValueError` on `set(metadata=...)`), so a writer cannot
+      plant an entry that a variant lookup would return. A metadata key named `variant` is unaffected.
+  - **`accept`** is `callable(response, similarity) -> bool`, run on a candidate hit before anything is recorded,
+    counted or emitted. Anything but `True` turns the hit away, and an exception counts as a refusal (it is logged
+    by type only). `get` then returns `(None, similarity, depth)`, counts a miss, records no session turn, and emits
+    a `"miss"` event with `metadata={"refused": True}`.
+    - This is for a guard that must look at the answer, such as the blueprints' identifier check (an E42 fix is
+      not the answer to E24). With it, a hit nobody was served is never billed as one.
+    - `TypeError` on the managed backend, whose gateway emits the event.
+  - `AsyncCache` mirrors both (`aget`/`get`: `variant`, `accept`; `aset`/`set`: `variant`). `cached_call` takes
+    neither.
+  - **For subclasses of `QdrantBackend`:** a subclass that overrides `store`, `search` or `search_match`
+    inherits the flag but not the variant condition, so `variant=` is refused on it (`TypeError`) until it
+    declares `SUPPORTS_VARIANT = True` in its own body. The review reproduced the leak this prevents:
+    sulci-platform's `ClockedQdrantBackend` has its own copy of the lookup, so a plain lookup there returned an
+    entry stored with a variant. Plain calls (no `variant`) reach every backend exactly as before. sulci-platform
+    0456 adds the variant condition to that copy before the gateway uses either option.
+  - `accept` must return exactly `True` (`numpy.bool_(True)` is a refusal), and an async function is refused with
+    `TypeError`. `QdrantBackend.store` refuses a variant that is not a non-empty string, for direct callers.
+  - Known and documented: the session window is not keyed by variant, so in one session that spans variants,
+    earlier turns blend into a lookup of another variant. No answer crosses variants, because the search condition
+    still applies.
+
 ### Documentation
 
 - **Context-aware means safe in conversations, not "follow-ups resolve correctly" (oss-0063).** The positioning set

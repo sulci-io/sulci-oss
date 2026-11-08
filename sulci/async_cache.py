@@ -125,6 +125,8 @@ class AsyncCache:
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
         context_threshold: Optional[float] = None,
+        variant:    Optional[str] = None,
+        accept:     Optional[Callable[[str, float], bool]] = None,
     ) -> tuple:
         """
         Async semantic cache lookup.
@@ -159,6 +161,8 @@ class AsyncCache:
             session_id = session_id,
             plan       = plan,
             context_threshold = context_threshold,
+            variant    = variant,
+            accept     = accept,
         )
 
     async def aset(
@@ -173,6 +177,7 @@ class AsyncCache:
         metadata:   Optional[dict] = None,
         standalone: bool          = False,
         usage:      Any           = None,
+        variant:    Optional[str] = None,
     ) -> None:
         """
         Async cache store — saves response and advances the context window.
@@ -205,6 +210,7 @@ class AsyncCache:
             plan       = plan,
             standalone = standalone,
             usage      = usage,
+            variant    = variant,
         )
 
     async def acached_call(
@@ -324,6 +330,8 @@ class AsyncCache:
         tenant_id:  Optional[str] = None,
         plan:       Optional[str] = None,
         context_threshold: Optional[float] = None,
+        variant:    Optional[str] = None,
+        accept:     Optional[Callable[[str, float], bool]] = None,
     ) -> tuple:
         """Sync passthrough — cache.get(). threshold (v0.8.2) + tenant_id/plan
         (v0.8.1) mirror Cache.get."""
@@ -335,6 +343,8 @@ class AsyncCache:
             session_id = session_id,
             plan       = plan,
             context_threshold = context_threshold,
+            variant    = variant,
+            accept     = accept,
         )
 
     def set(
@@ -349,6 +359,7 @@ class AsyncCache:
         metadata:   Optional[dict] = None,
         standalone: bool          = False,
         usage:      Any           = None,
+        variant:    Optional[str] = None,
     ) -> None:
         """Sync passthrough — cache.set(). tenant_id/plan/metadata mirror Cache.set (v0.8.1); standalone (0.10.2);
         usage (oss-0044)."""
@@ -361,6 +372,7 @@ class AsyncCache:
             plan       = plan,
             standalone = standalone,
             usage      = usage,
+            variant    = variant,
         )
 
     def cached_call(

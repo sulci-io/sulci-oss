@@ -38,7 +38,14 @@ from typing import Any
 #: Fields of the cache entry itself. A metadata key with one of these names is refused.
 RESERVED_METADATA_KEYS = frozenset({
     "key", "query", "response", "tenant_id", "user_id", "expires", "created",
+    # oss-0064: the variant is written by the backend from ``Cache.set(variant=)``. Settable through metadata, it
+    # would let any writer plant an entry that a variant lookup (the hosted chat endpoint's fingerprint) returns.
+    "sulci_variant",
 })
+
+#: oss-0064: the entry field that holds ``Cache.set(variant=)``. Named with a prefix so an existing user's own
+#: ``metadata={"variant": ...}`` is untouched.
+VARIANT_FIELD = "sulci_variant"
 
 
 def checked_metadata(metadata: Any) -> dict:
