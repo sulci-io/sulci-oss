@@ -65,7 +65,8 @@ def _refused(excinfo):
 
 # ── the list ────────────────────────────────────────────────────────────────────
 def test_reserved_list_is_the_seven_entry_fields():
-    assert RESERVED_METADATA_KEYS == SEVEN
+    # oss-0064: plus the variant field, which Qdrant writes from Cache.set(variant=) and nothing else may write.
+    assert RESERVED_METADATA_KEYS == SEVEN | {"sulci_variant"}
     assert isinstance(RESERVED_METADATA_KEYS, frozenset)
 
 
@@ -429,7 +430,8 @@ def test_pin_reserved_list_equals_what_the_backends_write(tmp_path):
         written["qdrant"] = set(re.findall(r'"([a-z_]+)":', src))
     for name, keys in written.items():
         assert keys <= RESERVED_METADATA_KEYS, f"{name} writes {sorted(keys - RESERVED_METADATA_KEYS)}, not reserved"
-    assert set().union(*written.values()) == RESERVED_METADATA_KEYS
+    # oss-0064: "sulci_variant" is written only when Cache.set(variant=) is given (Qdrant), so it is absent here.
+    assert set().union(*written.values()) | {"sulci_variant"} == RESERVED_METADATA_KEYS
 
 
 # ── end to end through Cache, on every backend this machine has ────────────────
