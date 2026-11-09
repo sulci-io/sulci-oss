@@ -1,5 +1,11 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-11-08 against `sulci` **1.4.0rc1** — `check_api_surface.py --show`, its output diffed against the
+same command at 1.3.2 (`3b32b48`, tagged `v1.3.2`; each tree importing its own source): besides the version banner,
+the differing lines are `variant`, `accept` and `record_hit` on `Cache.get`, `AsyncCache.aget` and the
+`AsyncCache.get` passthrough, and `variant` on `Cache.set`, `AsyncCache.aset` and the `AsyncCache.set` passthrough
+(oss-0064, oss-0065: the 📌 rows below). 88 lines. The 1.3.2 measurement follows.
+
 **Measured:** 2026-11-06 against `sulci` **1.3.2** — `check_api_surface.py --show`, its output diffed against the
 same command at 1.3.1 (`51163df`, tagged `v1.3.1`; each tree importing its own source): identical, 88 lines. 1.3.2
 changes message text and documentation only (oss-0060, oss-0061). The 1.3.1 measurement follows.

@@ -8,6 +8,28 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0rc1] — 2026-11-08 — Release candidate: `variant=`, `accept=` and `record_hit=` on `Cache.get` / `set`
+
+The managed platform runs this release candidate on staging (sulci-platform 0456, which pins it exactly and is the
+first caller of all three) before 1.4.0. A minor release: new keyword arguments, every default unchanged. The
+entries below are oss-0064's (`e9c07e0`, PR #208) and oss-0065's (PR #209).
+
+### ⚠️ Upgrade note — Qdrant collections that run strict mode
+
+From this release every Qdrant lookup made **without** a `variant` carries an `is_empty` condition on the payload
+field `sulci_variant`, so that entries stored with a variant are never returned to it (oss-0064). A collection that
+runs Qdrant **strict mode** with `unindexed_filtering_retrieve: false` (Qdrant Cloud's default) refuses a filter on
+a field that has no payload index. ⚠️ Not yet measured whether strict mode refuses an `is_empty` condition this way;
+sulci-platform measures it on its staging collection with this candidate before 1.4.0. **Until that is settled, on a
+strict-mode collection create a keyword payload index on `sulci_variant` before upgrading**:
+
+```python
+client.create_payload_index("sulci", field_name="sulci_variant", field_schema="keyword")   # QdrantBackend.COLLECTION
+```
+
+Without it, if strict mode refuses the condition, every lookup fails. A collection without strict mode (the
+library's own auto-created collection, local and embedded Qdrant) is not affected.
+
 ### Added
 
 - **`record_hit=` on `Cache.get` and `AsyncCache.aget` / `get` (oss-0065).** Default `True`, as since 1.1.1: a hit in a
