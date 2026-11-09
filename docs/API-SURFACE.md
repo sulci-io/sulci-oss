@@ -1,5 +1,9 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-11-09 against `sulci` **1.4.0** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v1.4.0rc1` (`95fa2de`; each tree importing its own source): only the version banner differs,
+88 lines. The 1.4.0rc1 measurement follows.
+
 **Measured:** 2026-11-08 against `sulci` **1.4.0rc1** — `check_api_surface.py --show`, its output diffed against the
 same command at 1.3.2 (`3b32b48`, tagged `v1.3.2`; each tree importing its own source): besides the version banner,
 the differing lines are `variant`, `accept` and `record_hit` on `Cache.get`, `AsyncCache.aget` and the

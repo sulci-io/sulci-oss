@@ -2271,7 +2271,8 @@ def _wipe_bench_dbs():
 #     heavily across sessions; tool-call decisions repeat moderately; task-
 #     specific reasoning is mostly novel).
 #
-#     Categories (calibrated to public agent-traffic measurements):
+#     Categories (the weights and pool sizes are this benchmark's own choice; no
+#     published agent-traffic measurement is behind them):
 #       structural       45%  — planner, reflector, system-prompt-like prompts.
 #                              Small param pools → high semantic-repetition.
 #       semi_structural  35%  — tool-call decisions, intermediate reasoning,
@@ -2279,8 +2280,14 @@ def _wipe_bench_dbs():
 #       novel            20%  — task-specific reasoning, user-input-derived
 #                              prompts. Large param pools → low repetition.
 #
-#     Expected hit rate range: 55-75% on default workload (50 × 200) with
-#     real MiniLM embeddings + threshold 0.85.
+#     What it measures, read before quoting it (2026-11-09): the pools are small,
+#     so 10,000 dispatches (50 × 200) hold only ~550 distinct prompts (549-557
+#     over seeds 1, 2, 3, 42) and nearly every hit is a byte-identical repeat --
+#     seed 1: 9,499 hits, of which at most 56 matched a different prompt. An
+#     exact-match cache would score about the same. Stored responses are a
+#     placeholder, so whether a hit was the RIGHT answer is not measured here.
+#     Committed result (benchmark/results/minilm, MiniLM, threshold 0.85):
+#     aggregate hit rate 95.0%, 2 misses in the median session.
 # ══════════════════════════════════════════════════════════════════════════════
 
 AGENT_WORKLOAD = {

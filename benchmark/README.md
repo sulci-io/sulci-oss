@@ -82,19 +82,26 @@ Simulates a realistic mixed-workload agent's LLM dispatch pattern across
 Measures the per-session deduplication rate that maps directly to the
 "X dispatches → Y LLM calls" framing on the homepage.
 
-Workload mix (calibrated to public agent-traffic measurements):
+Workload mix (the weights and pools are this benchmark's own choice; no published agent-traffic measurement is
+behind them):
 
 | Category | Weight | Examples |
 |---|---|---|
 | Structural | 45% | Planner, reflector, system-prompt-like prompts. High cacheability — small param pools, frequent semantic repetition. |
 | Semi-structural | 35% | Tool-call decisions, intermediate reasoning. Moderate cacheability — parameterized template-bound prompts. |
-| Novel | 20% | Task-specific reasoning, user-input-derived prompts. Low cacheability — large param pools, novel content per dispatch. |
+| Novel | 20% | Task-specific reasoning, user-input-derived prompts. Meant to be the least cacheable, but its pools give only ~150 distinct prompts in ~2,000 draws, and it hits 92%. |
+
+**Read before quoting it (2026-11-09).** The pools are small: 10,000 dispatches hold only ~550 distinct prompts
+(549–557 over seeds 1, 2, 3 and 42), so nearly every hit is a byte-identical repeat. On seed 1, at most 56 of 9,499
+hits matched a different prompt. An exact-match cache would score about the same, so this mode shows how repetitive
+the workload is, not how well Sulci matches meaning. Stored responses are a placeholder, so whether a hit was the
+right answer is not measured here; the stateless mode's precision is the accuracy figure.
 
 ```bash
 # Fast synthetic mode — CI baseline   # TF-IDF; not the shipped engine, do not cite
 python3 benchmark/run.py --agent
 
-# Real-MiniLM mode — produces the conservative number cited externally
+# Real-MiniLM mode — the shipped engine (benchmark/results/minilm)
 pip install "sulci[sqlite]"
 python3 benchmark/run.py --agent --use-sulci
 
