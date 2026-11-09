@@ -796,6 +796,7 @@ class Cache:
         context_threshold: Optional[float] = None,
         variant:    Optional[str]   = None,
         accept:     Optional[Callable[[str, float], bool]] = None,
+        record_hit: bool            = True,
     ) -> tuple:
         """
         Check cache for a semantically similar query.
@@ -865,20 +866,39 @@ class Cache:
                         ``"miss"`` event with ``metadata={"refused": True}``. For a guard the caller must apply to
                         the answer (an identifier check) without billing a hit nobody was served. ``TypeError`` on
                         the managed backend, whose gateway emits the event.
+            record_hit: oss-0065. Default ``True``: a hit in a session is recorded as that conversation's newest turn
+                        (since 1.1.1, oss-0049), so the next lookup blends it and the next ``set`` knows it is a
+                        follow-up. ``False`` records no turn for the hit — for a caller that records turns itself
+                        (sulci-platform's gateway, which keeps more history than one lookup's window: the session
+                        adapter trims to this Cache's ``context_window`` when it appends) or that must not add one (a
+                        read-only tool). The hit is still returned, counted and emitted. It covers the hit only: a
+                        ``set(..., session_id=)`` still records (and trims), so such a caller gives ``set`` no session.
+                        With the built-in session store a lookup in a session still opens or refreshes that session's
+                        window, as every lookup there does; no turn is added. ``TypeError`` for anything but a bool,
+                        and for ``False`` on the managed backend, whose gateway records the turn itself.
 
         Returns:
             (cached_response, similarity_score, context_depth)
             response is None on cache miss.
             context_depth = number of prior turns that influenced lookup.
         """
+        if not isinstance(record_hit, bool):
+            t = type(record_hit)
+            raise TypeError(f"get(): record_hit must be a Python bool (True or False), got {record_hit!r} of type "
+                            f"{t.__module__}.{t.__qualname__}")
+        # oss-0065: refused rather than accepted and ignored, as accept= is: the managed backend's gateway records a
+        # hit's turn itself, and this library cannot tell it not to.
+        if not record_hit and self._is_remote_transport:
+            raise TypeError("get(): record_hit=False is not supported on the managed backend: its gateway records "
+                            "a hit's turn in the session")
         return self._get(query, threshold=threshold, tenant_id=tenant_id, user_id=user_id, session_id=session_id,
-                         plan=plan, context_threshold=context_threshold, record_hit=True, variant=variant,
+                         plan=plan, context_threshold=context_threshold, record_hit=record_hit, variant=variant,
                          accept=accept)
 
     def _get(self, query, *, threshold=None, tenant_id=None, user_id=None, session_id=None, plan=None,
              context_threshold=None, record_hit=True, variant=None, accept=None) -> tuple:
-        """``get``'s body. oss-0049: ``record_hit=False`` looks up without recording a hit's turn — for a caller that
-        promises not to write (the MCP ``cache_lookup`` tool is annotated read-only). Not public API."""
+        """``get``'s body. ``record_hit`` is ``get``'s public keyword since oss-0065 (oss-0049 added it here, for the
+        MCP ``cache_lookup`` tool); call ``get``, not this."""
         # 0.9.3: "global" and "" address the shared scope; refused before anything is read or sent.
         refuse_reserved_scope(tenant_id, user_id, personalized=self.personalized)
         # 1.0.1 (G33): the managed transport sends no tenant_id — refuse it, as delete_user() does, instead of

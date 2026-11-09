@@ -202,11 +202,12 @@ def build_server(
             # `response` is None on a miss. Verified against core.py:488-666 on
             # 2026-08-11 — do not "simplify" this to a scalar.
             # oss-0049: Cache.get records a hit's turn; this tool is annotated read-only and says "Does not
-            # modify anything", so it looks up through _get(record_hit=False) when it can.
-            lookup = getattr(_inner(cache), "_get", None) if _plain_cache(cache) else None
+            # modify anything", so it looks up with record_hit=False (public since oss-0065) when it can.
             kwargs = dict(threshold=threshold, tenant_id=_tenant(tenant_id), session_id=session_id)
-            resp, similarity, depth = (lookup(query, record_hit=False, **kwargs) if lookup is not None
-                                       else cache.get(query, **kwargs))
+            # Not on the managed backend, which refuses it: its gateway records a hit's turn whatever the caller asks.
+            if _plain_cache(cache) and not getattr(_inner(cache), "_is_remote_transport", False):
+                kwargs["record_hit"] = False
+            resp, similarity, depth = cache.get(query, **kwargs)
         except Exception as exc:  # never take the agent down with us
             logger.warning("sulci cache_lookup failed: %s", exc)
             return json.dumps({"cache_hit": False, "error": str(exc)})
@@ -250,10 +251,13 @@ def build_server(
                 "Store `response` as the answer to `query` so a later run can "
                 "skip the work. WRITE: this modifies the cache file. It does "
                 "not touch repository state. With `session_id`, a query asked "
-                "once the session holds a turn (an earlier store, or a lookup "
-                "that hit) is a follow-up: it is recorded but not stored "
-                "(\"stored\": false), unless `standalone` is true — set it "
-                "when `query` makes sense on its own."
+                "once the session holds a turn (an earlier store in it) is a "
+                "follow-up: it is recorded but not stored (\"stored\": false), "
+                "unless `standalone` is true — set it when `query` makes sense "
+                "on its own. cache_lookup records nothing, so after a lookup "
+                "that hit the session holds no turn, and a vague follow-up "
+                "stored next would be stored as a first question: store the "
+                "session's first question before its follow-ups."
             ),
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False),
         )
