@@ -8,6 +8,29 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-11-09 — `variant=`, `accept=` and `record_hit=` on `Cache.get` / `set`
+
+1.4.0rc1, released: no library code changed after the release candidate, so the entries below are this release's.
+The managed platform ran 1.4.0rc1 on staging first (sulci-platform 0456-b, `72423fb`): the gateway's whole suite with
+the real library, then a live check of its hosted chat endpoint against OpenAI and Anthropic on 2026-11-09 (a stored
+miss, then a hit, for each provider; follow-ups, personal details and streams forwarded uncached; one billed unit per
+call).
+
+### ⚠️ Upgrade note — Qdrant strict mode: measured, the index is required
+
+The candidate's note below said it was not yet measured whether strict mode refuses the new `is_empty` condition on
+an unindexed `sulci_variant`. **It does.** On 2026-11-09 sulci-platform 0456-a asked both of its strict-mode
+collections (`unindexed_filtering_retrieve: false`) for a plain lookup's filter before adding the index: both answered
+`400 Index required but not found for "sulci_variant"`; with a keyword index on the field, `200`. So on a strict-mode
+collection, **create the keyword payload index on `sulci_variant` before upgrading**, or every lookup fails:
+
+```python
+client.create_payload_index("sulci", field_name="sulci_variant", field_schema="keyword")   # QdrantBackend.COLLECTION
+```
+
+A collection without strict mode (the library's own auto-created collection, local and embedded Qdrant) is not
+affected.
+
 ## [1.4.0rc1] — 2026-11-08 — Release candidate: `variant=`, `accept=` and `record_hit=` on `Cache.get` / `set`
 
 The managed platform runs this release candidate on staging (sulci-platform 0456, which pins it exactly and is the
