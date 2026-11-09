@@ -287,6 +287,7 @@ There are eight. Not nine.
 | `set(query, response, *, …)` — 📌 oss-0044 | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone`, `usage` | `None` |
 | `get(query, *, …)` — 📌 oss-0064 (unreleased) | `threshold`, `tenant_id`, `user_id`, `session_id`, `plan`, `context_threshold`, `variant`, `accept` | `(response \| None, similarity, context_depth)` |
 | `set(query, response, *, …)` — 📌 oss-0064 (unreleased) | `tenant_id`, `user_id`, `session_id`, `metadata`, `plan`, `standalone`, `usage`, `variant` | `None` |
+| `get(query, *, …)` — 📌 oss-0065 (unreleased) | `threshold`, `tenant_id`, `user_id`, `session_id`, `plan`, `context_threshold`, `variant`, `accept`, `record_hit` | `(response \| None, similarity, context_depth)` |
 
 Everything after `query` on `get` / `set` / `cached_call` is **keyword-only**.
 `SyncCache` is an alias for `Cache`. `tenant_id` is a hard partition boundary
@@ -371,6 +372,17 @@ cache.cached_call("How do I reset my password?", ask)
 - A `QdrantBackend` **subclass** that overrides `store`, `search` or `search_match` must declare
   `SUPPORTS_VARIANT = True` in its own body before `variant=` is accepted: an inherited flag is not trusted,
   because an overriding copy of the lookup does not carry the variant condition.
+
+### `record_hit` (📌 oss-0065, unreleased)
+
+- **`record_hit`** (`get`; `AsyncCache.aget` and `get`): default `True` — a hit in a session is recorded as that
+  conversation's newest turn (since 1.1.1, oss-0049). `False` records no turn for the hit; the hit is still returned,
+  counted and emitted. For a caller that records turns itself — the managed gateway keeps more history than one
+  lookup's window, and the session adapter trims to the looking-up `Cache`'s `context_window` when it appends — or
+  that must not add one (the MCP `cache_lookup` tool). The hit only: `set(..., session_id=)` still records, so such a
+  caller gives `set` no session. With the built-in session store a lookup in a session still opens or refreshes its
+  window. A bool only (`TypeError` otherwise); `False` is a `TypeError` on the managed backend, whose gateway records
+  the turn itself.
 
 ### `delete_user` — a `Cache` method since 0.10.0
 
@@ -525,6 +537,8 @@ As of 0.8.2 the forwardable-kwarg surface is a complete mirror:
 | `aset` — 📌 oss-0064 (unreleased) | `tenant_id`, `plan`, `metadata`, `standalone`, `usage`, `variant` |
 | `get` (sync passthrough) — 📌 oss-0064 (unreleased) | `threshold`, `tenant_id`, `plan`, `context_threshold`, `variant`, `accept` |
 | `set` (sync passthrough) — 📌 oss-0064 (unreleased) | `tenant_id`, `plan`, `metadata`, `standalone`, `usage`, `variant` |
+| `aget` — 📌 oss-0065 (unreleased) | `tenant_id`, `plan`, `context_threshold`, `variant`, `accept`, `record_hit` |
+| `get` (sync passthrough) — 📌 oss-0065 (unreleased) | `threshold`, `tenant_id`, `plan`, `context_threshold`, `variant`, `accept`, `record_hit` |
 
 **The mirror is of which kwargs are forwarded, not of how they are passed.** On
 `aget` and `acached_call`, `threshold` — along with `user_id`, `session_id`,

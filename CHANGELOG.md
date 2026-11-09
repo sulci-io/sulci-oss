@@ -10,6 +10,22 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- **`record_hit=` on `Cache.get` and `AsyncCache.aget` / `get` (oss-0065).** Default `True`, as since 1.1.1: a hit in a
+  session is recorded as that conversation's newest turn. `False` records no turn for the hit; the hit is still
+  returned, counted and emitted. It existed privately (`_get(record_hit=False)`, oss-0049, for the MCP
+  `cache_lookup` tool, which now uses the public keyword).
+  - It covers the hit only: `set(..., session_id=)` still records the turn (and trims to the window), so a caller
+    that keeps its own history gives `set` no session, as the gateway does. With the built-in session store a lookup
+    in a session still opens or refreshes the session's window, as every lookup there does; it adds no turn.
+  - **Why it is public:** sulci-platform's gateway records every hit's turn itself, keeping up to 20 turns per
+    session. Calling `get` with a session made the library record the same turn again and — because the session
+    adapter trims to the looking-up `Cache`'s `context_window` when it appends — cut the conversation to that window
+    (2 turns at the gateway's default). The gateway passes `record_hit=False` from its pin bump to 1.4.0 (0456).
+  - A bool only (`TypeError` otherwise). `record_hit=False` raises `TypeError` on the managed backend, whose gateway
+    records a hit's turn itself, rather than being accepted and ignored; the MCP tool does not pass it there.
+  - Fixed with it: the MCP `cache_store` description said a lookup that hit leaves a turn in the session; since
+    `cache_lookup` records nothing, it no longer says so, and it tells the agent to store a session's first question
+    before its follow-ups.
 - **`variant=` on `Cache.get` / `Cache.set`, and `accept=` on `Cache.get` (oss-0064).** Both are for the managed
   gateway's hosted chat endpoint (sulci-platform 0455), and both keep the rule that the billed hit or miss and the
   answer the caller gets are one decision, made in one place.

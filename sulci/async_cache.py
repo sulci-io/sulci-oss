@@ -127,6 +127,7 @@ class AsyncCache:
         context_threshold: Optional[float] = None,
         variant:    Optional[str] = None,
         accept:     Optional[Callable[[str, float], bool]] = None,
+        record_hit: bool = True,
     ) -> tuple:
         """
         Async semantic cache lookup.
@@ -145,6 +146,8 @@ class AsyncCache:
             Customer plan tier ('free' | 'pro' | 'business' | 'enterprise' |
             'oss_connect'), forwarded onto the emitted ``CacheEvent.plan``.
             Mirrors ``Cache.get`` (v0.5.6). v0.8.1.
+        record_hit : bool, optional
+            ``False`` looks up without recording a hit as a session turn. Mirrors ``Cache.get`` (oss-0065).
 
         Returns
         -------
@@ -163,6 +166,8 @@ class AsyncCache:
             context_threshold = context_threshold,
             variant    = variant,
             accept     = accept,
+            # oss-0065: forwarded only when not the default, so a wrapped Cache whose get predates it still works.
+            **({} if record_hit is True else {"record_hit": record_hit}),
         )
 
     async def aset(
@@ -332,9 +337,10 @@ class AsyncCache:
         context_threshold: Optional[float] = None,
         variant:    Optional[str] = None,
         accept:     Optional[Callable[[str, float], bool]] = None,
+        record_hit: bool = True,
     ) -> tuple:
         """Sync passthrough — cache.get(). threshold (v0.8.2) + tenant_id/plan
-        (v0.8.1) mirror Cache.get."""
+        (v0.8.1) mirror Cache.get, and record_hit (oss-0065)."""
         return self._cache.get(
             query,
             threshold  = threshold,
@@ -345,6 +351,8 @@ class AsyncCache:
             context_threshold = context_threshold,
             variant    = variant,
             accept     = accept,
+            # oss-0065: forwarded only when not the default, so a wrapped Cache whose get predates it still works.
+            **({} if record_hit is True else {"record_hit": record_hit}),
         )
 
     def set(
