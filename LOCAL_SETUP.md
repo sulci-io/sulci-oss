@@ -11,7 +11,7 @@ Everything you need to clone the repo, install dependencies, run tests, and veri
 > written. The reference sections from *Troubleshooting* onward were checked
 > against the repo on 2026-09-30. In Steps 9–10, every keyless snippet and test
 > command was run on 2026-10-01; the parts that need a live gateway and a key
-> (`connect()` with a real key, `prompt=True`, the end-to-end staging smoke)
+> (`connect()` with a real key, `prompt=True`, the end-to-end smoke)
 > are optional checks for account holders and have **not** been re-run.
 >
 > **0.9.3 refresh (2026-10-14, Linux, Python 3.12):** the *Current state* table, the
@@ -696,7 +696,7 @@ below are safe the same way.
 > and fail.
 
 The **live** checks in this step (`connect()` with a real key, `prompt=True`, the
-staging smoke) are optional. They're for account holders who have minted a key,
+end-to-end smoke) are optional. They're for account holders who have minted a key,
 by signing up or through the device-code flow, and want to exercise the engine
 against a real gateway.
 
@@ -704,11 +704,12 @@ The repo has exactly **one** automated live check: PROBE 2 in
 `tests/integration/flows/flow_2_routemismatch.py`. `test_flow_contracts.py` runs
 that script as part of a normal `pytest tests/`, and PROBE 2 activates only when
 both `SULCI_LIVE_GATEWAY` and `SULCI_LIVE_KEY` are set. It has no default URL: it
-calls whatever you set. If you enable it, use staging and a staging key, and set
-the variables for that one run only, not in your shell profile:
+calls whatever you set. If you enable it, use a local gateway (or a test gateway
+Sulci has given you) and a key it issued, and set the variables for that one run
+only, not in your shell profile:
 
 ```bash
-SULCI_LIVE_GATEWAY=https://staging.api.sulci.io SULCI_LIVE_KEY=sk-sulci-<staging-key> \
+SULCI_LIVE_GATEWAY=http://localhost:8000 SULCI_LIVE_KEY=sk-sulci-<test-key> \
   python tests/integration/flows/flow_2_routemismatch.py
 ```
 
@@ -721,9 +722,8 @@ SULCI_LIVE_GATEWAY=https://staging.api.sulci.io SULCI_LIVE_KEY=sk-sulci-<staging
 > `backend="sulci"` for real, point the SDK elsewhere:
 >
 > ```bash
-> export SULCI_GATEWAY=https://staging.api.sulci.io   # shared staging
-> # or
 > export SULCI_GATEWAY=http://localhost:8000          # local docker gateway (sulci-platform)
+> # or a test gateway Sulci has given you
 > ```
 >
 > One variable redirects everything: telemetry, the device-code flow, and
@@ -749,7 +749,7 @@ print(sulci._event_buffer)         # []
 
 ### Test connect() with a real key
 
-Run these with `SULCI_GATEWAY` set to staging or a local gateway (see the
+Run these with `SULCI_GATEWAY` set to a local or test gateway (see the
 warning above), using a key from that gateway. A successful `connect()` writes
 the key to `~/.sulci/config`.
 
@@ -858,7 +858,7 @@ sulci.connect()
 # → falls through args → env → config; if none yield a key, returns silently
 #   (no telemetry enabled, no network call attempted)
 
-# To opt into the browser-based onboarding flow (SULCI_GATEWAY set to staging/local!):
+# To opt into the browser-based onboarding flow (SULCI_GATEWAY set to a local or test gateway!):
 sulci.connect(prompt=True)
 # → if no key found through the first three steps:
 #     [sulci] Visit https://dashboard.sulci.io/oss-connect and enter code: WXYZ-2345
@@ -871,7 +871,7 @@ sulci.connect(prompt=True)
 > **The device-code chain is live in production** (gateway
 > `/v1/oss-connect/{device-code,authorize,token}` plus the dashboard
 > `/oss-connect` page, since the 2026-05-08 cutover), so end users can run
-> `prompt=True` safely. **Developers still test it against staging or a local
+> `prompt=True` safely. **Developers still test it against a local or test
 > gateway, never production** (see the warning at the top of this step).
 >
 > **Check that your target gateway has deployed the OSS-Connect routes first.**
@@ -894,30 +894,30 @@ python -c "import sulci; sulci.connect(prompt=True)"
 > pinned to `api.sulci.io` regardless. v0.5.5 fixed that — see the next
 > sub-section.
 
-### v0.5.5 — staging-gateway redirect for telemetry
+### v0.5.5 — gateway redirect for telemetry
 
 In v0.5.5 a single `SULCI_GATEWAY` value redirects both the device-code flow
 *and* the telemetry pipeline. This is what makes a published `pip install
-sulci` wheel usable against a non-prod gateway without code changes — e.g.
-pointing it at the Railway staging gateway before DNS cutover.
+sulci` wheel usable against a non-prod gateway without code changes — e.g. a
+local or self-hosted gateway.
 
 **Quick verification** that the env var is reaching `_TELEMETRY_URL`:
 
 ```bash
-SULCI_GATEWAY=https://staging.example.com python -c "
+SULCI_GATEWAY=https://gateway.example.com python -c "
 import sulci
 print('_GATEWAY_BASE: ', sulci._GATEWAY_BASE)
 print('_TELEMETRY_URL:', sulci._TELEMETRY_URL)
 "
 # v0.5.5 prints:
-#   _GATEWAY_BASE:  https://staging.example.com
-#   _TELEMETRY_URL: https://staging.example.com/v1/telemetry
+#   _GATEWAY_BASE:  https://gateway.example.com
+#   _TELEMETRY_URL: https://gateway.example.com/v1/telemetry
 #
 # v0.5.4 and earlier print _TELEMETRY_URL still pointing at api.sulci.io
 # regardless of the env var — that's the bug 0.5.5 fixed.
 ```
 
-**End-to-end staging smoke** (Connected-OSS dashboard tier, mirrors
+**End-to-end smoke** (Connected-OSS dashboard tier, mirrors
 sulci-platform LAUNCH-PLAN row C2e):
 
 ```bash
@@ -925,8 +925,8 @@ sulci-platform LAUNCH-PLAN row C2e):
 python -m venv ~/c2e_venv && source ~/c2e_venv/bin/activate
 pip install "sulci>=0.5.5"   # 0.5.6+ also works; pin if you specifically need 0.5.5 behavior
 
-export SULCI_GATEWAY=https://staging.api.sulci.io     # never api.sulci.io
-export SULCI_API_KEY=sk-sulci-<staging-oss-connect-test-key>   # plan='oss_connect'
+export SULCI_GATEWAY=http://localhost:8000            # never api.sulci.io
+export SULCI_API_KEY=sk-sulci-<oss-connect-test-key>   # plan='oss_connect'
 
 python - <<'PY'
 import sulci, time
@@ -1075,7 +1075,7 @@ python -m pytest tests/test_telemetry_gateway_override.py -v
 `SulciCloudBackend` is the cloud backend driver. It routes cache operations
 over httpx to, in order: the `gateway_url=` argument, else `SULCI_GATEWAY`,
 else the production default `https://api.sulci.io`. **For any live test, set
-`SULCI_GATEWAY` to staging or a local gateway first** (see Step 9). The
+`SULCI_GATEWAY` to a local or test gateway first** (see Step 9). The
 snippets below are safe as they stand: constructing the backend opens no
 connection, and the wiring checks use a mock.
 
@@ -1271,7 +1271,7 @@ checks it for updates unless `HF_HUB_OFFLINE=1` is set (see Step 5).
 > Get a free key at [sulci.io/signup](https://sulci.io/signup). Setting this variable
 > is optional — the library works fully offline without it. That is a
 > **production** key: for development and testing, use a key issued by the
-> staging or local gateway, with `SULCI_GATEWAY` set (Step 9).
+> local or test gateway, with `SULCI_GATEWAY` set (Step 9).
 
 ---
 

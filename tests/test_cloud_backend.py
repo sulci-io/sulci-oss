@@ -156,24 +156,24 @@ class TestConstruction:
     # ── SULCI_GATEWAY env var (closes v0.5.5 follow-up #TBD-2) ────────────
     # v0.5.5 shipped SULCI_GATEWAY for telemetry; cloud backend was left
     # honoring gateway_url= kwarg only, creating a split-brain state in
-    # staging (telemetry to staging URL, cache traffic to prod). These
+    # a non-production gateway (telemetry there, cache traffic to prod). These
     # tests lock in the 3-tier precedence chain: kwarg > env > default.
 
     def test_env_var_used_when_no_kwarg(self, monkeypatch):
         """SULCI_GATEWAY env var is honored when no explicit gateway_url."""
-        monkeypatch.setenv("SULCI_GATEWAY", "https://staging.sulci.io")
+        monkeypatch.setenv("SULCI_GATEWAY", "https://gateway.example.test")
         b = make_backend()
-        assert b._base_url == "https://staging.sulci.io"
+        assert b._base_url == "https://gateway.example.test"
 
     def test_env_var_trailing_slash_stripped(self, monkeypatch):
         """Trailing slash on SULCI_GATEWAY is stripped, matching kwarg path."""
-        monkeypatch.setenv("SULCI_GATEWAY", "https://staging.sulci.io/")
+        monkeypatch.setenv("SULCI_GATEWAY", "https://gateway.example.test/")
         b = make_backend()
-        assert b._base_url == "https://staging.sulci.io"
+        assert b._base_url == "https://gateway.example.test"
 
     def test_kwarg_wins_over_env_var(self, monkeypatch):
         """Explicit gateway_url= kwarg overrides SULCI_GATEWAY env var."""
-        monkeypatch.setenv("SULCI_GATEWAY", "https://staging.sulci.io")
+        monkeypatch.setenv("SULCI_GATEWAY", "https://gateway.example.test")
         b = make_backend(gateway_url="https://cache.acme.internal")
         assert b._base_url == "https://cache.acme.internal"
 
@@ -181,8 +181,8 @@ class TestConstruction:
         """Empty SULCI_GATEWAY string is treated as unset — falls to default.
 
         Guards against subtle CI misconfigurations that export the var but
-        leave it empty (e.g., ``export SULCI_GATEWAY=$STAGING_URL`` when
-        ``STAGING_URL`` is unset)."""
+        leave it empty (e.g., ``export SULCI_GATEWAY=$GATEWAY_URL`` when
+        ``GATEWAY_URL`` is unset)."""
         monkeypatch.setenv("SULCI_GATEWAY", "")
         b = make_backend()
         assert b._base_url == "https://api.sulci.io"

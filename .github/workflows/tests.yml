@@ -355,6 +355,11 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         run: pytest tests/test_tag_version.py tests/test_release_gate.py -v --tb=short
 
+      # oss-0068: this repository is public, so it doesn't name the managed platform's internal test environment
+      # (see the test's docstring). Docs-only changes can add a mention too, so this step has no `code` condition.
+      - name: No internal environment names (public repository)
+        run: pytest tests/test_no_internal_environment_names.py -v --tb=short
+
       # 0.10.0 (oss-0027): covers how `make release-check` reads the version
       # docs/API-SURFACE.md was measured against -- the newest measurement
       # only, a pre-release read whole. Runs both scripts on COPIES of the tree;

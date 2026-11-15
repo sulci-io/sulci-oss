@@ -12,11 +12,11 @@ In v0.5.4 and earlier, ``sulci/__init__.py`` defined::
     ...
     _GATEWAY_BASE  = os.environ.get("SULCI_GATEWAY", "https://api.sulci.io")...
 
-The comment above ``_GATEWAY_BASE`` claimed staging/local-dev override
+The comment above ``_GATEWAY_BASE`` claimed a test/local-dev gateway override
 via ``SULCI_GATEWAY`` — but ``_TELEMETRY_URL`` (which ``_post()`` actually
 uses) was a separate literal that ignored the env var entirely. This
-broke staging smoke tests where the SDK is supposed to send telemetry
-to a non-prod gateway (e.g. the Railway staging URL pre-DNS-cutover).
+broke smoke tests where the SDK is supposed to send telemetry to a
+non-prod gateway (e.g. a local or self-hosted one).
 
 Fix
 ---
@@ -94,9 +94,9 @@ class TestGatewayBaseAndTelemetryUrl:
 
     def test_trailing_slash_normalized(self, monkeypatch):
         """``rstrip('/')`` on _GATEWAY_BASE prevents double-slash in URL."""
-        sulci = _reimport_sulci(monkeypatch, gateway_value="https://staging.example.com/")
-        assert sulci._GATEWAY_BASE  == "https://staging.example.com"
-        assert sulci._TELEMETRY_URL == "https://staging.example.com/v1/telemetry"
+        sulci = _reimport_sulci(monkeypatch, gateway_value="https://gateway.example.com/")
+        assert sulci._GATEWAY_BASE  == "https://gateway.example.com"
+        assert sulci._TELEMETRY_URL == "https://gateway.example.com/v1/telemetry"
 
     def test_localhost_for_local_dev(self, monkeypatch):
         sulci = _reimport_sulci(monkeypatch, gateway_value="http://localhost:8080")
@@ -109,7 +109,7 @@ class TestPostHonorsResolvedUrl:
     def test_post_sends_to_overridden_url(self, monkeypatch):
         sulci = _reimport_sulci(
             monkeypatch,
-            gateway_value="https://staging.example.com",
+            gateway_value="https://gateway.example.com",
         )
         sulci._api_key           = "sk-sulci-test"
         sulci._telemetry_enabled = True
@@ -131,7 +131,7 @@ class TestPostHonorsResolvedUrl:
 
         mock_post.assert_called_once()
         called_url = mock_post.call_args.args[0]
-        assert called_url == "https://staging.example.com/v1/telemetry"
+        assert called_url == "https://gateway.example.com/v1/telemetry"
 
     def test_post_uses_default_when_env_unset(self, monkeypatch):
         sulci = _reimport_sulci(monkeypatch, gateway_value=None)
