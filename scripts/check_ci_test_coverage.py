@@ -64,7 +64,7 @@ NOT_A_SUITE = {"conftest.py", "_fake_embedder.py"}
 #: Suites intentionally outside CI. Each needs a reason, and the reason has to
 #: be about the SUITE -- "it is slow" is one, "nobody got round to it" is not.
 DELIBERATELY_UNCOVERED: dict = {
-    # e.g. "test_something.py": "needs a live gateway; covered by staging",
+    # e.g. "test_something.py": "needs a live gateway; covered by a live-gateway run",
 }
 
 

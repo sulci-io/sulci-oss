@@ -79,10 +79,10 @@ def run() -> int:
     expect(ua.startswith("sulci/"),
            f"User-Agent should start with 'sulci/'; got {ua!r}")
 
-    # ── 2. Override gateway_url (staging / self-hosted gateway) ─────────────
-    be2 = SulciCloudBackend(api_key="sk-sulci-flow-2-staging",
-                            gateway_url="https://staging.sulci.io/")
-    expect(be2._base_url == "https://staging.sulci.io",
+    # ── 2. Override gateway_url (test / self-hosted gateway) ─────────────
+    be2 = SulciCloudBackend(api_key="sk-sulci-flow-2-override",
+                            gateway_url="https://gateway.example.test/")
+    expect(be2._base_url == "https://gateway.example.test",
            f"gateway_url override should strip trailing slash; got {be2._base_url!r}")
 
     # ── 3. Missing api_key (the negative path the docstring promises) ───────

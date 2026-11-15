@@ -8,10 +8,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (docs and tests only; no code change)
+
+- **This repository no longer names the managed platform's internal test environment.** `LOCAL_SETUP.md` points
+  development runs at a local gateway (`SULCI_GATEWAY=http://localhost:8000`) or a test gateway Sulci has given you;
+  comments in `sulci/__init__.py` and `sulci/backends/cloud.py` say "test or local-dev gateway"; tests use example
+  hosts (`gateway.example.test`, `gateway.example.com`); past entries below say "its test deployment". Mentions of a
+  user's own pre-production environment (the README's and ADR 0001's `telemetry=False` advice) stay. New
+  `tests/test_no_internal_environment_names.py`, run by CI on every change, fails on a new mention (oss-0068).
+
 ## [1.4.0] — 2026-11-09 — `variant=`, `accept=` and `record_hit=` on `Cache.get` / `set`
 
 1.4.0rc1, released: no library code changed after the release candidate, so the entries below are this release's.
-The managed platform ran 1.4.0rc1 on staging first (sulci-platform 0456-b, `72423fb`): the gateway's whole suite with
+The managed platform ran 1.4.0rc1 on its test deployment first (sulci-platform 0456-b, `72423fb`): the gateway's whole suite with
 the real library, then a live check of its hosted chat endpoint against OpenAI and Anthropic on 2026-11-09 (a stored
 miss, then a hit, for each provider; follow-ups, personal details and streams forwarded uncached; one billed unit per
 call).
@@ -33,7 +42,7 @@ affected.
 
 ## [1.4.0rc1] — 2026-11-08 — Release candidate: `variant=`, `accept=` and `record_hit=` on `Cache.get` / `set`
 
-The managed platform runs this release candidate on staging (sulci-platform 0456, which pins it exactly and is the
+The managed platform runs this release candidate on its test deployment (sulci-platform 0456, which pins it exactly and is the
 first caller of all three) before 1.4.0. A minor release: new keyword arguments, every default unchanged. The
 entries below are oss-0064's (`e9c07e0`, PR #208) and oss-0065's (PR #209).
 
@@ -43,7 +52,7 @@ From this release every Qdrant lookup made **without** a `variant` carries an `i
 field `sulci_variant`, so that entries stored with a variant are never returned to it (oss-0064). A collection that
 runs Qdrant **strict mode** with `unindexed_filtering_retrieve: false` (Qdrant Cloud's default) refuses a filter on
 a field that has no payload index. ⚠️ Not yet measured whether strict mode refuses an `is_empty` condition this way;
-sulci-platform measures it on its staging collection with this candidate before 1.4.0. **Until that is settled, on a
+sulci-platform measures it on its test collection with this candidate before 1.4.0. **Until that is settled, on a
 strict-mode collection create a keyword payload index on `sulci_variant` before upgrading**:
 
 ```python
@@ -390,7 +399,7 @@ never existed.
 
 1.0.0rc1, released: no library code changed after the release candidate (nor since 0.10.2), so the entry below is
 this release's. Semantic Versioning holds for the public API in docs/API-SURFACE.md from this release. The managed
-platform ran 1.0.0rc1 on staging before this release (sulci-platform `d57d984`: Tests, Performance, Staging smoke and
+platform ran 1.0.0rc1 on its test deployment before this release (sulci-platform `d57d984`: Tests, Performance, post-deploy smoke and
 Book demo smoke green; the Acme demo's real-library suite, 52 tests with MiniLM, passed against it).
 
 ## [1.0.0rc1] — 2026-10-20 — Release candidate for 1.0.0: 0.10.2, declared stable
@@ -400,18 +409,18 @@ changed:** the public API is 0.10.2's, measured identical (docs/API-SURFACE.md).
 from 1.0.0, Semantic Versioning holds for the public API in docs/API-SURFACE.md — no breaking change within 1.x;
 additions in minor releases, fixes in patch releases. The PyPI classifier moves from "3 - Alpha" to
 "5 - Production/Stable". `_SDK_VERSION`, the deprecated alias of `__version__`, stays through 1.x.
-The managed platform runs this candidate on staging before 1.0.0.
+The managed platform runs this candidate on its test deployment before 1.0.0.
 
 ## [0.10.2] — 2026-10-19 — The managed backend sends your context window and context threshold; `standalone`
 
 0.10.2rc1, released: no library code changed after the release candidate, so its entries below are this release's.
-The managed platform ran 0.10.2rc1 on staging (sulci-platform `f8facd1` and later; on 2026-10-19 its 96-turn
+The managed platform ran 0.10.2rc1 on its test deployment (sulci-platform `f8facd1` and later; on 2026-10-19 its 96-turn
 context benchmark, `benchmark/context_d`, served 0 wrong answers at window 2 with a 0.80 context threshold) before
 this release.
 
 ## [0.10.2rc1] — 2026-10-19 — Release candidate: the managed backend sends your context window and context threshold; `standalone`
 
-The managed platform runs this release candidate on staging (sulci-platform 0248, which uses the per-call
+The managed platform runs this release candidate on its test deployment (sulci-platform 0248, which uses the per-call
 `context_threshold` below) before 0.10.2. The entries below are oss-0037's (`fce7403`, CI `49337f1`).
 
 ### Changed — the managed backend sends your `context_window` (can change hit rates on `backend="sulci"`)
@@ -461,11 +470,11 @@ The managed platform runs this release candidate on staging (sulci-platform 0248
 ## [0.10.1] — 2026-10-17 — The managed backend honours the dashboard threshold; FAISS scores cosine
 
 0.10.1rc1, released: no library code changed after the release candidate, so its entries below are this release's.
-The managed platform ran 0.10.1rc1 on staging (sulci-platform `97b3291`) before this release.
+The managed platform ran 0.10.1rc1 on its test deployment (sulci-platform `97b3291`) before this release.
 
 ## [0.10.1rc1] — 2026-10-17 — Release candidate: the managed backend honours the dashboard threshold; FAISS scores cosine
 
-The managed platform runs this release candidate on staging before 0.10.1. 📌 The commit that carries these changes
+The managed platform runs this release candidate on its test deployment before 0.10.1. 📌 The commit that carries these changes
 (oss-0032, `18553bd`) is titled "the LangChain adapter ignores context_window"; the entry below is what it does: it
 warns, and still forwards the window.
 
@@ -506,7 +515,7 @@ warns, and still forwards the window.
 ## [0.10.0] — 2026-10-16 — Erase one user on every backend; local backends safe across threads
 
 0.10.0rc1, released: no library code changed after the release candidate, so its entries below are this release's.
-The managed platform ran 0.10.0rc1 on staging (sulci-platform #747) before this release.
+The managed platform ran 0.10.0rc1 on its test deployment (sulci-platform #747) before this release.
 
 ## [0.10.0rc1] — 2026-10-16 — Release candidate: erase one user on every backend; local backends safe across threads
 
@@ -1795,8 +1804,8 @@ install reporting a pre-bump version until `pip install -e . --no-deps`).
   v0.5.5 `#TBD-2` follow-up). Previously the env var only redirected
   telemetry POSTs; `Cache(backend="sulci")` cache reads and writes
   continued hitting `https://api.sulci.io` regardless of `SULCI_GATEWAY`,
-  creating a split-brain state in staging environments (telemetry to
-  staging URL, cache traffic to prod). `sulci/backends/cloud.py::__init__`
+  creating a split-brain state on a non-production gateway (telemetry
+  to that gateway, cache traffic to prod). `sulci/backends/cloud.py::__init__`
   now honors the env var as the second rung in a 3-tier precedence chain:
     1. explicit `gateway_url=` kwarg (VPC customers, unchanged)
     2. `SULCI_GATEWAY` env var (new)
@@ -2738,7 +2747,7 @@ is no PII or free-form content carried.
 
 ## [0.5.5] — 2026-05-07 — telemetry honors `SULCI_GATEWAY` (PR-D)
 
-One-line behavior fix that unblocks staging-gateway smoke tests for the
+One-line behavior fix that unblocks non-production gateway smoke tests for the
 sulci-platform Connected-OSS dashboard tier (LAUNCH-PLAN row C2e). No
 new public API surface; no changes for users running against the
 default `https://api.sulci.io` gateway.
@@ -2748,10 +2757,10 @@ default `https://api.sulci.io` gateway.
 - **`SULCI_GATEWAY` now actually redirects telemetry POSTs** (#51).
   `_TELEMETRY_URL` is now derived from `_GATEWAY_BASE` instead of being
   a separate hardcoded literal. Prior to v0.5.5, setting
-  `SULCI_GATEWAY=https://staging.example.com` redirected the v0.6.0
+  `SULCI_GATEWAY=https://gateway.example.com` redirected the v0.6.0
   device-code flow but silently did NOT redirect the v0.5.x telemetry
   pipeline — the `_post()` helper still went to `api.sulci.io`. The
-  module comment claimed staging override was supported; the code
+  module comment claimed a gateway override was supported; the code
   contradicted it. Now they agree:
 
   ```python
@@ -2952,7 +2961,7 @@ full chain ships end-to-end.
   Step 3 is new in v0.5.3 — connect()'s previously documented
   resolution stopped at step 2.
 - **`SULCI_GATEWAY` env var** — overrides the gateway base URL for the
-  device-code flow (default `https://api.sulci.io`). Used for staging /
+  device-code flow (default `https://api.sulci.io`). Used for test /
   local-dev environments. Resolved at module-import time so the same
   value is used by both telemetry and the new device-code flow.
 

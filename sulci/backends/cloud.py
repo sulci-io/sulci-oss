@@ -87,7 +87,7 @@ class SulciCloudBackend:
     Base URL resolution — precedence chain, first match wins:
         1. ``gateway_url=`` kwarg passed to ``__init__`` (VPC customers
            per v0.3.4)
-        2. ``SULCI_GATEWAY`` environment variable (staging redirect —
+        2. ``SULCI_GATEWAY`` environment variable (non-production redirect —
            matches the same env var honored by ``sulci`` module-level
            telemetry pipeline since v0.5.5)
         3. ``self.CLOUD_URL`` default: ``https://api.sulci.io``
@@ -139,8 +139,8 @@ class SulciCloudBackend:
         #      telemetry path in ``sulci/__init__.py``; this closes the
         #      follow-up gap (``#TBD-2`` in the v0.5.5 changelog) where
         #      cache traffic wasn't reading the same env var, creating a
-        #      split-brain state in staging (telemetry to staging URL,
-        #      cache traffic to prod).
+        #      split-brain state on non-production gateways (telemetry to
+        #      that gateway, cache traffic to prod).
         #   3. ``self.CLOUD_URL`` default (production api.sulci.io)
         #
         # Env var is read at instance construction time, not import time —

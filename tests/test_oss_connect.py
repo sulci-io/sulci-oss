@@ -405,13 +405,13 @@ class TestRequestShape:
                                  "plan": "oss_connect", "email": "a@b.c"}),
                    ]) as mock_post:
             oss_connect.run_device_code_flow(
-                gateway_base="https://staging.example.com",
+                gateway_base="https://gateway.example.com",
                 sdk_version="9.9.9",
             )
 
         # First call: device-code request
         first_call = mock_post.call_args_list[0]
-        assert first_call.args[0] == "https://staging.example.com/v1/oss-connect/device-code"
+        assert first_call.args[0] == "https://gateway.example.com/v1/oss-connect/device-code"
         assert first_call.kwargs["json"] == {
             "sdk_version": "9.9.9",
             "client_name": "sulci-python",
@@ -427,13 +427,13 @@ class TestRequestShape:
                                  "plan": "oss_connect", "email": "a@b.c"}),
                    ]) as mock_post:
             oss_connect.run_device_code_flow(
-                gateway_base="https://staging.example.com",
+                gateway_base="https://gateway.example.com",
                 sdk_version="0.6.0",
             )
 
         # Second call: token poll
         poll_call = mock_post.call_args_list[1]
-        assert poll_call.args[0] == "https://staging.example.com/v1/oss-connect/token"
+        assert poll_call.args[0] == "https://gateway.example.com/v1/oss-connect/token"
         assert poll_call.kwargs["json"] == {
             "device_code": _DEVICE_CODE_BODY["device_code"],
             "grant_type":  oss_connect.GRANT_TYPE,

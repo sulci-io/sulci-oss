@@ -94,7 +94,7 @@ _api_key:           Optional[str] = None
 _telemetry_enabled: bool          = False
 
 # Gateway base URL — read once at import time. Production points at
-# api.sulci.io; staging/local-dev override via SULCI_GATEWAY.
+# api.sulci.io; a test or local-dev gateway overrides it via SULCI_GATEWAY.
 # Resolved here (not inside `connect()`) so that the v0.6.0 device-code
 # flow AND the v0.5.x telemetry pipeline see the same value, and so
 # tests that monkeypatch the env var before importing `sulci` still
@@ -104,7 +104,7 @@ _telemetry_enabled: bool          = False
 # Prior to v0.5.5, _TELEMETRY_URL was a hardcoded literal, so setting
 # SULCI_GATEWAY redirected the device-code flow but silently did NOT
 # redirect telemetry POSTs — contradicting the comment above and
-# blocking staging-gateway smoke tests.
+# blocking smoke tests against non-production gateways.
 _GATEWAY_BASE  = os.environ.get("SULCI_GATEWAY", "https://api.sulci.io").rstrip("/")
 _TELEMETRY_URL = f"{_GATEWAY_BASE}/v1/telemetry"
 _SDK_VERSION   = __version__   # deprecated alias; new code should use sulci.__version__
