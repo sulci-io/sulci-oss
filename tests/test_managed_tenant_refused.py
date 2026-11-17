@@ -253,7 +253,10 @@ def test_no_message_in_the_package_advises_a_key_per_tenant():
     import re
     import sulci
     root = pathlib.Path(sulci.__file__).parent
-    bad = re.compile(r"API key per (tenant|model|project)|its own API key|(?<!behind )the API key is the (only )?partition",
+    # oss-0069 (S14): also the inverted phrasings the first pattern missed ("whose only partition is the API key",
+    # "one partition, the API key"), found in the proxy's docstring and a comment after 1.4.0.
+    bad = re.compile(r"API key per (tenant|model|project)|its own API key|(?<!behind )the API key is the (only )?partition"
+                     r"|partition (is|was) the API key|one partition, the API key",
                      re.IGNORECASE)
     hits = [f"{p.relative_to(root)}:{i}" for p in root.rglob("*.py") if "tests" not in p.parts
             for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if bad.search(line)]

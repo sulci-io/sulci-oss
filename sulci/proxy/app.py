@@ -58,8 +58,9 @@ DESIGN DECISIONS, so they are not re-litigated
    ``usage`` cannot be read is stored without counts. Local backends are sent none: they store no counts (self-hosted Tokens Saved would be a
    telemetry change — sulci-platform #822).
 6. **The cache key includes the model** unless ``--share-across-models``.
-   1.0.1: not on the managed backend (``--backend sulci``), whose only partition is the API key — there the proxy
-   shares across models (with a warning) and answers ``x-sulci-tenant-id`` with 400.
+   1.0.1: not on the managed backend (``--backend sulci``), whose partition is the Sulci account behind the API key
+   (every key on one account shares its cache) — there the proxy shares across models (with a warning) and answers
+   ``x-sulci-tenant-id`` with 400.
 
 ⚠️  CORRECTNESS WARNING — the one that matters in CI.
     A cached answer is keyed on the prompt. The repository is not in the
@@ -266,7 +267,7 @@ def build_app(
             "not both."
         )
     sulci_cache = cache if cache is not None else Cache(**cache_kwargs)
-    # 1.0.1 (G33): the managed backend has one partition, the API key. Model scoping cannot exist there (it was a
+    # 1.0.1 (G33): the managed backend's partition is the Sulci account behind the API key. Model scoping cannot exist there (it was a
     # tenant_id, never sent): share across models and say so. A tenant header is refused per request below.
     managed = bool(getattr(sulci_cache, "_is_remote_transport", False))
     if managed and not share_across_models:

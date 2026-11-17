@@ -91,7 +91,7 @@ returned for new code.
 """
 
 
-# 1.0.1 (G33): the managed backend's only partition is the API key, so these instructions do not mention tenant_id.
+# 1.0.1 (G33): the managed backend's only partition is the Sulci account behind the API key, so these instructions do not mention tenant_id.
 _MANAGED_INSTRUCTIONS = _DEFAULT_INSTRUCTIONS.split("Pass the same `session_id`")[0] + """\
 Pass the same `session_id` for every call within one task so the cache can
 blend prior turns into the lookup. Do not pass `tenant_id`: this cache is the
