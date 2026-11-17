@@ -16,6 +16,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
   hosts (`gateway.example.test`, `gateway.example.com`); past entries below say "its test deployment". Mentions of a
   user's own pre-production environment (the README's and ADR 0001's `telemetry=False` advice) stay. New
   `tests/test_no_internal_environment_names.py`, run by CI on every change, fails on a new mention (oss-0068).
+- **The managed backend's partition is named as the Sulci account behind the API key everywhere** (`sulci/proxy/app.py`'s design note 6 and a comment, a comment in `sulci/integrations/mcp_server.py`): every key on one account shares its cache. Wording only. oss-0061's guard test now also matches the inverted phrasing it missed (oss-0069).
 
 ## [1.4.0] — 2026-11-09 — `variant=`, `accept=` and `record_hit=` on `Cache.get` / `set`
 
