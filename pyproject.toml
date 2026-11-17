@@ -136,6 +136,7 @@ dev = [
 [project.scripts]
 sulci-mcp   = "sulci.integrations.mcp_server:main"
 sulci-proxy = "sulci.proxy.__main__:main"
+sulci-observe = "sulci.observe:main"
 
 [project.urls]
 Homepage      = "https://sulci.io"

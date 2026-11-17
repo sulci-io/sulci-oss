@@ -159,6 +159,12 @@ file and date it, then grep the estate for whatever else restated the old value.
 
 Parameter order below is the real declaration order.
 
+📌 **Unreleased, for 1.5.0 (oss-0070): `observe` and `observe_path`, appended.** `observe=True` serves nothing from
+the cache and records what it would have served in a local SQLite file (`observe_path`, default
+`./sulci_observe.db`), read with `python -m sulci.observe`; `TypeError` on `backend="sulci"`, `ValueError` for an
+`observe_path` without `observe=True`. `stats()` then carries an `"observe"` block. No method is added; see
+`docs/observe.md`. The block directly below is the current declaration.
+
 📌 **0.10.2 (oss-0037): `context_window` defaults to `None`**, which reads as `0` — a local backend is
 unchanged. On the managed backend a window you set is sent with every lookup; `None` sends none, so the tenant's
 dashboard setting applies. The block directly below is now the current declaration; the two after it are 0.10.1's
@@ -185,6 +191,8 @@ cache = Cache(
     event_sink      = None,
     cost_per_call   = 0.005,
     context_threshold = None,   # blended lookups only; None = use `threshold` locally; on "sulci": the call's threshold, else tenant setting, else 0.80
+    observe         = False,       # unreleased (1.5.0): serve nothing, record what would be served (self-hosted only)
+    observe_path    = None,        # the observe file; None = ./sulci_observe.db; only with observe=True
 )
 ```
 

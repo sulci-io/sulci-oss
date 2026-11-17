@@ -62,6 +62,12 @@ DESIGN DECISIONS, so they are not re-litigated
    (every key on one account shares its cache) — there the proxy shares across models (with a warning) and answers
    ``x-sulci-tenant-id`` with 400.
 
+7. **Observe mode (1.5.0, oss-0070): ``--observe``.** Every call goes upstream and the upstream answer is returned;
+   the Cache records what it would have served (``sulci.observe``) and ``x-sulci-observe`` says so: ``would-hit``,
+   ``would-miss`` or ``would-refuse``. The upstream's token counts are recorded with it (what a hit would have
+   saved), on a local backend too. A stream is never looked up and is counted as skipped. Refused with
+   ``--backend sulci``: there the key's Observe mode in the dashboard does it.
+
 ⚠️  CORRECTNESS WARNING — the one that matters in CI.
     A cached answer is keyed on the prompt. The repository is not in the
     prompt. A cached "the auth module looks fine" from three commits ago is a
@@ -270,6 +276,8 @@ def build_app(
     # 1.0.1 (G33): the managed backend's partition is the Sulci account behind the API key. Model scoping cannot exist there (it was a
     # tenant_id, never sent): share across models and say so. A tenant header is refused per request below.
     managed = bool(getattr(sulci_cache, "_is_remote_transport", False))
+    # 1.5.0 (oss-0070): a Cache built with observe=True (the Cache refuses it on the managed backend).
+    observing = getattr(sulci_cache, "_observer", None) is not None
     if managed and not share_across_models:
         logger.warning("sulci-proxy: --backend sulci cannot scope by model (the Sulci account behind the API key is the only partition); "
                        "responses are shared across models. Pass --share-across-models to silence this.")
@@ -357,6 +365,9 @@ def build_app(
             return JSONResponse(payload, status_code=400, headers={"x-sulci-cache": "refused"})
 
         if not isinstance(body, dict) or body.get("stream"):
+            # 1.5.0 (oss-0070): an observed proxy counts the call it never looked up.
+            if observing:
+                sulci_cache._observe_note("stream" if isinstance(body, dict) else "unreadable_body")
             return await _passthrough(request, upstream, path, raw)
 
         prompt = extract_prompt(body)
@@ -371,6 +382,7 @@ def build_app(
             except Exception as exc:
                 logger.warning("sulci lookup failed, forwarding: %s", exc)
                 hit, similarity, depth = None, 0.0, 0
+            observed = sulci_cache._observe_label() if observing else None
             if hit is not None:
                 return JSONResponse(
                     envelope(hit, model),
@@ -405,6 +417,8 @@ def build_app(
             if k.lower() not in _STRIP_RESPONSE_HEADERS
         }
         headers["x-sulci-cache"] = "miss"
+        if prompt and observed:
+            headers["x-sulci-observe"] = observed.replace("_", "-")   # 1.5.0: would-hit / would-miss / would-refuse
 
         if resp.status_code == 200 and prompt:
             try:
@@ -426,7 +440,8 @@ def build_app(
                         # one is cached and a hit serves one, so the whole call's counts would over-credit it.
                         one_choice = (body.get("n") in (None, 1)
                                       and len(payload.get("choices") or [None]) <= 1)
-                        usage = usage_from_payload(payload) if managed and one_choice else None
+                        # 1.5.0 (oss-0070): an observed proxy records them too (what a hit would have saved).
+                        usage = usage_from_payload(payload) if (managed or observing) and one_choice else None
                         if usage is not None and (plain or accepts_usage(sulci_cache.set)):
                             kw["usage"] = usage
                         if plain:
