@@ -1,5 +1,9 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-11-17 against `sulci` **1.5.0** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v1.5.0rc1` (`19383a4`; each tree importing its own source): only the version banner differs,
+90 lines. The 1.5.0rc1 measurement follows.
+
 **Measured:** 2026-11-17 against `sulci` **1.5.0rc1** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v1.4.0` (`b8d2648`; each tree importing its own source): besides the version banner, the
 only differing lines are `Cache.__init__`'s two new defaults, `observe` (`False`) and `observe_path` (`None`); 90
@@ -164,7 +168,7 @@ file and date it, then grep the estate for whatever else restated the old value.
 
 Parameter order below is the real declaration order.
 
-📌 **1.5.0rc1 (oss-0070): `observe` and `observe_path`, appended.** `observe=True` serves nothing from
+📌 **1.5.0 (oss-0070): `observe` and `observe_path`, appended.** `observe=True` serves nothing from
 the cache and records what it would have served in a local SQLite file (`observe_path`, default
 `./sulci_observe.db`), read with `python -m sulci.observe`; `TypeError` on `backend="sulci"`, `ValueError` for an
 `observe_path` without `observe=True`. `stats()` then carries an `"observe"` block. No method is added; see
@@ -196,7 +200,7 @@ cache = Cache(
     event_sink      = None,
     cost_per_call   = 0.005,
     context_threshold = None,   # blended lookups only; None = use `threshold` locally; on "sulci": the call's threshold, else tenant setting, else 0.80
-    observe         = False,       # 1.5.0rc1: serve nothing, record what would be served (self-hosted only)
+    observe         = False,       # 1.5.0: serve nothing, record what would be served (self-hosted only)
     observe_path    = None,        # the observe file; None = ./sulci_observe.db; only with observe=True
 )
 ```

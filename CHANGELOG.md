@@ -8,6 +8,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-17 — Observe mode (`Cache(observe=True)`, `sulci.observe`, `sulci-proxy --observe`)
+
+1.5.0rc1, released: no library code changed after the release candidate, so the entries below are this release's.
+The wheel published as 1.5.0rc1 was checked on 2026-11-17 against the repository (its `sulci/` package identical to
+the tagged tree's), then installed from PyPI into a fresh environment on macOS and run with the real embedder
+(all-MiniLM-L6-v2): `cached_call` in observe mode sent all 19 calls to the LLM and served none, recorded 10
+would-be hits at 0.85 (12 at 0.75) with their token counts and review pairs, in a file readable by its owner only;
+`sulci-proxy --observe`, run as its own process, forwarded every request and answered `x-sulci-observe: would-miss`,
+then `would-hit`; the summary file held none of the questions' or answers' words; and `observe=True` was refused on
+the managed backend.
+
 ## [1.5.0rc1] — 2026-11-17 — Release candidate: observe mode (`Cache(observe=True)`, `sulci.observe`, `sulci-proxy --observe`)
 
 A minor release: two new constructor arguments, a new module and two new proxy options; every default is unchanged,
