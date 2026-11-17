@@ -8,6 +8,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.5.0rc1] — 2026-11-17 — Release candidate: observe mode (`Cache(observe=True)`, `sulci.observe`, `sulci-proxy --observe`)
+
+A minor release: two new constructor arguments, a new module and two new proxy options; every default is unchanged,
+and a Cache built without `observe=True` behaves exactly as in 1.4.0. The entries below are oss-0070's (PR #214) and
+oss-0069's (PR #213). Observe mode is for self-hosted backends; on Sulci Cloud the same measurement is a key
+setting in the dashboard.
+
 ### Added
 
 - **Observe mode: measure what the cache would serve, serving nothing** (`Cache(observe=True)`, `AsyncCache`, the
