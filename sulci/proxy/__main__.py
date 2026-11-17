@@ -28,6 +28,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--ttl-seconds", type=int, default=None)
     p.add_argument("--openai-upstream", default=None)
     p.add_argument("--anthropic-upstream", default=None)
+    # 1.5.0 (oss-0070): observe mode. Every call goes upstream and gets the upstream answer; what the cache would
+    # have served is recorded locally (python -m sulci.observe). Refused with --backend sulci.
+    p.add_argument("--observe", action="store_true",
+                   help="Serve nothing from the cache; record what it would have served (docs/observe.md).")
+    p.add_argument("--observe-path", default=os.environ.get("SULCI_OBSERVE_PATH") or None,
+                   help="The observe file (default ./sulci_observe.db). Only with --observe.")
     p.add_argument(
         "--share-across-models",
         action="store_true",
@@ -51,6 +57,12 @@ def main(argv: Optional[list] = None) -> None:
     }
     if args.ttl_seconds is not None:
         kwargs["ttl_seconds"] = args.ttl_seconds
+    if args.observe:
+        kwargs["observe"] = True
+        if args.observe_path:
+            kwargs["observe_path"] = args.observe_path
+    elif args.observe_path:
+        raise SystemExit("sulci-proxy: --observe-path is used only with --observe")
 
     app = build_app(
         openai_upstream=args.openai_upstream,

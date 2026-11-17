@@ -8,6 +8,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Observe mode: measure what the cache would serve, serving nothing** (`Cache(observe=True)`, `AsyncCache`, the
+  integrations, `sulci-proxy --observe`). Every lookup runs and is then turned away, so every call is a miss and your
+  LLM answers it; what the cache would have served is recorded in one local SQLite file (`observe_path=`, default
+  `./sulci_observe.db`, created readable by its owner only). Nothing is sent anywhere. A would-be hit's following
+  `set` stores nothing, as after a live hit, and completes a review pair (the question, the cached answer, the fresh
+  answer: at similarity 0.80 or above, at most 400, a uniform sample). `delete_user` and `clear` erase the pairs.
+  `python -m sulci.observe` (also `sulci-observe`): `rate` (blind), `report` (hit rate at 0.75-0.95, requests and
+  tokens saved, people's ratings with a Wilson 95% bound), `summary` (the same numbers as JSON, no text and no
+  hashes), `forget`. `TypeError` on `backend="sulci"`, where the key's Observe mode in the dashboard does this. See
+  `docs/observe.md` (oss-0070).
+
 ### Changed (docs and tests only; no code change)
 
 - **This repository no longer names the managed platform's internal test environment.** `LOCAL_SETUP.md` points

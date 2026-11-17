@@ -361,6 +361,31 @@ adapter raises `ImportError` there: the `llama-index-core` pip picks on 3.9
 cannot import.
 
 
+## Measure first: observe mode (1.5.0)
+
+How much a semantic cache saves depends on how often **your** users repeat themselves. Observe mode measures it on
+your own traffic, inside your network, before anything is served:
+
+```python
+cache = Cache(backend="qdrant", threshold=0.85, observe=True)    # records to ./sulci_observe.db
+answer = cache.cached_call(question, my_llm)                      # your LLM answers EVERY call
+```
+
+Every lookup runs as usual and is then turned away, so `get` always misses and your LLM answers every call; what the
+cache would have served is recorded in one local SQLite file (readable by its owner only). Nothing is sent anywhere.
+After a few days of traffic:
+
+```bash
+python -m sulci.observe rate    sulci_observe.db   # your reviewers rate would-be hits, blind
+python -m sulci.observe report  sulci_observe.db   # hit rate at 0.75–0.95, requests and tokens saved, wrong-hit bound
+python -m sulci.observe summary sulci_observe.db --out run.json   # the same numbers, no text: yours to keep or share
+```
+
+`sulci-proxy --observe` does the same for any app that can point an OpenAI or Anthropic base URL at the proxy. Return
+`sulci.with_usage(text, usage)` from your `llm_fn` (the proxy reads the upstream's own counts) and the report shows
+the tokens a hit would have saved. On Sulci Cloud (`backend="sulci"`) switch the key to Observe mode in the dashboard
+instead. Details, what is stored and how to erase it: [docs/observe.md](docs/observe.md).
+
 ## Tenant and user isolation
 
 Since **0.9.3, every backend enforces `tenant_id` and `user_id`** on every lookup:
@@ -851,6 +876,8 @@ cache = Cache(
     event_sink      = None,         # custom EventSink implementation
     cost_per_call   = 0.005,        # $ per LLM call, for saved-cost stats
     context_threshold = None,       # blended lookups. None: locally use threshold (warns); on "sulci" the call's threshold if sent, else your dashboard's Context threshold, else 0.80
+    observe         = False,        # 1.5.0: serve nothing, record what would be served (self-hosted; see "Measure first")
+    observe_path    = None,         # the observe file; None = ./sulci_observe.db; only with observe=True
 )
 ```
 
@@ -1098,6 +1125,7 @@ configure `embedding_model="openai"` or use the cloud backend.
 │   └── results/                ← tfidf/ (scratch) and minilm/ (committed published draws)
 ├── docs/
 │   ├── API-SURFACE.md          ← public API, checked by scripts/check_api_surface.py
+│   ├── observe.md              ← observe mode: measure before serving (1.5.0)
 │   ├── context-threshold.md    ← why context_threshold has no default
 │   ├── protocols.md  multi_tenancy_and_isolation.md  OSS_BOUNDARY_POLICY.md
 │   └── architecture/           ← ADRs (e.g. 0002 smoke-fast CPU mode)

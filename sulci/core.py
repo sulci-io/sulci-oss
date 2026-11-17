@@ -43,7 +43,14 @@ from sulci.sessions.errors import SulciSessionError
 from sulci.errors import SulciErasureError, _short
 
 import logging as _logging
+import threading as _threading
 _log = _logging.getLogger("sulci")
+
+
+def _sulci_version() -> Optional[str]:
+    """1.5.0 (oss-0070): the installed version, for an observe file's run row."""
+    import sys as _sys
+    return getattr(_sys.modules.get("sulci"), "__version__", None)
 
 
 # ── v0.5.2 nudge state (D15) ──────────────────────────────────────────────────
@@ -378,9 +385,22 @@ class Cache:
                          Built-in session store only: a session_store= keeps
                          its own expiry, and on backend="sulci" sessions end
                          1 h after their last turn (last 20 turns kept).
+        observe:         1.5.0 (oss-0070). True: serve NOTHING from the cache
+                         and record what it would have served, so you can
+                         measure it on your own traffic first. Every lookup
+                         returns a miss (your LLM answers every call); a
+                         would-be hit's answer is not stored again, as on a
+                         live hit. Records go to one local SQLite file, read
+                         with ``python -m sulci.observe``. See docs/observe.md.
+                         ``TypeError`` on backend="sulci": there, switch the
+                         key to Observe mode in the dashboard.
+        observe_path:    The observe file (default ``./sulci_observe.db``),
+                         created readable by its owner only. Only with
+                         ``observe=True`` (``ValueError`` otherwise).
     """
 
     threshold = _InstanceThreshold()   # 0.10.1: None = not set by the caller (see _InstanceThreshold)
+    _observer = None                   # 1.5.0 (oss-0070): set by __init__ when observe=True
     context_window = _InstanceContextWindow()   # 0.10.2: remembers whether the caller set it (managed backend)
 
     def __init__(
@@ -408,6 +428,9 @@ class Cache:
         # Appended, not inserted next to `threshold`, so positional callers are
         # unaffected — the same reason cost_per_call was appended in v0.7.1.
         context_threshold: Optional[float] = None,
+        # ── 1.5.0 (oss-0070) — observe mode; appended for the same reason ────
+        observe:         bool          = False,
+        observe_path:    Optional[str] = None,
     ):
         self._telemetry     = telemetry
         self.backend        = backend
@@ -605,6 +628,27 @@ class Cache:
         # Default NullSink preserves zero-overhead behavior when no sink injected.
         self._event_sink: EventSink = event_sink if event_sink is not None else NullSink()
 
+        # 1.5.0 (oss-0070): observe mode. Refused, never accepted and ignored, where it cannot work.
+        if not isinstance(observe, bool):
+            raise TypeError(f"observe must be True or False, got {observe!r}")
+        if observe_path is not None and not observe:
+            raise ValueError("observe_path= is used only with observe=True; nothing would be recorded")
+        self._observer = None
+        self._observe_local = _threading.local()
+        if observe:
+            if self._is_remote_transport:
+                raise TypeError("observe=True is for self-hosted backends. On the managed backend (backend=\"sulci\") "
+                                "switch the API key to Observe mode in the dashboard (Savings preview): the gateway "
+                                "records there, and nothing is recorded here")
+            from sulci.observe import Recorder
+            self._observer = Recorder(
+                observe_path or "./sulci_observe.db",
+                run={"sulci_version": _sulci_version(), "backend": backend if isinstance(backend, str)
+                     else type(backend).__name__, "embedding_model": embedding_model if isinstance(embedding_model, str)
+                     else type(embedding_model).__name__, "serving_threshold": self.threshold,
+                     "context_window": context_window, "context_threshold": context_threshold,
+                     "personalized": personalized, "ttl_seconds": ttl_seconds})
+
     # ── private helpers ───────────────────────────────────────────
 
     def _load_embedder(self, name_or_instance):
@@ -729,6 +773,24 @@ class Cache:
         window = self._sessions.get(session_id)
         window.add_turn(query,    role="user",      embedding=query_vec)
         window.add_turn(response, role="assistant")   # embedded lazily on next blend
+
+    def _observe_scope(self, tenant_id, user_id) -> str:
+        """1.5.0 (oss-0070): the hash of the scope an observed lookup or set belongs to (erasure finds it by this)."""
+        return _query_hash(_user_scope(tenant_id, user_id if self.personalized else None))
+
+    def _observe_key(self, query, tenant_id, user_id, variant) -> str:
+        """1.5.0 (oss-0070): what joins a set to the observed lookup it answers: the scope, the variant, the query."""
+        scope = _user_scope(tenant_id, user_id if self.personalized else None)
+        return _query_hash(f"{scope}\x1f{variant or ''}\x1f{query}")
+
+    def _observe_label(self) -> Optional[str]:
+        """1.5.0 (oss-0070): this thread's last observed lookup's label (sulci-proxy's x-sulci-observe header)."""
+        return getattr(self._observe_local, "label", None)
+
+    def _observe_note(self, reason: str) -> None:
+        """1.5.0 (oss-0070): record a call that never reached a lookup (sulci-proxy: a stream)."""
+        if self._observer is not None:
+            self._observer.record_skip(reason)
 
     def _session_key(self, session_id, tenant_id, user_id):
         """0.9.3 (OSS-3): the id the session store is given — the caller's session_id scoped by tenant and,
@@ -1083,10 +1145,19 @@ class Cache:
             # search_match without it (sulci-platform's ClockedQdrantBackend falls back to a slower path, losing
             # Tokens Saved, on any keyword it does not know).
             variant_kw = {"variant": variant} if variant is not None else {}
+            # 1.5.0 (oss-0070): an observed lookup searches down to the sweep floor, and its candidate goes through
+            # a Candidate that records it and always refuses (below). eff_threshold stays the SERVING threshold:
+            # the label, the telemetry and the event are taken against it.
+            search_threshold = eff_threshold
+            if self._observer is not None:
+                from sulci.observe import Candidate, lookup_floor
+                observed = Candidate(guard=accept)
+                accept = observed.accept
+                search_threshold = lookup_floor(eff_threshold)
             if hasattr(self._backend, "search_match"):
                 resp, sim, matched_query = self._backend.search_match(
                     embedding = vec,
-                    threshold = eff_threshold,
+                    threshold = search_threshold,
                     tenant_id = tenant_id,
                     user_id   = user_id if self.personalized else None,
                     now       = time.time(),
@@ -1095,7 +1166,7 @@ class Cache:
             else:
                 resp, sim  = self._backend.search(
                     embedding = vec,
-                    threshold = eff_threshold,
+                    threshold = search_threshold,
                     tenant_id = tenant_id,
                     user_id   = user_id if self.personalized else None,
                     now       = time.time(),
@@ -1116,6 +1187,12 @@ class Cache:
                 refused = True
                 resp, matched_query = None, None
         latency_ms = round((_time.time() - _t0) * 1000, 2)
+        if self._observer is not None:
+            # 1.5.0 (oss-0070): recorded, never acted on. The lookup is a miss everywhere below.
+            self._observe_local.label = self._observer.record_lookup(
+                pending_key=self._observe_key(query, tenant_id, user_id, variant), query=query,
+                scope_hash=self._observe_scope(tenant_id, user_id), cand=observed,
+                serving_threshold=eff_threshold, depth=depth, latency_ms=latency_ms)
 
         # oss-0049: a HIT in a session is a turn of that conversation, so get() records it — as the managed
         # gateway's /cache/get has since 0164 ("the library's own cached_call() has always recorded hits; the HTTP
@@ -1183,7 +1260,9 @@ class Cache:
                 timestamp       = _time.time(),
                 plan            = plan,
                 # oss-0064: a hit turned away by accept() is a miss, marked so it can be told apart.
-                metadata        = {"refused": True} if refused else {},
+                # 1.5.0 (oss-0070): an observed lookup is marked as one instead, whatever its candidate was.
+                metadata        = ({"observe": True} if self._observer is not None
+                                   else {"refused": True} if refused else {}),
                 # v0.7.2 — identity of the served entry, hits only.
                 # Hash, never text (privacy posture; see protocol.py).
                 matched_query_hash = (
@@ -1356,12 +1435,20 @@ class Cache:
                     skip_reason = "session_unavailable"
                 elif turns > 0:
                     skip_reason = "context_dependent"
+            # 1.5.0 (oss-0070): the lookup this set answers, if observed. After a would-be hit nothing is stored, as
+            # after a live hit (which stores nothing), so the cache grows as it would live; the turn is recorded.
+            observed_pending, observed_hit = None, False
+            if self._observer is not None:
+                observed_pending = self._observer.take_pending(self._observe_key(query, tenant_id, user_id, variant))
+                observed_hit = bool(observed_pending and observed_pending.get("would_hit"))
             if skip_reason is not None:
                 stored = False
                 _log.debug("sulci.Cache.set: not stored (%s); pass standalone=True if the query stands on its own",
                            skip_reason)
                 if skip_reason == "session_unavailable":
                     raw_vec = None   # the turn is not recorded either, as on the gateway
+            elif observed_hit:
+                stored = False
             else:
                 stored = True
                 key     = hashlib.sha256(query.encode()).hexdigest()[:16]
@@ -1378,6 +1465,12 @@ class Cache:
                     # oss-0064: only when given, so a backend without the keyword is called exactly as before.
                     **({"variant": variant} if variant is not None else {}),
                 )
+            if self._observer is not None:
+                from sulci.observe import NOT_STORED, PAIRED, STORED
+                self._observer.record_set(
+                    pending=observed_pending, query=query, scope_hash=self._observe_scope(tenant_id, user_id),
+                    label=(NOT_STORED if skip_reason is not None else PAIRED if observed_hit else STORED),
+                    reason=skip_reason, fresh=response, usage=usage)
         if self._is_remote_transport:
             stored = None
         session_error = None
@@ -1633,6 +1726,9 @@ class Cache:
         }
         if self._sessions:
             base["active_sessions"] = len(self._sessions.active_sessions())
+        observer = self.__dict__.get("_observer")       # 1.5.0 (oss-0070); absent on a stand-in built without __init__
+        if observer is not None:
+            base["observe"] = observer.stats()
         # D15 — passive nudge after 100 queries on this instance.
         # Wrapped to never affect the returned stats dict on failure.
         try:
@@ -1687,6 +1783,16 @@ class Cache:
         cleared, and stats are left as they were.
         """
         self._backend.clear()
+        if self._observer is not None:
+            # 1.5.0 (oss-0070): the observe file's stored text goes with the entries; the measured numbers stay.
+            try:
+                self._observer.forget(everything=True)
+            except Exception as exc:
+                raise SulciErasureError(
+                    "clear", None, type(exc).__name__,
+                    detail=(f"the cache entries WERE cleared, but the observe file's review pairs and pending answers "
+                            f"could not be deleted ({type(exc).__name__}); the conversation histories and stats were "
+                            "not touched. Retry, or run `python -m sulci.observe forget`.")) from exc
         session_error = None
         if self._sessions:
             try:
@@ -1799,6 +1905,16 @@ class Cache:
                                 f"clear_scope() returned {type(sessions).__name__}, not a count, so the erasure "
                                 "of their conversation history is not confirmed. Retry the call."))
             result = {"entries": entries, "sessions": sessions}
+            if self._observer is not None:
+                # 1.5.0 (oss-0070): the user's review pairs and pending answers in the observe file.
+                try:
+                    result["observe_pairs"] = self._observer.forget(self._observe_scope(tenant_id, user_id))
+                except Exception as exc:
+                    raise SulciErasureError(
+                        "delete_user", None, type(exc).__name__, entries=entries, sessions=sessions,
+                        detail=(f"the user's {entries} cache entries and {sessions} sessions WERE erased, but their "
+                                f"review pairs in the observe file could not be deleted ({type(exc).__name__}). "
+                                "Retry the call.")) from exc
 
         try:
             self._event_sink.emit(CacheEvent(
