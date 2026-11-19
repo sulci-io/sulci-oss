@@ -57,7 +57,9 @@ processes on one host can write it. Nothing is sent to Sulci or anyone else.
 | `observe_pairs` | review pairs: the question, the answer the cache would have served, your LLM's answer, the similarity, and the rating | **Yes** |
 
 Review pairs are kept only for would-be hits at similarity 0.80 or above, **at most 400 per file, as a uniform random
-sample** of them; a rated pair is never replaced. The file is not encrypted by the library: keep it where you keep the
+sample** of them; a rated pair is never replaced. **Exact repeats** (similarity 0.9995 or above: the same question
+asked again) hold at most a quarter of them, as their own random sample, and when the file is full a new rewording
+takes an unrated exact repeat's place. The file is not encrypted by the library: keep it where you keep the
 traffic it measures.
 
 **Erasure.** `cache.delete_user(user_id)` also deletes that user's pairs and pending answers (its result gains
@@ -87,10 +89,17 @@ this asker, unchanged?* **Acceptable**, **Not acceptable** or **Can't tell**. An
 acceptable. Can't tell is reported on its own and never counted as acceptable. About 100 rated pairs is enough for a
 useful bound.
 
+Exact repeats come last, marked *exact repeat* (`rate`) or `yes` in the CSV's `exact_repeat` column
+(`export-pairs`): their cached answer is the least in doubt, so reviewers' time goes to the rewordings first. They are
+still worth rating, and they count in the bound, because an answer about the time or about one person can be wrong on
+a repeat too.
+
 **The report** (Markdown) shows, at thresholds 0.75 to 0.95:
-- would-be hits: the requests saved, and the hit rate over all calls and over the calls that were looked up;
+- would-be hits: the requests saved, and the hit rate over all calls and over the calls that were looked up; and how
+  many of them are exact repeats, so the part the threshold decides (the rewordings) can be read off;
 - input and output tokens saved, with the share of would-be hits whose token counts were known;
-- people's ratings, and the 95% upper bound on the wrong-hit rate (Wilson score interval);
+- people's ratings (with how many of them are exact repeats), and the 95% upper bound on the wrong-hit rate (Wilson
+  score interval);
 - calls not counted, by reason: streams the proxy never looked up, refusals by your `accept`, follow-ups not stored;
 - the run's settings and window, and whether it reached the minimums (500 looked-up calls, 100 rated pairs).
 

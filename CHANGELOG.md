@@ -8,6 +8,24 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Observe mode: exact repeats in the review** (oss-0073). An *exact repeat* is a would-be hit at similarity 0.9995 or
+  above: the same question asked again. In the 1.5.0rc1 live check, 6 of the 10 pairs offered for rating were exact
+  repeats, which spent reviewers' time where the answer is least in doubt. Exact repeats are still rated and still
+  count in the wrong-hit bound, since an answer about the time or about one person can be wrong on a repeat too, but:
+  - `python -m sulci.observe rate` offers rewordings first and exact repeats last, marked *exact repeat*;
+  - `export-pairs` writes them last, with a new `exact_repeat` column (`import-ratings` reads the file as before);
+  - the report counts them beside the would-be hits and the rated pairs, and says how many kept pairs are exact
+    repeats;
+  - the summary (`run.json`, still `sulci-observe-summary/1`) adds `exact_repeats` and `rated_exact_repeats` to each
+    sweep row and `exact_repeats` to `pairs`. Sulci Cloud's Savings preview imports them (sulci-platform 0561); a
+    1.5.0 file still imports;
+  - they hold at most a quarter of the kept pairs (`REPEAT_CAP`, their own random sample), and when the file is full
+    a new rewording takes an unrated exact repeat's place.
+
+  New names in `sulci.observe`: `EXACT_REPEAT`, `REPEAT_CAP`, `is_exact_repeat()`. No change to `Cache`.
+
 ## [1.5.0] — 2026-11-17 — Observe mode (`Cache(observe=True)`, `sulci.observe`, `sulci-proxy --observe`)
 
 1.5.0rc1, released: no library code changed after the release candidate, so the entries below are this release's.
