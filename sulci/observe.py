@@ -62,6 +62,14 @@ FLOOR = 0.75
 PAIR_MIN_SIMILARITY = 0.80
 #: At most this many review pairs per file, as a uniform random sample (rated pairs are never replaced).
 PAIR_CAP = 400
+#: A would-be hit at this similarity or above is an EXACT REPEAT: the same question asked again. Exact repeats are
+#: still rated and still count in the bound (an answer about the time or a person can be wrong on a repeat too), but
+#: ``rate`` offers them last, tagged; the report counts them on their own; and they hold at most REPEAT_CAP of the
+#: kept pairs. The managed platform uses the same line (sulci-platform 0561).
+EXACT_REPEAT = 0.9995
+#: At most this many kept pairs are exact repeats (a quarter of PAIR_CAP), their own random sample. When the file is
+#: full, a new rewording takes an unrated exact repeat's place.
+REPEAT_CAP = PAIR_CAP // 4
 #: How long a lookup waits for its ``set`` (the review pair and the call's token counts).
 PENDING_TTL_S = 600
 #: The thresholds the report sweeps.
@@ -84,6 +92,15 @@ PAIRED, STORED, NOT_STORED = "paired", "stored", "not_stored"
 SKIPPED = "skipped"
 
 _EPS = 1e-9
+_REPEAT_FLOOR = EXACT_REPEAT - 1e-6
+
+
+def is_exact_repeat(similarity: Any) -> bool:
+    """Whether a would-be hit is the same question asked again (similarity ≥ ``EXACT_REPEAT``)."""
+    try:
+        return similarity is not None and float(similarity) >= _REPEAT_FLOOR
+    except (TypeError, ValueError):
+        return False
 
 
 def lookup_floor(serving_threshold: float) -> float:
@@ -270,13 +287,41 @@ class Recorder:
             "INSERT INTO observe_events (run_id, at, kind, label, reason) VALUES (?,?,?,?,?)",
             (self.run_id, self._clock(), "skip", SKIPPED, reason)))
 
+    def _bump(self, key: str) -> int:
+        row = self._conn.execute("SELECT value FROM observe_meta WHERE key = ?", (key,)).fetchone()
+        n = (int(row[0]) if row else 0) + 1
+        self._conn.execute("INSERT OR REPLACE INTO observe_meta (key, value) VALUES (?, ?)", (key, str(n)))
+        return n
+
+    def _drop_unrated(self, repeats: bool) -> bool:
+        """Delete one unrated pair at random, an exact repeat or a rewording. Whether one was there."""
+        cond = ">=" if repeats else "<"
+        victim = self._conn.execute(
+            f"SELECT id FROM observe_pairs WHERE rating IS NULL AND similarity {cond} ? ORDER BY id",
+            (_REPEAT_FLOOR,)).fetchall()
+        if not victim:
+            return False
+        self._conn.execute("DELETE FROM observe_pairs WHERE id = ?", (victim[self._rng.randrange(len(victim))][0],))
+        return True
+
     def _save_pair(self, now, scope_hash, similarity, question, cached, fresh) -> bool:
-        """Reservoir sampling over the file's pairable would-be hits; rated pairs are never replaced."""
-        row = self._conn.execute("SELECT value FROM observe_meta WHERE key = 'pairs_offered'").fetchone()
-        offered = (int(row[0]) if row else 0) + 1
-        self._conn.execute("INSERT OR REPLACE INTO observe_meta (key, value) VALUES ('pairs_offered', ?)",
-                           (str(offered),))
+        """Reservoir sampling over the file's pairable would-be hits; rated pairs are never replaced. Exact repeats
+        are their own reservoir of at most REPEAT_CAP; a rewording takes an unrated repeat's place when full."""
+        offered = self._bump("pairs_offered")
+        repeat = is_exact_repeat(similarity)
+        if repeat:
+            seen_rep = self._bump("repeats_offered")
+            held_rep = self._conn.execute("SELECT count(*) FROM observe_pairs WHERE similarity >= ?",
+                                          (_REPEAT_FLOOR,)).fetchone()[0]
+            if held_rep >= REPEAT_CAP:
+                if self._rng.randrange(max(seen_rep, REPEAT_CAP + 1)) >= REPEAT_CAP:
+                    return False
+                if not self._drop_unrated(repeats=True):
+                    return False                 # every kept repeat is rated: keep those
+                return self._insert_pair(now, scope_hash, similarity, question, cached, fresh)
         held = self._conn.execute("SELECT count(*) FROM observe_pairs").fetchone()[0]
+        if held >= PAIR_CAP and not repeat and self._drop_unrated(repeats=True):
+            return self._insert_pair(now, scope_hash, similarity, question, cached, fresh)
         if held >= PAIR_CAP:
             if self._rng.randrange(offered) >= PAIR_CAP:
                 return False
@@ -286,6 +331,9 @@ class Recorder:
                 return False                     # every kept pair is rated: keep those
             self._conn.execute("DELETE FROM observe_pairs WHERE id = ?",
                                (victim[self._rng.randrange(len(victim))][0],))
+        return self._insert_pair(now, scope_hash, similarity, question, cached, fresh)
+
+    def _insert_pair(self, now, scope_hash, similarity, question, cached, fresh) -> bool:
         self._conn.execute(
             "INSERT INTO observe_pairs (run_id, at, scope_hash, similarity, question, cached, fresh) "
             "VALUES (?,?,?,?,?,?,?)", (self.run_id, now, scope_hash, similarity, question, cached, fresh))
@@ -413,6 +461,9 @@ def measure(paths: Sequence[str]) -> dict:
         sweep.append({
             "threshold": t,
             "would_hits": len(hits),
+            "exact_repeats": sum(1 for e in hits if is_exact_repeat(e["similarity"])),
+            "rated_exact_repeats": sum(1 for s, x in rated if s >= t - _EPS and is_exact_repeat(s)
+                                       and x in ("acceptable", "not_acceptable")),
             "hit_rate_of_calls": len(hits) / calls if calls else None,
             "hit_rate_of_cacheable": len(hits) / len(lookups) if lookups else None,
             "input_tokens_saved": sum(e["input_tokens"] or 0 for e in with_tokens),
@@ -443,7 +494,8 @@ def measure(paths: Sequence[str]) -> dict:
         "bands": [{"band": b, "pairs": bands[b], "rated": bands_rated[b], "not_acceptable": bands_bad[b]}
                   for b in sorted(bands)],
         "pairs": {"kept": len(pairs), "rated": sum(1 for _, x in rated if x in ("acceptable", "not_acceptable")),
-                  "cant_tell": sum(1 for _, x in rated if x == "cant_tell")},
+                  "cant_tell": sum(1 for _, x in rated if x == "cant_tell"),
+                  "exact_repeats": sum(1 for p in pairs if is_exact_repeat(p["similarity"]))},
         "minimums": {"cacheable": MIN_CACHEABLE, "rated": MIN_RATED},
         "enough": len(lookups) >= MIN_CACHEABLE and
                   sum(1 for _, x in rated if x in ("acceptable", "not_acceptable")) >= MIN_RATED,
@@ -476,17 +528,23 @@ def render(m: dict) -> str:
     out += ["", "Nothing was served from the cache. Each figure counts what the cache would have served. Similarity "
             "comes from your own embedder and backend, so these numbers describe this setup, not another.", ""]
     out += ["## Hit rate by threshold", "",
-            "| Threshold | Would-be hits | Of all calls | Of cacheable calls | Input tokens saved | Output tokens saved "
-            "| Token counts known | Rated | Not acceptable | Can't tell | Wrong-hit upper bound (95%) |",
-            "|---|---|---|---|---|---|---|---|---|---|---|"]
+            "| Threshold | Would-be hits | Of which exact repeats | Of all calls | Of cacheable calls "
+            "| Input tokens saved | Output tokens saved | Token counts known | Rated | Of which exact repeats "
+            "| Not acceptable | Can't tell | Wrong-hit upper bound (95%) |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for s in m["sweep"]:
-        out.append(f"| {s['threshold']:.2f} | {s['would_hits']} | {_pct(s['hit_rate_of_calls'])} | "
+        out.append(f"| {s['threshold']:.2f} | {s['would_hits']} | {s.get('exact_repeats', 0)} | "
+                   f"{_pct(s['hit_rate_of_calls'])} | "
                    f"{_pct(s['hit_rate_of_cacheable'])} | {s['input_tokens_saved']} | {s['output_tokens_saved']} | "
-                   f"{_pct(s['token_coverage'])} | {s['rated']} | {s['not_acceptable']} | {s['cant_tell']} | "
+                   f"{_pct(s['token_coverage'])} | {s['rated']} | {s.get('rated_exact_repeats', 0)} | "
+                   f"{s['not_acceptable']} | {s['cant_tell']} | "
                    f"{_pct(s['wrong_hit_upper_95'])} |")
     out += ["", "Requests saved at a threshold = its would-be hits. Tokens saved count only would-be hits whose "
             "following set() carried token counts (`usage=` or `sulci.with_usage`); the column before says what "
-            "share did. \"Can't tell\" is never counted as acceptable.", ""]
+            "share did. \"Can't tell\" is never counted as acceptable. Exact repeats are the same question asked "
+            f"again (similarity {EXACT_REPEAT} or above); the rest are rewordings, the part the threshold decides. "
+            "Both are rated and both count in the bound, since a repeat's answer can be out of date or about "
+            "someone else.", ""]
     out += ["## Not cacheable, by reason", ""]
     if m["not_cacheable_by_reason"]:
         out += [f"- {r['label']}: {r['reason']}: {r['count']}" for r in m["not_cacheable_by_reason"]]
@@ -494,7 +552,9 @@ def render(m: dict) -> str:
         out.append("- none recorded")
     out += ["", "## Review pairs", "",
             f"Kept: {m['pairs']['kept']} (at most {PAIR_CAP}, a random sample of would-be hits at "
-            f"{PAIR_MIN_SIMILARITY:.2f} or above). Rated: {m['pairs']['rated']}; can't tell: {m['pairs']['cant_tell']}.",
+            f"{PAIR_MIN_SIMILARITY:.2f} or above; exact repeats at most {REPEAT_CAP}). Exact repeats among them: "
+            f"{m['pairs'].get('exact_repeats', 0)}. Rated: {m['pairs']['rated']}; can't tell: "
+            f"{m['pairs']['cant_tell']}.",
             ""]
     if m["bands"]:
         out += ["| Similarity band | Pairs | Rated | Not acceptable |", "|---|---|---|---|"]
@@ -513,18 +573,26 @@ _KEYS = {"a": "acceptable", "n": "not_acceptable", "c": "cant_tell"}
 
 def rate(path: str, *, reviewer: Optional[str] = None, read: Callable[[str], str] = input,
          write: Callable[[str], None] = print, rng: Optional[random.Random] = None) -> int:
-    """Rate unrated pairs in the terminal, in random order, without showing the similarity. Returns how many."""
+    """Rate unrated pairs in the terminal, without showing the similarity: rewordings first in random order, then
+    exact repeats (tagged), also in random order. Returns how many."""
     conn = _open(path)
     try:
-        ids = [r[0] for r in conn.execute("SELECT id FROM observe_pairs WHERE rating IS NULL")]
-        (rng or random.Random()).shuffle(ids)
+        rows = conn.execute("SELECT id, similarity FROM observe_pairs WHERE rating IS NULL").fetchall()
+        rng = rng or random.Random()
+        rewordings = [r[0] for r in rows if not is_exact_repeat(r[1])]
+        repeats = [r[0] for r in rows if is_exact_repeat(r[1])]
+        rng.shuffle(rewordings)
+        rng.shuffle(repeats)
+        ids = rewordings + repeats
+        repeat_ids = set(repeats)
         write(f"{len(ids)} pair(s) to rate. For each: would you send the CACHED answer to this asker, unchanged? "
               "a = acceptable, n = not acceptable, c = can't tell, s = skip, q = quit.")
         done = 0
         for i, pid in enumerate(ids, 1):
             q, cached, fresh = conn.execute(
                 "SELECT question, cached, fresh FROM observe_pairs WHERE id = ?", (pid,)).fetchone()
-            write(f"\n── {i}/{len(ids)} ──\nQUESTION:\n{q}\n\nCACHED ANSWER (what the cache would have served):\n"
+            tag = " (exact repeat: the same question asked again)" if pid in repeat_ids else ""
+            write(f"\n── {i}/{len(ids)}{tag} ──\nQUESTION:\n{q}\n\nCACHED ANSWER (what the cache would have served):\n"
                   f"{cached}\n\nFRESH ANSWER (what your LLM said, for reference):\n{fresh}\n")
             while True:
                 k = (read("[a/n/c/s/q] ") or "").strip().lower()[:1]
@@ -544,20 +612,25 @@ def rate(path: str, *, reviewer: Optional[str] = None, read: Callable[[str], str
 
 
 def export_pairs(path: str, out: str, *, rng: Optional[random.Random] = None) -> int:
-    """Write the pairs to a CSV for reviewers (random order, no similarity). Returns how many."""
+    """Write the pairs to a CSV for reviewers (no similarity): rewordings first in random order, then exact repeats,
+    marked in the ``exact_repeat`` column. Returns how many."""
     conn = _open(path)
     try:
-        rows = conn.execute("SELECT id, question, cached, fresh, rating FROM observe_pairs").fetchall()
+        rows = conn.execute("SELECT id, question, cached, fresh, rating, similarity FROM observe_pairs").fetchall()
     finally:
         conn.close()
-    rows = list(rows)
-    (rng or random.Random()).shuffle(rows)
+    rng = rng or random.Random()
+    rewordings = [r for r in rows if not is_exact_repeat(r[5])]
+    repeats = [r for r in rows if is_exact_repeat(r[5])]
+    rng.shuffle(rewordings)
+    rng.shuffle(repeats)
+    rows = rewordings + repeats
     fd = os.open(out, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["pair_id", "question", "cached_answer", "fresh_answer", "rating"])
+        w.writerow(["pair_id", "question", "cached_answer", "fresh_answer", "rating", "exact_repeat"])
         for r in rows:
-            w.writerow([r[0], r[1], r[2], r[3], r[4] or ""])
+            w.writerow([r[0], r[1], r[2], r[3], r[4] or "", "yes" if is_exact_repeat(r[5]) else ""])
     return len(rows)
 
 

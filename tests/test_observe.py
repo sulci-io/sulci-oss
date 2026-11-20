@@ -454,7 +454,7 @@ def test_ratings_give_the_bound_per_threshold(tmp_path):
     assert (by[0.80]["rated"], by[0.80]["not_acceptable"], by[0.80]["cant_tell"]) == (3, 1, 1)
     assert by[0.80]["wrong_hit_upper_95"] == pytest.approx(observe.wilson_upper(1, 3))
     assert (by[0.85]["rated"], by[0.85]["not_acceptable"]) == (2, 0)
-    assert m["pairs"] == {"kept": 4, "rated": 3, "cant_tell": 1}
+    assert m["pairs"] == {"kept": 4, "rated": 3, "cant_tell": 1, "exact_repeats": 0}
     assert m["enough"] is False
     assert "Not enough to tell yet" in observe.render(m)
 
