@@ -8,6 +8,17 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-11-22 — Observe mode's review offers exact repeats last
+
+1.6.0rc1, released: no library code changed after the release candidate, so the entry below is this release's. The
+wheel published as 1.6.0rc1 was checked on 2026-11-22 against the repository (its `sulci/` package identical to the
+tagged tree's), then installed from PyPI into a fresh environment on macOS (Python 3.12) and run with the real embedder
+(all-MiniLM-L6-v2): in observe mode all 15 calls went to the LLM and none was served; 10 review pairs were kept, 5
+rewordings and 5 exact repeats; `rate` offered the 5 rewordings first and the 5 exact repeats last, tagged;
+`export-pairs` marked the exact repeats in its `exact_repeat` column and wrote them last; the summary file carried
+`exact_repeats` and `rated_exact_repeats` in every sweep row and `exact_repeats` under `pairs`, and none of the
+questions' or answers' words; and the report counted the exact repeats.
+
 ## [1.6.0rc1] — 2026-11-22 — Release candidate: observe mode's review offers exact repeats last
 
 A minor release: three new names in `sulci.observe`; `Cache`, `sulci-proxy` and the integrations are unchanged, and a
