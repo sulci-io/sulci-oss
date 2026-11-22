@@ -1,5 +1,10 @@
 # Sulci — the measured public API surface
 
+**Measured:** 2026-11-22 against `sulci` **1.6.0rc1** — `check_api_surface.py --show`, its output diffed against the
+same command at the tag `v1.5.0` (`4723d47`; each tree importing its own source): only the version banner differs, 90
+lines. 1.6.0's additions are module-level names in `sulci.observe` (`EXACT_REPEAT`, `REPEAT_CAP`, `is_exact_repeat()`;
+oss-0073), which this surface does not enumerate; additive, hence a minor release. The 1.5.0 measurement follows.
+
 **Measured:** 2026-11-17 against `sulci` **1.5.0** — `check_api_surface.py --show`, its output diffed against the
 same command at the tag `v1.5.0rc1` (`19383a4`; each tree importing its own source): only the version banner differs,
 90 lines. The 1.5.0rc1 measurement follows.
