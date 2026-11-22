@@ -8,6 +8,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.6.0rc1] — 2026-11-22 — Release candidate: observe mode's review offers exact repeats last
+
+A minor release: three new names in `sulci.observe`; `Cache`, `sulci-proxy` and the integrations are unchanged, and a
+1.5.0 summary file still imports. The entry below is oss-0073's (PR #217).
+
 ### Changed
 
 - **Observe mode: exact repeats in the review** (oss-0073). An *exact repeat* is a would-be hit at similarity 0.9995 or
